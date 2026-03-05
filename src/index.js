@@ -155,6 +155,10 @@ const CLAWDBOT_BOT_ID = process.env.CLAWDBOT_BOT_ID || ''; // Set CLAWDBOT_BOT_I
 const MUTE_QUEUE_ENABLED = process.env.MUTE_QUEUE_ENABLED === 'true';
 // Skip wake word on unmute prompt if speaker verification is enrolled
 const MUTE_QUEUE_WAKE_BYPASS = process.env.MUTE_QUEUE_WAKE_BYPASS !== 'false'; // default ON
+// Treat self-unmute as an implicit wake word — opens a conversation window
+// so the first thing you say after unmuting doesn't require "Jarvis".
+// Requires speaker verify to confirm identity on first utterance.
+const UNMUTE_IMPLICIT_WAKE = process.env.UNMUTE_IMPLICIT_WAKE !== 'false'; // default ON
 
 // ── Voice Reconnect Backoff ───────────────────────────────────────────
 const reconnectState = {
@@ -450,6 +454,28 @@ const WAKE_UP_PATTERNS = [
   /^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\s+jarvis\b/i,  // greeting + Jarvis
   ...(_phrasePattern ? [_phrasePattern] : []),
 ];
+
+/**
+ * Open a conversation window on self-unmute, treating it as an implicit wake word.
+ * The first utterance after unmuting doesn't require "Jarvis" — owner identity is
+ * confirmed by the act of unmuting from an authenticated device + voiceprint on first speech.
+ * Normal idle/sleep timers apply after the window expires.
+ */
+function _applyImplicitWakeOnUnmute(userId) {
+  const currentState = getState();
+  // Only apply if there's no active conversation already (don't interrupt)
+  if (currentState !== 'ACTIVE') {
+    transition('ACTIVE', 'implicit-wake-unmute');
+    authenticatedSession = true; // device is authenticated; voiceprint confirms on first utterance
+    console.log(`🎙️  Implicit wake: self-unmute opened conversation window (was ${currentState})`);
+  }
+  // Mark bot response to open the conversation window — followUpLikely=false
+  // so we get the standard 2-min window (extended to 5 if velocity is high),
+  // not the alert-debrief extended window.
+  markBotResponse(userId, { followUpLikely: false });
+  resetIdleSleepTimer();
+  console.log(`🎙️  Implicit wake window open — first utterance does not require wake word`);
+}
 
 function isWakeUpCommand(transcript, speakerVerified = false) {
   const clean = transcript.trim().replace(/[.,!?;:]+$/g, '');
@@ -1016,9 +1042,15 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             muteQueueClear();
           }
         } else {
-          // Nothing queued — just deactivate silently
+          // Nothing queued — deactivate and optionally open implicit wake window
           muteQueueDeactivate();
+          if (UNMUTE_IMPLICIT_WAKE) {
+            _applyImplicitWakeOnUnmute(newState.id);
+          }
         }
+      } else if (UNMUTE_IMPLICIT_WAKE) {
+        // MUTE_QUEUE_ENABLED=false but unmute implicit wake still applies
+        _applyImplicitWakeOnUnmute(newState.id);
       }
     }
   }

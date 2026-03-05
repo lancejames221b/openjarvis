@@ -3,6 +3,8 @@
 > Finally. Be Tony Stark.
 
 [![Discord DAVE E2EE](https://img.shields.io/badge/Discord%20DAVE-E2EE%20Compliant-5865F2)](https://discord.com/blog/dave-end-to-end-encryption-for-audio-video)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Powered by OpenClaw](https://img.shields.io/badge/Powered%20by-OpenClaw-blue)](https://openclaw.ai)
 
 Not a chatbot. Not a voice assistant that sets timers. A full AI system with access to your calendar, email, code, search, databases, and every tool you've configured — that you talk to, out loud, and it talks back. In the right voice.
 
@@ -10,7 +12,57 @@ Jarvis Voice is the voice layer for [OpenClaw](https://openclaw.ai). Speak in a 
 
 Run it hands-free over AirPods or any Bluetooth headset. **Blue team ops by voice.** Ask about live threats, pivot on IOCs, query your SIEM, run playbooks — no keyboard required. Tony Stark ran his SOC by talking to Jarvis. Now you can too.
 
-The Jarvis voice model runs locally via Piper TTS — an in-process HTTP server that starts with the bot. British RP accent, CPU-only. No cloud TTS account needed.
+The Jarvis voice model runs locally via Piper TTS — British RP accent, CPU-only. No cloud TTS account needed.
+
+---
+
+## Choose Your Build
+
+Three tiers. Start with REACTOR and upgrade when you're ready.
+
+|  | REACTOR | FRIDAY | JARVIS |
+|--|:-------:|:------:|:------:|
+| Voice in Discord | ✅ | ✅ | ✅ |
+| British butler personality | ✅ | ✅ | ✅ |
+| Voiceprint authentication | ✅ | ✅ | ✅ |
+| Wake word + conversation window | ✅ | ✅ | ✅ |
+| Morning briefing (calendar + weather + email) | | ✅ | ✅ |
+| Comms check (iMessage + Signal + calls) | | ✅ | ✅ |
+| Voice TV control (Roku) | | ✅ | ✅ |
+| Memory system ("remember this", "where did I put...") | | ✅ | ✅ |
+| Media on demand (Plex + qBittorrent) | | | ✅ |
+| Full skills library | | | ✅ |
+| **Setup time** | ~15 min | ~45 min | ~2 hrs |
+
+**REACTOR** — *"Your OpenClaw agent, now with a voice."*  
+**FRIDAY** — *"Your day, briefed. Your home, controlled. All by voice."*  
+**JARVIS** — *"Not a chatbot. Not a voice assistant. An AI system that runs your life."*
+
+---
+
+## Install with OpenClaw
+
+The fastest way to get running. Say or type this in your OpenClaw session:
+
+```
+install Jarvis
+```
+
+OpenClaw will use Opus High reasoning to walk you through the complete setup interactively — Discord bot creation, Python services, voiceprint enrollment, and tier selection. One conversation, zero guessing.
+
+The full install playbook is at [openclaw/INSTALL_PLAYBOOK.md](openclaw/INSTALL_PLAYBOOK.md) if you want to see exactly what it does.
+
+Or follow [INSTALL.md](INSTALL.md) for manual step-by-step setup.
+
+---
+
+## Skills
+
+The [skills/](skills/) directory contains generalized OpenClaw skills that make Jarvis genuinely useful — not just a voice interface, but an AI that knows your life.
+
+See [skills/README.md](skills/README.md) for the full catalog, dependencies, and install instructions.
+
+Jarvis will ask you to configure anything it needs as you go.
 
 ---
 
