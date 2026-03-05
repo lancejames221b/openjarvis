@@ -235,6 +235,20 @@ cp -r skills/pulse skills/comms-check skills/roku-control skills/plex-media \
 
 Then configure each skill per its `SETUP.md`.
 
+### FRIDAY / JARVIS tier: hAIveMind required
+
+The `haivemind-remember`, `where-is`, and `jarvis-evolve` skills require the hAIveMind MCP server — a local vector memory database that gives Jarvis persistent memory across sessions.
+
+```bash
+# Install hAIveMind
+git clone https://github.com/lancejames221b/agent-hivemind.git
+cd agent-hivemind
+pip install -r requirements.txt
+python server.py   # runs on port 8900
+```
+
+See [skills/haivemind-remember/SETUP.md](../skills/haivemind-remember/SETUP.md) for OpenClaw config and verification steps.
+
 ---
 
 ## Troubleshooting

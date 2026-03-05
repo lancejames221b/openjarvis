@@ -79,7 +79,7 @@ Say **"install Jarvis"** in OpenClaw. The install skill will ask which tier you 
 Each skill folder has a `SETUP.md` explaining what it needs. Most skills need one of:
 
 - **Mac node** — pair your Mac with OpenClaw so Jarvis can read iMessages/call history
-- **hAIveMind** — vector memory database MCP server (free, self-hosted)
+- **hAIveMind** — vector memory database MCP server (free, self-hosted) — https://github.com/lancejames221b/agent-hivemind
 - **Google Workspace MCP** — for calendar and email
 - **Slack MCP** — for Slack highlights in briefings
 - **Signal daemon** — signal-cli running locally for Signal messages

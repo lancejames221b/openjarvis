@@ -2,7 +2,9 @@
 
 ## Requirement: hAIveMind MCP Server
 
-Same requirement as `haivemind-remember`. See that skill's SETUP.md.
+Same requirement as `haivemind-remember`. See [haivemind-remember/SETUP.md](../haivemind-remember/SETUP.md).
+
+**hAIveMind repo:** https://github.com/lancejames221b/agent-hivemind
 
 ## No Additional Configuration Required
 
