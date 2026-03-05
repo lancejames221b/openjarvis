@@ -41,6 +41,7 @@ Everything. Full capability.
 | Skill | What it does | Deps | Trigger |
 |-------|-------------|------|---------|
 | [plex-media](plex-media/) | Download movies/TV to Plex on demand | qBittorrent, Plex, indexer | "get me X", "download X", "add X to Plex" |
+| [jarvis-evolve](jarvis-evolve/) | Self-evolution: Jarvis recommends, packages, and shares skills | `gh` CLI for PRs | "make this a skill", "share this", automatic |
 
 ---
 
