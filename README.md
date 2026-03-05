@@ -220,6 +220,34 @@ MUTE_QUEUE_ENABLED=true
 MUTE_QUEUE_WAKE_BYPASS=true
 ```
 
+### Self-Unmute as Implicit Wake Word
+
+Unmuting yourself *is* authentication. You own the device, your voiceprint is enrolled — requiring you to also say "Jarvis" after unmuting is redundant friction.
+
+When `UNMUTE_IMPLICIT_WAKE=true`, self-unmuting opens a full conversation window automatically:
+
+```
+[You self-mute — Jarvis queues any updates]
+[You self-unmute]
+Jarvis: "I have one update — shall I brief you?"   ← or silent if no queue
+You:    "Go ahead."                                  ← no wake word needed
+You:    "Also check my calendar."                    ← still in window, no wake word
+[3 minutes of silence]
+Jarvis: [transitions to IDLE, then SLEEP as normal]
+```
+
+**How it works:**
+- On `selfMute → false`: FSM transitions to ACTIVE, conversation window opens (standard 2 min, extends to 5 min during high-velocity sessions)
+- Voiceprint is still checked on the first utterance as normal — identity confirmed by voice, not bypassed
+- Normal idle/sleep timers apply — goes back to sleep if you don't speak within the window
+- Works with or without `MUTE_QUEUE_ENABLED`
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `UNMUTE_IMPLICIT_WAKE` | `true` | Treat self-unmute as an implicit wake word. Code checks `!== 'false'`, so default is ON. |
+
 ### Fuzzy Wake Word (Vocative Pattern Matching)
 
 Whisper frequently mishears "Jarvis" as phonetically similar words — *Curtis*, *Gervas*, *Douglas*, *service*, *harvest*, *Harvey*. The static phrase list catches known variants, but new ones keep appearing.
@@ -695,6 +723,12 @@ When Jarvis speaks, it server-mutes the owner's microphone in Discord. This prev
 ## Feature Flags
 
 All flags are set in `.env`. See `.env.example` for the full annotated template.
+
+### Self-Unmute Implicit Wake
+
+| Variable | Code Default | Description |
+|---|---|---|
+| `UNMUTE_IMPLICIT_WAKE` | `true` | Treat self-unmute as an implicit wake word. Opens a conversation window without requiring "Jarvis". Voiceprint still checked on first utterance. Code checks `!== 'false'`, default is ON. |
 
 ### Self-Mute TTS Queue
 
