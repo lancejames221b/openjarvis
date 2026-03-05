@@ -66,6 +66,12 @@ Jarvis will ask you to configure anything it needs as you go.
 
 ---
 
+## Demo
+
+[![Jarvis Voice Demo](https://img.youtube.com/vi/o_sHNEy8gm0/maxresdefault.jpg)](https://youtube.com/shorts/o_sHNEy8gm0)
+
+---
+
 ## What it looks like
 
 ```
