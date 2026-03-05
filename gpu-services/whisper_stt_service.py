@@ -28,10 +28,12 @@ COMPUTE_TYPE = 'float16' if DEVICE == 'cuda' else 'int8'
 
 # Domain vocabulary hint — helps Whisper recognize project-specific terms
 # instead of guessing common English words. Reduces "high mind" → "haivemind" etc.
+# Domain vocabulary hint — add your own project/tool names to improve recognition accuracy.
+# Whisper uses this as a soft prior; it reduces hallucinations on domain-specific terms.
+# Examples: project names, tool names, people's names, abbreviations you use frequently.
 INITIAL_PROMPT = (
-    "Jarvis, haivemind, Clawdbot, Roku, Plex, qBittorrent, I2P, Discord, "
-    "MCP, Deepgram, VirusTotal, GitHub, Radare2, OpenClaw, Gibson, Atlantis, "
-    "eWitness, Tailscale"
+    "Jarvis, OpenClaw, Clawdbot, Roku, Plex, qBittorrent, Discord, "
+    "MCP, Deepgram, VirusTotal, GitHub, Tailscale"
 )
 
 try:
