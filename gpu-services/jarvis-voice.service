@@ -1,0 +1,20 @@
+[Unit]
+Description=Jarvis Voice Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-voice
+ExecStart=/usr/bin/node --max-old-space-size=2048 %h/jarvis-voice/src/index.js
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
+Environment=NODE_ENV=production
+EnvironmentFile=%h/jarvis-voice/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

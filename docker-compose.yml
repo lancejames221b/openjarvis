@@ -1,0 +1,195 @@
+# Jarvis Voice — Docker Compose
+#
+# Quickstart (GPU):
+#   cp .env.example .env && $EDITOR .env
+#   docker compose up -d
+#
+# CPU-only (no NVIDIA GPU):
+#   PLATFORM=cpu docker compose --profile cpu up -d
+#
+# Prerequisites:
+#   - Docker 24+ with Compose v2
+#   - NVIDIA Container Toolkit for GPU mode: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#   - .env file with DISCORD_TOKEN, CLAWDBOT_GATEWAY_URL, etc.
+#   - models/jarvis/*.onnx (Piper voice models) — see INSTALL.md for download link
+#
+# Service ports (internal, not exposed to host by default):
+#   whisper-stt:    8766
+#   speaker-verify: 8767
+#   piper-tts:      3336
+#   voice-bot:      3335 (alert webhook, bind via ALERT_WEBHOOK_HOST)
+
+services:
+
+  whisper-stt:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        PLATFORM: ${PLATFORM:-cuda}
+    image: jarvis-gpu:${PLATFORM:-cuda}
+    container_name: jarvis-whisper-stt
+    restart: unless-stopped
+    command: ["python3", "gpu-services/whisper_stt_service.py", "--device", "${WHISPER_DEVICE:-cuda}"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./models:/app/models:ro
+    ports:
+      - "127.0.0.1:8766:8766"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8766/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    profiles: ["gpu", "default"]
+
+  whisper-stt-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        PLATFORM: cpu
+    image: jarvis-gpu:cpu
+    container_name: jarvis-whisper-stt-cpu
+    restart: unless-stopped
+    command: ["python3", "gpu-services/whisper_stt_service.py", "--device", "cpu", "--model", "${WHISPER_MODEL:-base}"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./models:/app/models:ro
+    ports:
+      - "127.0.0.1:8766:8766"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8766/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    profiles: ["cpu"]
+
+  piper-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        PLATFORM: ${PLATFORM:-cuda}
+    image: jarvis-gpu:${PLATFORM:-cuda}
+    container_name: jarvis-piper-tts
+    restart: unless-stopped
+    command: ["python3", "gpu-services/piper_tts_service.py"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PIPER_MODELS_DIR: /app/models/jarvis
+    volumes:
+      - ./models:/app/models:ro
+    ports:
+      - "127.0.0.1:3336:3336"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3336/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    profiles: ["gpu", "cpu", "default"]
+
+  speaker-verify:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        PLATFORM: ${PLATFORM:-cuda}
+    image: jarvis-gpu:${PLATFORM:-cuda}
+    container_name: jarvis-speaker-verify
+    restart: unless-stopped
+    command: ["python3", "gpu-services/speaker_verify_service.py", "--device", "${SPEAKER_DEVICE:-cuda}", "--threshold", "${SPEAKER_THRESHOLD:-0.45}"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      VOICEPRINT_PATH: /voiceprints/owner_voiceprint.npy
+      VOICEPRINT_MULTI_PATH: /voiceprints/owner_voiceprints.npy
+    volumes:
+      - voiceprints:/voiceprints
+    ports:
+      - "127.0.0.1:8767:8767"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8767/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    profiles: ["gpu", "default"]
+
+  speaker-verify-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        PLATFORM: cpu
+    image: jarvis-gpu:cpu
+    container_name: jarvis-speaker-verify-cpu
+    restart: unless-stopped
+    command: ["python3", "gpu-services/speaker_verify_service.py", "--device", "cpu", "--threshold", "${SPEAKER_THRESHOLD:-0.45}"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      VOICEPRINT_PATH: /voiceprints/owner_voiceprint.npy
+      VOICEPRINT_MULTI_PATH: /voiceprints/owner_voiceprints.npy
+    volumes:
+      - voiceprints:/voiceprints
+    ports:
+      - "127.0.0.1:8767:8767"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8767/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    profiles: ["cpu"]
+
+  voice-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    image: jarvis-voice-bot:latest
+    container_name: jarvis-voice-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # Point to sibling services by container name
+      FASTER_WHISPER_URL: http://jarvis-whisper-stt:8766/transcribe
+      PIPER_URL: http://jarvis-piper-tts:3336
+      SPEAKER_VERIFY_URL: http://jarvis-speaker-verify:8767/verify
+      SPEAKER_DIARIZE_URL: http://jarvis-speaker-verify:8767/diarize
+    ports:
+      - "127.0.0.1:3335:3335"
+    depends_on:
+      piper-tts:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "--eval", "import('./src/index.js').then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    profiles: ["gpu", "cpu", "default"]
+
+volumes:
+  voiceprints:
+    # Persist enrolled voiceprints across container restarts.
+    # To enroll: docker compose exec voice-bot node src/index.js --enroll
+    # Or copy existing: docker run --rm -v jarvis-voice_voiceprints:/voiceprints -v ~/.jarvis:/src alpine cp /src/owner_voiceprint.npy /voiceprints/

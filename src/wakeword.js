@@ -1,0 +1,321 @@
+/**
+ * Wake Word Detection Module
+ * 
+ * Simple transcript-based wake word detection using Whisper.
+ * No additional ML dependencies - just checks the transcript for configured phrases.
+ */
+
+import 'dotenv/config';
+
+// ── Feature Flag: VOICE_WAKE_WORD_ENABLED ─────────────────────────────────────
+// Clean on/off toggle for wake word detection.
+//   VOICE_WAKE_WORD_ENABLED=false (default) → always listening, no wake word needed
+//   VOICE_WAKE_WORD_ENABLED=true            → only activates when wake word is heard
+//
+// VOICE_WAKE_WORD: primary wake word phrase (default: 'hey jarvis')
+// WAKE_WORD_PHRASES: optional comma-separated list for additional phrases
+// WAKE_WORD_AUTO: auto-require wake word when others are in the channel (default: true)
+// ─────────────────────────────────────────────────────────────────────────────
+const VOICE_WAKE_WORD_ENABLED_RAW = process.env.VOICE_WAKE_WORD_ENABLED;
+const VOICE_WAKE_WORD = (process.env.VOICE_WAKE_WORD || 'hey jarvis').toLowerCase().trim();
+
+const WAKE_WORD_PHRASES_RAW = process.env.WAKE_WORD_PHRASES || '';
+const phrasesFromEnv = WAKE_WORD_PHRASES_RAW
+  .split(',')
+  .map(p => p.trim().toLowerCase())
+  .filter(p => p.length > 0);
+
+// Merge VOICE_WAKE_WORD into phrase list (dedup)
+const WAKE_WORD_PHRASES = phrasesFromEnv.includes(VOICE_WAKE_WORD)
+  ? phrasesFromEnv
+  : [VOICE_WAKE_WORD, ...phrasesFromEnv];
+
+// VOICE_WAKE_WORD_ENABLED is the explicit toggle:
+//   'false' → disabled (always listen — default, existing behavior)
+//   'true'  → enabled (require wake word prefix)
+//   unset   → legacy: enabled only if WAKE_WORD_PHRASES are set
+const WAKE_WORD_ENABLED = VOICE_WAKE_WORD_ENABLED_RAW === 'false'
+  ? false
+  : VOICE_WAKE_WORD_ENABLED_RAW === 'true'
+    ? true
+    : phrasesFromEnv.length > 0;
+
+const WAKE_WORD_AUTO = process.env.WAKE_WORD_AUTO !== 'false'; // Default: auto-enable when others present
+const CONVERSATION_WINDOW_MS = parseInt(process.env.CONVERSATION_WINDOW_MS || '120000'); // 2 minutes
+
+// ── Fuzzy wake word ──────────────────────────────────────────────────────────
+// When Whisper mishears "Jarvis" as a phonetically similar word (Curtis, Gervas,
+// Douglas, service, etc.), the pattern [short-word], [sentence] still reveals intent.
+// Requires WAKE_WORD_FUZZY=true AND speaker verified (unless WAKE_WORD_FUZZY_REQUIRE_SPEAKER=false)
+const WAKE_WORD_FUZZY = process.env.WAKE_WORD_FUZZY === 'true'; // default: false
+const WAKE_WORD_FUZZY_MIN_SENTENCE = parseInt(process.env.WAKE_WORD_FUZZY_MIN_SENTENCE || '8');
+const WAKE_WORD_FUZZY_MAX_PREFIX = parseInt(process.env.WAKE_WORD_FUZZY_MAX_PREFIX || '12');
+const WAKE_WORD_FUZZY_REQUIRE_SPEAKER = process.env.WAKE_WORD_FUZZY_REQUIRE_SPEAKER !== 'false'; // default: true
+
+// Startup log: wake word feature flag status
+if (WAKE_WORD_ENABLED) {
+  console.log(`🎯 Wake word: ENABLED (VOICE_WAKE_WORD_ENABLED=true) — phrases: [${WAKE_WORD_PHRASES.join(', ')}]`);
+} else {
+  console.log(`🎤 Wake word: DISABLED (VOICE_WAKE_WORD_ENABLED=false) — free-listen mode`);
+}
+
+// Track when the bot last spoke to each user for conversation window
+const lastBotResponseTime = new Map();
+
+// Track whether the last response invites follow-up (lists, questions, partial info)
+let followUpLikely = false;
+const EXTENDED_WINDOW_MS = 5 * 60 * 1000; // 5 min when follow-up expected
+
+// Interaction velocity: track timestamps of recent exchanges
+const interactionTimestamps = [];
+const VELOCITY_WINDOW_MS = 15 * 60 * 1000; // 15 min rolling window
+const VELOCITY_THRESHOLD = 3; // 3+ exchanges = working session
+
+// Continuation phrases that bypass wake word in IDLE (must reference prior context)
+const CONTINUATION_PATTERNS = [
+  /^(tell me|go) more/i,
+  /^(what|how) about (the |that |this )/i,
+  /^(and |also |what about )/i,
+  /^expand on (that|this|it)/i,
+  /^go (on|ahead|deeper|for it)/i,
+  /^(the )?(first|second|third|fourth|fifth|last|next) (one|item|thing|point|story|article|headline)/i,
+  /^(which|what) (one|was)/i,
+  /^more (on|about|info|details|detail)/i,
+  /^(can you |could you )?(elaborate|explain|clarify)/i,
+  /^(yes|yeah|yep|sure|ok|okay)(,?\s*| )(tell me|go on|go for it|more|and|what|please|brief me|do it)?\.?$/i,
+  /^(number |#)?\d+ /i, // "2" or "number 2" to select from list
+  /^repeat that/i,
+  /^say that again/i,
+  /^what (else|did you|was that)/i,
+  /^brief me/i,
+  /^(do it|hit me|let's hear it|fire away|lay it on me|shoot)\.?$/i,
+];
+
+// Track whether others (non-owner, non-bot) are in the voice channel
+let othersPresent = false;
+
+/**
+ * Update whether non-owner humans are in the voice channel.
+ * Called from voiceStateUpdate in index.js.
+ * @param {boolean} hasOthers - true if non-owner humans are present
+ */
+export function setOthersPresent(hasOthers) {
+  const prev = othersPresent;
+  othersPresent = hasOthers;
+  if (prev !== hasOthers) {
+    console.log(`👥 Others in voice: ${hasOthers ? 'YES — wake word REQUIRED' : 'no — free listen'}`);
+  }
+}
+
+/**
+ * Check if wake word is currently required.
+ * - Always required if WAKE_WORD_ENABLED=true (static override)
+ * - Auto-required when non-owner humans are in channel
+ * - Not required when owner is alone with Jarvis
+ */
+function isWakeWordRequired() {
+  if (WAKE_WORD_ENABLED) return true;
+  if (WAKE_WORD_AUTO && othersPresent) return true;
+  return false;
+}
+
+// Prune expired entries every 5 minutes to prevent unbounded growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, time] of lastBotResponseTime) {
+    if (now - time > CONVERSATION_WINDOW_MS * 2) {
+      lastBotResponseTime.delete(userId);
+    }
+  }
+}, 5 * 60 * 1000);
+
+/**
+ * Check if transcript contains a wake word
+ * @param {string} transcript - The transcribed text
+ * @param {string} userId - Discord user ID (for conversation window tracking)
+ * @returns {{ detected: boolean, cleanedTranscript: string, wakeWordUsed: boolean }}
+ */
+export function checkWakeWord(transcript, userId = null, speakerVerified = false) {
+  if (!isWakeWordRequired()) {
+    return { detected: true, cleanedTranscript: transcript, wakeWordUsed: false };
+  }
+
+  // Conversation window: skip wake word if bot spoke recently
+  // BUT: when others are present, wake word is ALWAYS required (no window bypass)
+  if (!othersPresent && userId && lastBotResponseTime.has(userId)) {
+    const timeSinceLastResponse = Date.now() - lastBotResponseTime.get(userId);
+    const windowMs = getEffectiveWindowMs();
+    if (timeSinceLastResponse < windowMs) {
+      const reason = windowMs > CONVERSATION_WINDOW_MS ? 'extended' : 'standard';
+      console.log(`💬 Within ${reason} conversation window (${Math.round(timeSinceLastResponse / 1000)}s ago, ${Math.round(windowMs/1000)}s window) — wake word not required`);
+      return { detected: true, cleanedTranscript: transcript, wakeWordUsed: false };
+    }
+  }
+  
+  // Strip punctuation that Whisper inserts (commas, periods, etc.) for matching
+  const lower = transcript.toLowerCase().trim();
+  const PUNCT = /[,.\-!?;:'"]/g;
+  const stripped = lower.replace(PUNCT, '').replace(/\s+/g, ' ').trim();
+
+  // Sort phrases longest-first so "hey jarvis" matches before "jarvis"
+  const sortedPhrases = [...WAKE_WORD_PHRASES].sort((a, b) => b.length - a.length);
+
+  for (const phrase of sortedPhrases) {
+    const phraseClean = phrase.replace(PUNCT, '').replace(/\s+/g, ' ').trim();
+
+    // Check start of transcript (punctuation-stripped)
+    if (stripped.startsWith(phraseClean)) {
+      // Build regex to find the wake phrase in the original transcript
+      // allowing optional punctuation between words
+      const phraseWords = phraseClean.split(' ');
+      const sep = '[^a-z0-9]*';
+      const flexPattern = phraseWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(sep);
+      const re = new RegExp('^' + flexPattern + sep, 'i');
+      const match = transcript.match(re);
+      const cleaned = match ? transcript.substring(match[0].length).trim() : transcript.substring(phrase.length).trim();
+      console.log(`🎯 Wake word detected: "${phrase}"`);
+      return { detected: true, cleanedTranscript: cleaned, wakeWordUsed: true };
+    }
+
+    // Flexible: phrase anywhere in first 10 words (punctuation-stripped)
+    const words = stripped.split(' ');
+    const firstTenWords = words.slice(0, 10).join(' ');
+    if (firstTenWords.includes(phraseClean)) {
+      const phraseWords = phraseClean.split(' ');
+      const sep = '[^a-z0-9]*';
+      const flexPattern = phraseWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(sep);
+      const re = new RegExp(flexPattern + sep, 'i');
+      const match = transcript.match(re);
+      const cleaned = match ? (transcript.substring(0, match.index) + transcript.substring(match.index + match[0].length)).trim() : transcript;
+      console.log(`🎯 Wake word detected (flexible): "${phrase}"`);
+      return { detected: true, cleanedTranscript: cleaned, wakeWordUsed: true };
+    }
+  }
+
+  // ── Fuzzy wake word: vocative pattern matching ──────────────────────────────
+  // Catches Whisper mishears of "Jarvis" → "Curtis", "Gervas", "Douglas", "service", etc.
+  // Pattern: [short-word], [sentence] where the short-word sounds like a name/address
+  // Requires: WAKE_WORD_FUZZY=true AND (speaker verified OR WAKE_WORD_FUZZY_REQUIRE_SPEAKER=false)
+  if (WAKE_WORD_FUZZY) {
+    if (WAKE_WORD_FUZZY_REQUIRE_SPEAKER && !speakerVerified) {
+      console.log(`🔍 Fuzzy wake word: skipped (speaker not verified)`);
+    } else {
+      // Match: one word (1–WAKE_WORD_FUZZY_MAX_PREFIX chars), optional separator, then sentence
+      // Handles: "word, sentence" / "word. sentence" / "word.sentence" / "word sentence"
+      const fuzzyPattern = new RegExp(
+        `^([a-z]{1,${WAKE_WORD_FUZZY_MAX_PREFIX}})[,.]?\\s*(.{${WAKE_WORD_FUZZY_MIN_SENTENCE},})$`,
+        'i'
+      );
+      const fuzzyMatch = lower.match(fuzzyPattern);
+      if (fuzzyMatch) {
+        const prefix = fuzzyMatch[1];
+        const sentence = fuzzyMatch[2].trim();
+        // Sanity check: prefix must not be a common word that starts sentences naturally
+        const COMMON_SENTENCE_STARTERS = [
+          'so', 'but', 'and', 'the', 'its', 'ok', 'okay', 'yes', 'no', 'hey', 'well',
+          'now', 'just', 'wait', 'oh', 'i', 'we', 'you', 'he', 'she', 'it', 'they',
+          'this', 'that', 'what', 'how', 'why', 'when', 'where', 'can', 'could', 'would',
+          'should', 'will', 'do', 'did', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
+          'get', 'got', 'go', 'going', 'let', 'make', 'take', 'also', 'actually',
+          'basically', 'literally',
+        ];
+        if (!COMMON_SENTENCE_STARTERS.includes(prefix.toLowerCase())) {
+          console.log(`🎯 Fuzzy wake word detected: "${prefix}" (vocative pattern, speaker verified: ${speakerVerified})`);
+          return {
+            detected: true,
+            cleanedTranscript: sentence,
+            wakeWordUsed: true,
+            fuzzyMatch: true,
+            fuzzyPrefix: prefix,
+          };
+        } else {
+          console.log(`🔍 Fuzzy wake word: rejected prefix "${prefix}" (common sentence starter)`);
+        }
+      }
+    }
+  }
+
+  console.log(`🚫 No wake word detected in: "${transcript.substring(0, 50)}..."`);
+  return { detected: false, cleanedTranscript: transcript, wakeWordUsed: false };
+}
+
+/**
+ * Check if transcript is a continuation phrase (references prior exchange).
+ * Used by IDLE gate to allow follow-ups without wake word.
+ * @param {string} transcript
+ * @returns {boolean}
+ */
+export function isContinuationPhrase(transcript) {
+  const clean = transcript.toLowerCase().replace(/[.,!?;:'"]/g, '').trim();
+  return CONTINUATION_PATTERNS.some(p => p.test(clean));
+}
+
+/**
+ * Check if the last bot response was flagged as expecting a follow-up.
+ * Used by IDLE gate to allow verified-owner responses without wake word
+ * after alerts, questions, and other prompts.
+ */
+export function isFollowUpExpected() {
+  return followUpLikely;
+}
+
+/**
+ * Mark that the bot just responded to a user (starts the conversation window)
+ * @param {string} userId - Discord user ID
+ * @param {{ followUpLikely?: boolean }} options
+ */
+export function markBotResponse(userId, options = {}) {
+  if (userId) {
+    lastBotResponseTime.set(userId, Date.now());
+  }
+  if (options.followUpLikely !== undefined) {
+    followUpLikely = options.followUpLikely;
+  }
+  // Track interaction velocity
+  interactionTimestamps.push(Date.now());
+}
+
+/**
+ * Get the effective conversation window duration.
+ * Extended when follow-up is likely or interaction velocity is high.
+ */
+export function getEffectiveWindowMs() {
+  // Prune old timestamps
+  const cutoff = Date.now() - VELOCITY_WINDOW_MS;
+  while (interactionTimestamps.length && interactionTimestamps[0] < cutoff) {
+    interactionTimestamps.shift();
+  }
+  const highVelocity = interactionTimestamps.length >= VELOCITY_THRESHOLD;
+
+  if (followUpLikely || highVelocity) {
+    return EXTENDED_WINDOW_MS;
+  }
+  return CONVERSATION_WINDOW_MS;
+}
+
+/**
+ * Check if a recent interaction exists within the extended window (for IDLE continuation).
+ * Returns true if last bot response was within 10 min (wider than conversation window).
+ */
+export function hasRecentContext(userId) {
+  if (!userId || !lastBotResponseTime.has(userId)) return false;
+  const elapsed = Date.now() - lastBotResponseTime.get(userId);
+  return elapsed < 10 * 60 * 1000; // 10 min
+}
+
+/**
+ * Force-end the conversation window for a user (stop listening mode).
+ * @param {string} userId - Discord user ID
+ */
+export function endConversationWindow(userId) {
+  if (userId && lastBotResponseTime.has(userId)) {
+    lastBotResponseTime.delete(userId);
+    console.log(`🛑 Conversation window force-closed for user ${userId}`);
+    return true;
+  }
+  return false;
+}
+
+export function isOthersPresent() { return othersPresent; }
+
+export { WAKE_WORD_ENABLED, WAKE_WORD_PHRASES, EXTENDED_WINDOW_MS, WAKE_WORD_FUZZY };

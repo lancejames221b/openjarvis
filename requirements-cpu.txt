@@ -1,0 +1,16 @@
+# CPU-only mode — no CUDA. Whisper uses int8 quantization, SpeechBrain runs on CPU.
+# Suitable for: CI, low-VRAM machines, Mac (Intel), any x86 without a supported GPU.
+# Performance: STT ~2-5x slower than GPU. Speaker verify usable but slower.
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
+torchaudio==2.6.0+cpu
+faster-whisper==1.1.0
+flask==3.1.0
+speechbrain==1.0.2
+numpy==1.26.4
+fastapi==0.115.0
+uvicorn==0.32.0
+httpx==0.27.0
+piper-tts==1.2.0
+
+--extra-index-url https://download.pytorch.org/whl/cpu

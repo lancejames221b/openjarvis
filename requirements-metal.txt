@@ -1,0 +1,25 @@
+# Apple Silicon (M1/M2/M3/M4) — uses MPS backend for PyTorch, mlx-whisper for STT.
+#
+# IMPORTANT: Whisper STT on Apple Silicon is best served by mlx-whisper (separate
+# install, not in this file) running as a standalone server. Set:
+#   STT_PROVIDER=mlx-whisper
+#   MLX_WHISPER_URL=http://localhost:8765/transcribe
+#
+# SpeechBrain speaker-verify runs via PyTorch MPS (partial acceleration).
+# Piper TTS runs CPU ONNX — no special GPU needed.
+#
+# mlx-whisper install (run separately after activating your venv):
+#   pip install mlx-whisper
+#   python -m mlx_whisper.server --model distil-large-v3 --port 8765
+
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+faster-whisper==1.1.0
+flask==3.1.0
+speechbrain==1.0.2
+numpy==1.26.4
+fastapi==0.115.0
+uvicorn==0.32.0
+httpx==0.27.0
+piper-tts==1.2.0
