@@ -1,4 +1,4 @@
-# Jarvis Voice
+# OpenJarvis
 
 > Finally. Be Tony Stark.
 
@@ -8,7 +8,7 @@
 
 Not a chatbot. Not a voice assistant that sets timers. A full AI system with access to your calendar, email, code, search, databases, and every tool you've configured — that you talk to, out loud, and it talks back. In the right voice.
 
-Jarvis Voice is the voice layer for [OpenClaw](https://openclaw.ai). Speak in a Discord voice channel. Your OpenClaw agent thinks, acts, and responds — the same agent handling your Slack, your texts, your projects — now answering by voice in under 2 seconds.
+OpenJarvis is the voice layer for [OpenClaw](https://openclaw.ai). Speak in a Discord voice channel. Your OpenClaw agent thinks, acts, and responds — the same agent handling your Slack, your texts, your projects — now answering by voice in under 2 seconds.
 
 Run it hands-free over AirPods or any Bluetooth headset. **Blue team ops by voice.** Ask about live threats, pivot on IOCs, query your SIEM, run playbooks — no keyboard required. Tony Stark ran his SOC by talking to Jarvis. Now you can too.
 
@@ -285,7 +285,7 @@ WAKE_WORD_FUZZY_REQUIRE_SPEAKER=true
 
 ### Discord DAVE E2EE (March 2026)
 
-Discord now requires end-to-end encryption for all voice connections. Jarvis Voice is fully compliant via `@discordjs/voice@0.19.0` and the native `@snazzah/davey` DAVE implementation. No configuration needed — DAVE activates automatically.
+Discord now requires end-to-end encryption for all voice connections. OpenJarvis is fully compliant via `@discordjs/voice@0.19.0` and the native `@snazzah/davey` DAVE implementation. No configuration needed — DAVE activates automatically.
 
 **Requires Node.js 22.12+** — the `@snazzah/davey` native addon does not build on older Node versions.
 
@@ -344,9 +344,9 @@ The result: a production-grade voice interface in ~1000 lines of Node.js that wo
 
 ---
 
-## The Jarvis Voice
+## The OpenJarvis Voice
 
-Jarvis Voice uses **Piper TTS** with a custom Jarvis voice clone — British RP accent, runs entirely on CPU, no cloud TTS account needed.
+OpenJarvis uses **Piper TTS** with a custom Jarvis voice clone — British RP accent, runs entirely on CPU, no cloud TTS account needed.
 
 The voice model is hosted on Hugging Face by [jgkawell](https://huggingface.co/jgkawell/jarvis). The installer downloads it automatically. Or manually:
 
@@ -533,7 +533,7 @@ systemctl --user enable --now jarvis-speaker-verify.service
 
 ## Bluetooth / Headset Use
 
-Jarvis Voice works great with AirPods, wireless headsets, or any Bluetooth audio device. The wake word system means you can leave Discord open in the background and just say "Jarvis" to activate — no push-to-talk, no keyboard.
+OpenJarvis works great with AirPods, wireless headsets, or any Bluetooth audio device. The wake word system means you can leave Discord open in the background and just say "Jarvis" to activate — no push-to-talk, no keyboard.
 
 **Blue team use case:** Mount a secondary monitor with your Discord voice channel open. Wear your headset. Query your toolstack hands-free while you work. Context switches kill investigations — voice keeps you in the flow.
 
