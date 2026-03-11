@@ -2081,11 +2081,18 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // SLEEP: only wake-up commands pass (including fuzzy wake word when speaker verified)
     const spkrIsOwner = !!(spkr?.is_owner);
     if (currentState === 'SLEEP') {
-      // STRICT mode in SLEEP: only explicit "Jarvis" (or configured wake word) wakes the bot.
-      // Fuzzy prefix matching is completely bypassed — ambient speech / background conversation
-      // must never wake the bot. WAKE_UP_PATTERNS all require the literal wake word.
-      const strictWakeMatch = WAKE_UP_PATTERNS.some(p => p.test(rawTranscript.trim().replace(/[.,!?;:]+$/g, '')));
-      if (strictWakeMatch) {
+      // SLEEP wake logic:
+      // 1. Explicit "Jarvis" patterns (WAKE_UP_PATTERNS) — always allowed
+      // 2. Fuzzy wake (Whisper mishears: "Gerri's", "Gargis", "hey you") — only when HIGH confidence speaker
+      //    Medium confidence was getting is_owner=true (benefit-of-the-doubt) which let any
+      //    vocative prefix ("thank", "yeah", etc.) match. Require HIGH tier in SLEEP only.
+      // 3. Everything else → drop silently.
+      const cleanTranscript = rawTranscript.trim().replace(/[.,!?;:]+$/g, '');
+      const strictWakeMatch = WAKE_UP_PATTERNS.some(p => p.test(cleanTranscript));
+      // Fuzzy wake only for HIGH confidence verified speaker (not medium benefit-of-the-doubt)
+      const sleepSpkrVerified = !!(spkr?.is_owner && spkr?.confidence_tier === 'high');
+      const sleepWakeMatch = strictWakeMatch || isWakeUpCommand(cleanTranscript, sleepSpkrVerified);
+      if (sleepWakeMatch) {
         const wakeSpkr = sttResult?.speakerInfo;
         // Allow wake word even with TV-corrupted embeddings — "Jarvis" is rare on TV.
         // Session stays unauthenticated so follow-up commands need clean speaker verify.
