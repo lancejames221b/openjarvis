@@ -2080,8 +2080,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     // SLEEP: only wake-up commands pass (including fuzzy wake word when speaker verified)
     const spkrIsOwner = !!(spkr?.is_owner);
+    // During SLEEP, require HIGH confidence for speaker-verified fuzzy wake (medium = too risky for false wakes)
+    const spkrHighConfidence = spkr?.confidence_tier === 'high' && !!(spkr?.is_owner);
     if (currentState === 'SLEEP') {
-      if (isWakeUpCommand(rawTranscript, spkrIsOwner)) {
+      if (isWakeUpCommand(rawTranscript, spkrHighConfidence)) {
         const wakeSpkr = sttResult?.speakerInfo;
         // Allow wake word even with TV-corrupted embeddings — "Jarvis" is rare on TV.
         // Session stays unauthenticated so follow-up commands need clean speaker verify.

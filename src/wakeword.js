@@ -218,6 +218,9 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
           'should', 'will', 'do', 'did', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
           'get', 'got', 'go', 'going', 'let', 'make', 'take', 'also', 'actually',
           'basically', 'literally',
+          // Additional common ambient phrases that triggered false wakes (added 2026-03-11)
+          'thank', 'thanks', 'sorry', 'please', 'um', 'uh', 'right', 'yeah',
+          'alright', 'hi', 'hello', 'good', 'hmm', 'anyway', 'wow',
         ];
         if (!COMMON_SENTENCE_STARTERS.includes(prefix.toLowerCase())) {
           console.log(`🎯 Fuzzy wake word detected: "${prefix}" (vocative pattern, speaker verified: ${speakerVerified})`);
