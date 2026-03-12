@@ -1,3 +1,5 @@
+// DEPRECATED: Delegation is disabled. shouldDelegate() always returns false. Moved from src/ on 2026-03-11.
+
 /**
  * Agent Delegation System
  * 

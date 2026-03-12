@@ -3071,6 +3071,29 @@ function savePcmAsWav(pcmBuffer, outputPath) {
   });
 }
 
+// ── Global Error Handlers ─────────────────────────────────────────────
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Promise Rejection:');
+  console.error('Promise:', promise);
+  console.error('Reason:', reason instanceof Error ? reason.stack : reason);
+  console.error('⚠️  Attempting graceful degradation — bot remains running');
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:');
+  console.error(err.stack || err);
+  console.error('⚠️  Attempting graceful shutdown...');
+  try {
+    cancelAllTasks();
+    if (currentConnection) currentConnection.destroy();
+    client.destroy();
+  } catch (cleanupErr) {
+    console.error('❌ Cleanup error during uncaughtException handler:', cleanupErr);
+  }
+  setTimeout(() => process.exit(1), 1000);
+});
+
 // ── Graceful Shutdown ────────────────────────────────────────────────
 
 process.on('SIGINT', () => {
