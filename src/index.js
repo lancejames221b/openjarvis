@@ -30,9 +30,12 @@ import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, classifyIntent
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback } from './alert-webhook.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
-import { isTldrToggleCommand, setTldrMode, isTldrModeEnabled, generateTldr, isTranscriptToggleCommand, setTranscriptMode, isTranscriptModeEnabled, isAskModeToggleCommand, setAskMode, isAskModeEnabled } from './tldr-mode.js';
-import { isMobileModeToggle, setMobileMode, isMobileModeEnabled } from './mobile-mode.js';
-import { isTtsToggleCommand, setTtsProvider, getCurrentTtsProvider } from './tts-toggle.js';
+import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
+import { isMobileModeEnabled } from './mobile-mode.js';
+import { getCurrentTtsProvider } from './tts-toggle.js';
+import { isVerifiedOwner, enrollmentState } from './auth.js';
+import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks } from './fsm.js';
+import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped — voice bot is a thin pipe, no ack tracking needed
@@ -46,20 +49,6 @@ const WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST 
 const WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || 3335;
 const WEBHOOK_BASE_URL = `http://${WEBHOOK_HOST}:${WEBHOOK_PORT}`;
 const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
-
-// ── Speaker Verification Helper ──────────────────────────────────────
-
-/**
- * Check if speaker is verified as owner at the required confidence tier.
- * @param {object} spkr - Speaker verification result from /verify endpoint
- * @param {'high'|'medium'|'low'} requiredTier - Minimum confidence tier required
- * @returns {boolean}
- */
-function isVerifiedOwner(spkr, requiredTier = 'high') {
-  if (!spkr?.is_owner) return false;
-  const tiers = { high: 3, medium: 2, low: 1 };
-  return (tiers[spkr.confidence_tier] ?? 0) >= (tiers[requiredTier] ?? 3);
-}
 
 // ── Gateway Health Check ─────────────────────────────────────────────
 
@@ -385,17 +374,7 @@ function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
   _pendingUtterance.timer = setTimeout(flushPendingUtterance, UTTERANCE_DEBOUNCE_MS);
 }
 
-// Interrupt/stop command detection
-const INTERRUPT_PATTERNS = [
-  /^(jarvis\s*[,.]?\s*)?(stop|cancel|abort|shut up|be quiet|enough|nevermind|never mind|hold on|wait)\.?$/i,
-  /^(jarvis\s*[,.]?\s*)?(stop|cancel)\s+(that|it|talking|speaking|please|now)\.?$/i,
-  /^(jarvis\s*[,.]?\s*)?that's\s+(enough|ok|okay|fine)\.?$/i,
-];
-
-function isInterruptCommand(transcript) {
-  const clean = transcript.trim().replace(/[.,!?;:]+$/g, '');
-  return INTERRUPT_PATTERNS.some(p => p.test(clean));
-}
+// isInterruptCommand imported from ./command-dispatch.js
 
 // Voice-to-text handoff tracking
 let userDisconnected = false;
@@ -406,65 +385,9 @@ let ownerMuted = false;
 let lastUserMessage = '';
 const ACTIVE_CONVERSATION_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
 
-// ── Follow-Up Detection ──────────────────────────────────────────────
-// Detect if a response invites follow-up (lists, questions, partial info).
-// Used to extend conversation window so user doesn't need wake word for natural continuation.
-const FOLLOWUP_PATTERNS = [
-  /\d+\.\s+\w/,                     // numbered list (1. item, 2. item)
-  /^\s*[-•]\s+\w/m,                  // bullet list
-  /\b(first|second|third|here are|top \d|there are \d)\b/i,  // enumeration language
-  /\bwant me to\b/i,                 // offering more
-  /\bshould I\b/i,                   // asking for direction
-  /\bwould you like\b/i,             // inviting follow-up
-  /\bdo you want\b/i,                // direct question
-  /\bany (questions|thoughts)\b/i,   // inviting response
-  /\blet me know\b/i,                // open-ended invite
-  /\bfor more (info|details|on)\b/i, // signaling more available
-  /\?\s*$/,                          // ends with a question
-];
+// detectFollowUpLikely imported from ./fsm.js
 
-function detectFollowUpLikely(responseText) {
-  if (!responseText || responseText.length < 20) return false;
-  return FOLLOWUP_PATTERNS.some(p => p.test(responseText));
-}
-
-// ── FSM Sleep/Idle Timers ─────────────────────────────────────────────
-// Two-stage: ACTIVE -> IDLE (dynamic) -> SLEEP (2 more min)
-// ACTIVE_TO_IDLE adapts: 3min default, up to 5min during active sessions
-const ACTIVE_TO_IDLE_BASE_MS = 3 * 60 * 1000;  // 3 min baseline
-const IDLE_TO_SLEEP_MS  = 2 * 60 * 1000;  // 2 more min IDLE -> SLEEP
-let _activeTimer = null;
-let _idleTimer = null;
-
-function resetIdleSleepTimer() {
-  if (_activeTimer) clearTimeout(_activeTimer);
-  if (_idleTimer) clearTimeout(_idleTimer);
-
-  // Velocity-aware: extend ACTIVE timeout during working sessions
-  const effectiveMs = Math.max(ACTIVE_TO_IDLE_BASE_MS, getEffectiveWindowMs());
-
-  _activeTimer = setTimeout(() => {
-    if (getState() === 'ACTIVE' && !enrollmentState.active) {
-      transition('IDLE', 'active-timeout');
-      authenticatedSession = false;
-      logger.info(`ACTIVE -> IDLE: no interaction for ${Math.round(effectiveMs / 1000)}s`);
-
-      _idleTimer = setTimeout(() => {
-        if (getState() === 'IDLE' && !enrollmentState.active) {
-          transition('SLEEP', 'idle-timeout');
-          // Clear any stale pending utterance so it can't dispatch after waking
-          if (_pendingUtterance.timer) {
-            clearTimeout(_pendingUtterance.timer);
-            _pendingUtterance.timer = null;
-            _pendingUtterance.parts = [];
-            _pendingUtterance.userId = null;
-          }
-          logger.info('IDLE -> SLEEP: no interaction after IDLE timeout');
-        }
-      }, IDLE_TO_SLEEP_MS);
-    }
-  }, effectiveMs);
-}
+// resetIdleSleepTimer imported from ./fsm.js — wired with callbacks below after declarations
 
 // ── Session-Based Speaker Authentication ─────────────────────────────
 // Like Siri/Google: verify speaker on wake word, trust the session after.
@@ -473,228 +396,24 @@ function resetIdleSleepTimer() {
 let authenticatedSession = false;
 const SESSION_PASSPHRASE = process.env.SPEAKER_PASSPHRASE || '';  // secret phrase to force-authenticate
 
-// Build wake-up patterns from .env WAKE_WORD_PHRASES + hardcoded patterns
-const _envPhrases = (process.env.WAKE_WORD_PHRASES || '').split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 0);
-const _phrasePattern = _envPhrases.length > 0
-  ? new RegExp(`^(hey[,.]?\\s+)?(${_envPhrases.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i')
-  : null;
-const WAKE_UP_PATTERNS = [
-  /^(jarvis[,.]?\s*)?(wake up|i'm back|come back|resume|start listening|online)/i,
-  /^(hey[,.]?\s+)?jarvis\b/i,   // "Jarvis" at start or after "hey"
-  /^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\s+jarvis\b/i,  // greeting + Jarvis
-  ...(_phrasePattern ? [_phrasePattern] : []),
-];
-
-/**
- * Open a conversation window on self-unmute, treating it as an implicit wake word.
- * The first utterance after unmuting doesn't require "Jarvis" — owner identity is
- * confirmed by the act of unmuting from an authenticated device + voiceprint on first speech.
- * Normal idle/sleep timers apply after the window expires.
- */
-function _applyImplicitWakeOnUnmute(userId) {
-  const currentState = getState();
-  // Only apply if there's no active conversation already (don't interrupt)
-  if (currentState !== 'ACTIVE') {
-    transition('ACTIVE', 'implicit-wake-unmute');
-    authenticatedSession = true; // device is authenticated; voiceprint confirms on first utterance
-    logger.info(`🎙️  Implicit wake: self-unmute opened conversation window (was ${currentState})`);
-  }
-  // Mark bot response to open the conversation window — followUpLikely=false
-  // so we get the standard 2-min window (extended to 5 if velocity is high),
-  // not the alert-debrief extended window.
-  markBotResponse(userId, { followUpLikely: false });
-  resetIdleSleepTimer();
-  logger.info(`🎙️  Implicit wake window open — first utterance does not require wake word`);
-}
-
-/**
- * Check if transcript is a sleep/sign-off command and handle the transition.
- * Returns true if handled (caller should return), false if not a sleep command.
- * If hasTaskContent(), sets autoSleepAfterTask flag and returns false (let task flow through).
- * @param {string} transcript - lowercased, punctuation-stripped transcript
- * @param {string} transitionReason - reason label passed to transition('SLEEP', ...)
- * @param {string} userId
- */
-async function handleSleepCheck(transcript, transitionReason, userId) {
-  if (!shouldSleep(transcript)) return false;
-  if (hasTaskContent(transcript)) {
-    // Tier 2: sign-off embedded in a task — let it flow, sleep after response
-    logger.info(`Task detected with sign-off (${transitionReason}) — will auto-sleep after response: "${transcript}"`);
-    _pendingUtterance.autoSleepAfterTask = true;
-    return false;
-  }
-  // Tier 1: pure sleep command — no task content
-  logger.info(`Sleep mode activated (${transitionReason}): "${transcript}"`);
-  transition('SLEEP', transitionReason);
-  // Clear pending utterance timer so a stale fragment can't re-wake immediately
-  if (_pendingUtterance.timer) {
-    clearTimeout(_pendingUtterance.timer);
-    _pendingUtterance.timer = null;
-    _pendingUtterance.parts = [];
-    _pendingUtterance.userId = null;
-  }
-  authenticatedSession = false;
-  endConversationWindow(userId);
-  const isConversational = /\b(sounds?\s*good|thanks?|thank\s*you|cheers|talk\s*to\s*you|catch\s*you|have\s*a\s*good|appreciate|later|all\s*set|im\s*(good|done|all set))\b/i.test(transcript);
-  const farewells = isConversational
-    ? ['Anytime, sir.', 'Of course.', 'Very good, sir.', 'Cheers.']
-    : ['Going quiet. Just say my name when you need me.'];
-  const farewell = farewells[Math.floor(Math.random() * farewells.length)];
-  const ack = await synthesizeSpeech(farewell);
-  if (ack) { audioQueue.add(ack); }
-  return true;
-}
-
-function isWakeUpCommand(transcript, speakerVerified = false) {
-  const clean = transcript.trim().replace(/[.,!?;:]+$/g, '');
-  if (WAKE_UP_PATTERNS.some(p => p.test(clean))) return true;
-
-  // Fuzzy wake word: vocative pattern [word], [sentence]
-  // Catches Whisper mishears like "Gargans, go for it" when speaker is verified
-  if (WAKE_WORD_FUZZY && speakerVerified) {
-    const lower = clean.toLowerCase();
-    const fuzzyMaxPrefix = parseInt(process.env.WAKE_WORD_FUZZY_MAX_PREFIX || '12');
-    const fuzzyMinSentence = parseInt(process.env.WAKE_WORD_FUZZY_MIN_SENTENCE || '8');
-    const fuzzyPattern = new RegExp(
-      `^([a-z]{1,${fuzzyMaxPrefix}})[,.]?\\s+(.{${fuzzyMinSentence},})$`, 'i'
-    );
-    const m = lower.match(fuzzyPattern);
-    if (m) {
-      const prefix = m[1];
-      const COMMON = [
-        'so', 'but', 'and', 'the', 'its', 'ok', 'okay', 'yes', 'no', 'hey', 'well',
-        'now', 'just', 'wait', 'oh', 'i', 'we', 'you', 'he', 'she', 'it', 'they',
-        'this', 'that', 'what', 'how', 'why', 'when', 'where', 'can', 'could', 'would',
-        'should', 'will', 'do', 'did', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
-        'get', 'got', 'go', 'going', 'let', 'make', 'take', 'also', 'actually',
-        'basically', 'literally',
-      ];
-      if (!COMMON.includes(prefix)) {
-        logger.info(`🎯 Fuzzy wake (FSM gate): "${prefix}" → treating as wake word (speaker verified)`);
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-// ── Voice Enrollment Mode ────────────────────────────────────────────
-// Activated by "Jarvis, enroll my voice". Captures next N audio clips
-// and POSTs them to the speaker verification enrollment endpoint.
-const SPEAKER_ENROLL_URL = process.env.SPEAKER_VERIFY_URL?.replace('/verify', '') || 'http://localhost:8767';
-
-// Guided enrollment prompts — wake word variants first (like Siri), then longer phrases
-// Wake word variants train the voiceprint on exactly what gets verified.
-// Longer phrases add phonetic richness for better overall matching.
-const ENROLLMENT_PROMPTS = [
-  // Wake word variants (5) — the actual authentication trigger
-  "Hey Jarvis.",
-  "Jarvis, are you there?",
-  "Hey Jarvis, can you hear me?",
-  "Yo Jarvis.",
-  "Jarvis.",
-  // Longer phrases (5) — hacker movie references, diverse phonemes
-  "My voice is my passport, verify me.",                          // Sneakers (1992)
-  "I'm in.",                                                       // Every hacker movie ever
-  "The only winning move is not to play.",                         // WarGames (1983)
-  "I need you to hack the planet.",                                // Hackers (1995)
-  "Jarvis, put everything we have into the thrusters.",            // Iron Man (2008)
-];
-
-const enrollmentState = {
-  active: false,
-  learnMode: false,       // learn mode: keep adding clips beyond initial enrollment
-  clipsNeeded: 10,
-  clipsCollected: 0,
-  promptIndex: 0,
-  userId: null,
-  // Track which prompts have been recorded (for retry N)
-  recorded: [],           // boolean array — recorded[i] = true if prompt i accepted
-
-  start(userId, learn = false) {
-    this.active = true;
-    this.learnMode = learn;
-    this.clipsNeeded = ENROLLMENT_PROMPTS.length;
-    this.clipsCollected = 0;
-    this.promptIndex = 0;
-    this.userId = userId;
-    this.recorded = new Array(ENROLLMENT_PROMPTS.length).fill(false);
-    if (!learn) {
-      fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST' }).catch(() => {});
+// Wire FSM callbacks — gives fsm.js access to local mutable state without circular deps
+wireFSMCallbacks({
+  getEnrollmentActive: () => enrollmentState.active,
+  getAuthenticatedSession: () => authenticatedSession,
+  setAuthenticatedSession: (val) => { authenticatedSession = val; },
+  getPendingUtterance: () => _pendingUtterance,
+  clearPendingUtterance: () => {
+    if (_pendingUtterance.timer) {
+      clearTimeout(_pendingUtterance.timer);
+      _pendingUtterance.timer = null;
+      _pendingUtterance.parts = [];
+      _pendingUtterance.userId = null;
     }
   },
+});
 
-  currentPrompt() {
-    return ENROLLMENT_PROMPTS[this.promptIndex] || null;
-  },
-
-  // Jump to a specific phrase number (1-indexed)
-  goToPrompt(num) {
-    const idx = num - 1;
-    if (idx >= 0 && idx < ENROLLMENT_PROMPTS.length) {
-      this.promptIndex = idx;
-      return ENROLLMENT_PROMPTS[idx];
-    }
-    return null;
-  },
-
-  // Advance to next unrecorded prompt (or next in sequence)
-  advanceToNext() {
-    this.promptIndex++;
-    // In normal mode just go forward
-    if (this.promptIndex >= ENROLLMENT_PROMPTS.length) {
-      return null; // all done
-    }
-    return ENROLLMENT_PROMPTS[this.promptIndex];
-  },
-
-  async addClip(wavPath) {
-    try {
-      const { default: fetch } = await import('node-fetch');
-      const { createReadStream } = await import('fs');
-      const FormData = (await import('form-data')).default;
-      const form = new FormData();
-      form.append('audio', createReadStream(wavPath));
-      const res = await fetch(`${SPEAKER_ENROLL_URL}/enroll`, {
-        method: 'POST',
-        body: form,
-        headers: form.getHeaders(),
-        timeout: 10000,
-      });
-      const data = await res.json();
-      if (data.accepted) {
-        this.recorded[this.promptIndex] = true;
-        this.clipsCollected = this.recorded.filter(Boolean).length;
-        return { accepted: true, total: this.clipsCollected, needed: this.clipsNeeded };
-      }
-      return { accepted: false, reason: data.reason || 'unknown' };
-    } catch (err) {
-      return { accepted: false, reason: err.message };
-    }
-  },
-
-  async finalize() {
-    try {
-      const res = await fetch(`${SPEAKER_ENROLL_URL}/enroll/finalize`, { method: 'POST' });
-      const data = await res.json();
-      if (!this.learnMode) this.active = false;
-      return data;
-    } catch (err) {
-      if (!this.learnMode) this.active = false;
-      return { saved: false, error: err.message };
-    }
-  },
-
-  cancel() {
-    this.active = false;
-    this.learnMode = false;
-    this.clipsCollected = 0;
-    this.promptIndex = 0;
-    this.recorded = [];
-    fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST' }).catch(() => {});
-  },
-};
+// WAKE_UP_PATTERNS, applyImplicitWakeOnUnmute, handleSleepCheck, isWakeUpCommand imported from ./fsm.js
+// enrollmentState imported from ./auth.js
 
 // ── Task Activity Feed ───────────────────────────────────────────────
 // Posts task lifecycle events to the text channel so user can track
@@ -1132,12 +851,12 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           // Nothing queued — deactivate and optionally open implicit wake window
           muteQueueDeactivate();
           if (UNMUTE_IMPLICIT_WAKE) {
-            _applyImplicitWakeOnUnmute(newState.id);
+            applyImplicitWakeOnUnmute(newState.id, (val) => { authenticatedSession = val; });
           }
         }
       } else if (UNMUTE_IMPLICIT_WAKE) {
         // MUTE_QUEUE_ENABLED=false but unmute implicit wake still applies
-        _applyImplicitWakeOnUnmute(newState.id);
+        applyImplicitWakeOnUnmute(newState.id, (val) => { authenticatedSession = val; });
       }
     }
   }
@@ -1964,10 +1683,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       // "start over" / "restart" / "from the top" / "redo all"
       if (/\b(start\s*over|restart|from\s*the\s*(top|start|beginning)|redo\s*all|reset)\b/i.test(retryCheck)) {
         try { unlinkSync(enrollWavPath); } catch {}
-        await fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST' }).catch(() => {});
+        await fetch(`${process.env.SPEAKER_VERIFY_URL?.replace('/verify', '') || 'http://localhost:8767'}/enroll/reset`, { method: 'POST' }).catch(() => {});
         enrollmentState.clipsCollected = 0;
         enrollmentState.promptIndex = 0;
-        enrollmentState.recorded = new Array(ENROLLMENT_PROMPTS.length).fill(false);
+        enrollmentState.recorded = new Array(enrollmentState.prompts.length).fill(false);
         const firstPrompt = enrollmentState.currentPrompt();
         logger.info('Enrollment restarted from 1/10');
         postToCC('Enrollment', `Starting over. [1/${enrollmentState.clipsNeeded}] Repeat: **${firstPrompt}**`);
@@ -2258,8 +1977,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
     // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
     const preSleepCheck = rawTranscript.toLowerCase().replace(/[.,!?]/g, '').replace(/\bjarvis\b/gi, '').trim();
-    if (await handleSleepCheck(preSleepCheck, 'voice-command-pre-wake', userId)) return;
-    // If handleSleepCheck returned false with autoSleepAfterTask set, fall through to dispatch
+    if (await fsmHandleSleepCheck(preSleepCheck, 'voice-command-pre-wake', userId, _pendingUtterance, synthesizeSpeech, audioQueue)) return;
+    // If fsmHandleSleepCheck returned false with autoSleepAfterTask set, fall through to dispatch
 
     // Log sentiment if detected
     if (sentiment && sentiment.sentiment) {
@@ -2343,8 +2062,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
     // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
     const cleanLower = cleanedTranscript.toLowerCase().replace(/[.,!?]/g, '').trim();
-    if (await handleSleepCheck(cleanLower, 'voice-command', userId)) return;
-    // If handleSleepCheck returned false with autoSleepAfterTask set, fall through to task dispatch
+    if (await fsmHandleSleepCheck(cleanLower, 'voice-command', userId, _pendingUtterance, synthesizeSpeech, audioQueue)) return;
+    // If fsmHandleSleepCheck returned false with autoSleepAfterTask set, fall through to task dispatch
     // ──────────────────────────────────────────────────────
 
     // ── Enrollment Gating: no voiceprint enrolled (strict mode) ──
@@ -2388,82 +2107,39 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    const transcript = cleanedTranscript;
-
-    // Stop word filter: drop exact-match filler phrases
-    const STOP_WORDS = ['sounds good', 'thank you', 'thanks', 'obviously', 'ok', 'okay'];
-    const normalizedTranscript = transcript.trim().toLowerCase().replace(/[.,!?]+$/, '');
-    if (STOP_WORDS.includes(normalizedTranscript)) {
-      logger.info(`[voice] stop word filtered: "${transcript}"`);
-      return;
-    }
-
     // Track interaction for handoff detection
     lastInteractionTime = Date.now();
-    lastUserMessage = transcript.substring(0, 100);
-    
-    // ── TL;DR mode toggle detection (admin only) ──
-    const tldrToggle = ALLOWED_USERS.includes(userId) ? isTldrToggleCommand(rawTranscript) : null;
-    if (tldrToggle !== null) {
-      const newState = tldrToggle ? 'enabled' : 'disabled';
-      const success = setTldrMode(tldrToggle);
-      if (success) {
+    lastUserMessage = cleanedTranscript.substring(0, 100);
+
+    // ── Command dispatch — routes mode toggles, enrollment, interrupts, or brain call ──
+    const dispatchResult = dispatchCommand(rawTranscript, cleanedTranscript, userId, ALLOWED_USERS, enrollmentState);
+
+    if (dispatchResult.type === 'mode_toggle') {
+      if (dispatchResult.mode === 'tldr' && dispatchResult.success) {
+        const newState = dispatchResult.enabled ? 'enabled' : 'disabled';
         logger.info(`🎙️ Voice TL;DR mode ${newState}`);
         const ack = await synthesizeSpeech(`Voice TL;DR mode ${newState}.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
-      }
-      return;
-    }
-    
-    // ── Full transcript mode toggle detection (admin only) ──
-    const transcriptToggle = ALLOWED_USERS.includes(userId) ? isTranscriptToggleCommand(rawTranscript) : null;
-    if (transcriptToggle !== null) {
-      const newState = transcriptToggle ? 'enabled' : 'disabled';
-      const success = setTranscriptMode(transcriptToggle);
-      if (success) {
+      } else if (dispatchResult.mode === 'transcript' && dispatchResult.success) {
+        const newState = dispatchResult.enabled ? 'enabled' : 'disabled';
         logger.info(`📝 Voice full transcript mode ${newState}`);
         const ack = await synthesizeSpeech(`Full transcript mode ${newState}.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
-      }
-      return;
-    }
-    
-    // ── Ask mode toggle detection (admin only) ──
-    const askToggle = ALLOWED_USERS.includes(userId) ? isAskModeToggleCommand(rawTranscript) : null;
-    if (askToggle !== null) {
-      const newState = askToggle ? 'enabled' : 'disabled';
-      const success = setAskMode(askToggle);
-      if (success) {
-        logger.info(`🛡️ Ask mode ${newState}`);
-        const ack = await synthesizeSpeech(askToggle
+      } else if (dispatchResult.mode === 'ask' && dispatchResult.success) {
+        logger.info(`🛡️ Ask mode ${dispatchResult.enabled ? 'enabled' : 'disabled'}`);
+        const ack = await synthesizeSpeech(dispatchResult.enabled
           ? `Ask mode enabled. I'll confirm before taking any actions.`
           : `Ask mode disabled. Executing freely.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
-      }
-      return;
-    }
-
-    // ── TTS provider toggle detection (admin only) ──
-    const ttsToggle = ALLOWED_USERS.includes(userId) ? isTtsToggleCommand(rawTranscript) : null;
-    if (ttsToggle) {
-      const success = setTtsProvider(ttsToggle);
-      if (success) {
-        const voiceName = ttsToggle === 'edge' ? 'Ryan' : 'JARVIS';
-        logger.info(`🎭 Switched to ${ttsToggle} TTS (${voiceName})`);
+      } else if (dispatchResult.mode === 'tts' && dispatchResult.success) {
+        const voiceName = dispatchResult.provider === 'edge' ? 'Ryan' : 'JARVIS';
+        logger.info(`🎭 Switched to ${dispatchResult.provider} TTS (${voiceName})`);
         const ack = await synthesizeSpeech(`Switched to ${voiceName} voice.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
-      }
-      return;
-    }
-    
-    // ── Mobile / on-the-go mode toggle (admin only) ──
-    const mobileToggle = ALLOWED_USERS.includes(userId) ? isMobileModeToggle(rawTranscript) : null;
-    if (mobileToggle !== null) {
-      const newState = mobileToggle ? 'enabled' : 'disabled';
-      const success = setMobileMode(mobileToggle);
-      if (success) {
+      } else if (dispatchResult.mode === 'mobile' && dispatchResult.success) {
+        const newState = dispatchResult.enabled ? 'enabled' : 'disabled';
         logger.info(`📱 Mobile mode ${newState}`);
-        const ack = await synthesizeSpeech(mobileToggle
+        const ack = await synthesizeSpeech(dispatchResult.enabled
           ? `Mobile mode on. I'll narrate as I work and keep you updated hands-free.`
           : `Mobile mode off. Back to standard voice output.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
@@ -2471,66 +2147,56 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // ── Voice enrollment command (admin only) ──
-    const enrollMatch = rawTranscript.match(/(en\s*roll|in\s*roll|and\s*roll|can\s*roll|un\s*roll)\s*(my\s*)?voice/i);
-    const restartEnrollMatch = cleanedTranscript.match(/^(restart|redo|reset)\s*(enroll|enrollment|voice)/i);
-    const cancelEnrollMatch = cleanedTranscript.match(/^(cancel|stop)\s*enroll/i);
-    if (ALLOWED_USERS.includes(userId) && cancelEnrollMatch && enrollmentState.active) {
-      enrollmentState.cancel();
-      const audio = await synthesizeSpeech('Enrollment cancelled.');
-      if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
-      return;
-    }
-    // "restart enrollment" — wipe voiceprints and start fresh
-    if (ALLOWED_USERS.includes(userId) && restartEnrollMatch) {
-      try {
-        const { unlinkSync: ul } = await import('fs');
-        const { join: j } = await import('path');
-        const home = process.env.HOME || '/tmp';
-        const vp1 = j(home, '.jarvis', 'owner_voiceprint.npy');
-        const vp2 = j(home, '.jarvis', 'owner_voiceprints.npy');
-        try { ul(vp1); } catch {}
-        try { ul(vp2); } catch {}
-        // Reset on the service side too
-        await fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST' }).catch(() => {});
-        logger.info('Voiceprints wiped — starting fresh enrollment');
-      } catch (e) { logger.error('Voiceprint wipe error:', e.message); }
-      // Fall through to start enrollment
-    }
-    // "learn mode" / "add samples" — add more clips to existing voiceprint
-    const learnMatch = cleanedTranscript.match(/^(learn\s*mode|add\s*(more\s*)?samples|improve\s*voice)/i);
-    if (ALLOWED_USERS.includes(userId) && learnMatch) {
-      enrollmentState.start(userId, true); // learn=true
-      logger.info('Learn mode started — adding samples to voiceprint');
-      postToCC('🎙️ Learn Mode', 'Speak naturally. Each clip improves your voiceprint. Say **"done"** to save.');
-      const audio = await synthesizeSpeech('Learn mode on. Just talk naturally and I\'ll add each clip to your voiceprint. Say done when finished.');
-      if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
-      return;
-    }
-
-    if (ALLOWED_USERS.includes(userId) && (enrollMatch || restartEnrollMatch)) {
-      enrollmentState.start(userId);
-      const firstPrompt = enrollmentState.currentPrompt();
-      logger.info(`Voice enrollment started -- ${enrollmentState.clipsNeeded} guided phrases`);
-      postToCC('🎙️ Enrollment', [
-        `Starting voice enrollment (${enrollmentState.clipsNeeded} phrases).`,
-        `**"retry"** — repeat the current phrase`,
-        `**"retry 5"** — jump back to phrase #5`,
-        `**"start over"** — restart from #1`,
-        `**"done"** — save early (min 3 clips)`,
-        `**"more"** — switch to learn mode after finishing`,
-        `**"cancel enrollment"** — abort`,
-        `[1/${enrollmentState.clipsNeeded}] Repeat: **${firstPrompt}**`,
-      ].join('\n'));
-      const audio = await synthesizeSpeech(`Voice enrollment. ${enrollmentState.clipsNeeded} phrases. First: ${firstPrompt}`);
-      if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
-      return;
+    if (dispatchResult.type === 'enrollment') {
+      if (dispatchResult.action === 'cancel') {
+        enrollmentState.cancel();
+        const audio = await synthesizeSpeech('Enrollment cancelled.');
+        if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
+        return;
+      }
+      if (dispatchResult.action === 'restart') {
+        try {
+          const { unlinkSync: ul } = await import('fs');
+          const { join: j } = await import('path');
+          const home = process.env.HOME || '/tmp';
+          const vp1 = j(home, '.jarvis', 'owner_voiceprint.npy');
+          const vp2 = j(home, '.jarvis', 'owner_voiceprints.npy');
+          try { ul(vp1); } catch {}
+          try { ul(vp2); } catch {}
+          await fetch(`${process.env.SPEAKER_VERIFY_URL?.replace('/verify', '') || 'http://localhost:8767'}/enroll/reset`, { method: 'POST' }).catch(() => {});
+          logger.info('Voiceprints wiped — starting fresh enrollment');
+        } catch (e) { logger.error('Voiceprint wipe error:', e.message); }
+        // Fall through to start enrollment below
+      }
+      if (dispatchResult.action === 'learn') {
+        enrollmentState.start(userId, true);
+        logger.info('Learn mode started — adding samples to voiceprint');
+        postToCC('🎙️ Learn Mode', 'Speak naturally. Each clip improves your voiceprint. Say **"done"** to save.');
+        const audio = await synthesizeSpeech('Learn mode on. Just talk naturally and I\'ll add each clip to your voiceprint. Say done when finished.');
+        if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
+        return;
+      }
+      if (dispatchResult.action === 'start' || dispatchResult.action === 'restart') {
+        enrollmentState.start(userId);
+        const firstPrompt = enrollmentState.currentPrompt();
+        logger.info(`Voice enrollment started -- ${enrollmentState.clipsNeeded} guided phrases`);
+        postToCC('🎙️ Enrollment', [
+          `Starting voice enrollment (${enrollmentState.clipsNeeded} phrases).`,
+          `**"retry"** — repeat the current phrase`,
+          `**"retry 5"** — jump back to phrase #5`,
+          `**"start over"** — restart from #1`,
+          `**"done"** — save early (min 3 clips)`,
+          `**"more"** — switch to learn mode after finishing`,
+          `**"cancel enrollment"** — abort`,
+          `[1/${enrollmentState.clipsNeeded}] Repeat: **${firstPrompt}**`,
+        ].join('\n'));
+        const audio = await synthesizeSpeech(`Voice enrollment. ${enrollmentState.clipsNeeded} phrases. First: ${firstPrompt}`);
+        if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
+        return;
+      }
     }
 
-    // ── Interrupt/stop detection (cancels all active tasks) ──
-    // This MUST stay local -- it needs to kill in-flight audio/tasks immediately
-    // Only ALLOWED_USERS can use interrupt commands (admin control)
-    if (ALLOWED_USERS.includes(userId) && isInterruptCommand(rawTranscript)) {
+    if (dispatchResult.type === 'interrupt') {
       logger.info(`⛔ Interrupt command: "${rawTranscript}"`);
       cancelAllTasks();
       const stopAudio = await synthesizeSpeech('Stopped.');
@@ -2538,15 +2204,20 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // Wake word only (no actual question) — local chime, no gateway round-trip
-    const trimmed = transcript.trim().replace(/[.,!?]/g, '');
-    if (!trimmed || trimmed.length < 2) {
+    if (dispatchResult.type === 'stop_word' || dispatchResult.type === 'side_talk') {
+      return;
+    }
+
+    if (dispatchResult.type === 'bare_wake') {
       markBotResponse(userId);
       const chime = await synthesizeSpeech('Yes?');
       if (chime) { playAudioEnhanced(chime).then(() => { try { unlinkSync(chime); } catch {} }).catch(() => {}); }
       return;
     }
-    
+
+    // dispatchResult.type === 'brain' — fall through to background brain call
+    const transcript = dispatchResult.transcript || cleanedTranscript;
+
     // ── Background brain call (async — non-blocking) ──
     
     if (!conversations.has(userId)) conversations.set(userId, { history: [], lastActive: Date.now() });
