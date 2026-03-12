@@ -1,4 +1,4 @@
-const logger = require('./logger.js');
+import logger from './logger.js';
 /**
  * Alert Queue - Stores pending voice alerts for briefing on join
  * 5-tier numeric priority: P1 (critical) through P5 (info)

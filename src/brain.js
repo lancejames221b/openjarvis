@@ -1,4 +1,4 @@
-const logger = require('./logger.js');
+import logger from './logger.js';
 /**
  * Brain Module - Thin voice I/O layer to Clawdbot Gateway
  * 

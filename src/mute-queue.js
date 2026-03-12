@@ -1,4 +1,4 @@
-const logger = require('./logger.js');
+import logger from './logger.js';
 /**
  * Self-Mute TTS Queue
  *
