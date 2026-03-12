@@ -315,9 +315,6 @@ def verify():
             # Decision uses raw score against threshold (normalized score informs tier)
             is_owner = raw_score >= SPEAKER_THRESHOLD
             tier = classify_confidence(raw_score, norm_score if cohort_stats else None, SPEAKER_THRESHOLD)
-            # Medium tier with session context = allow through
-            if tier == "medium" and not is_owner:
-                is_owner = True  # Medium confidence = benefit of the doubt for codec-degraded audio
             logger.info(f"Verify: raw={raw_score:.3f} norm={norm_score:.3f} tier={tier} ref={best_idx} -> {'owner' if is_owner else 'reject'}")
         else:
             raw_score = cosine_similarity(embedding, owner_voiceprint)

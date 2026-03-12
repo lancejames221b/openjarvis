@@ -46,6 +46,20 @@ const WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || 3335;
 const WEBHOOK_BASE_URL = `http://${WEBHOOK_HOST}:${WEBHOOK_PORT}`;
 const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
 
+// ── Speaker Verification Helper ──────────────────────────────────────
+
+/**
+ * Check if speaker is verified as owner at the required confidence tier.
+ * @param {object} spkr - Speaker verification result from /verify endpoint
+ * @param {'high'|'medium'|'low'} requiredTier - Minimum confidence tier required
+ * @returns {boolean}
+ */
+function isVerifiedOwner(spkr, requiredTier = 'high') {
+  if (!spkr?.is_owner) return false;
+  const tiers = { high: 3, medium: 2, low: 1 };
+  return (tiers[spkr.confidence_tier] ?? 0) >= (tiers[requiredTier] ?? 3);
+}
+
 // ── Gateway Health Check ─────────────────────────────────────────────
 
 let _gatewayHealthy = false;
@@ -2037,7 +2051,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // enough that TV rarely produces it, and owner's embedding gets corrupted by
     // TV background noise (scoring 0.30-0.33, same as pure TV).
     const spkr = sttResult?.speakerInfo;
-    if (spkr && !spkr.is_owner) {
+    if (spkr && !isVerifiedOwner(spkr, 'medium')) {
       const trimmed = rawTranscript.trim();
       const startsWithWakeWord = /^(hey[,.]?\s+)?jarvis\b/i.test(trimmed);
       if (startsWithWakeWord) {
@@ -2086,7 +2100,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     postActivity(`🎤 \`${currentState}\` speaker=${spkrTag} → "${truncate(rawTranscript, 100)}"`);
 
     // SLEEP: only wake-up commands pass (including fuzzy wake word when speaker verified)
-    const spkrIsOwner = !!(spkr?.is_owner);
+    const spkrIsOwner = isVerifiedOwner(spkr, 'high');
     if (currentState === 'SLEEP') {
       // SLEEP wake logic:
       // 1. Explicit "Jarvis" patterns (WAKE_UP_PATTERNS) — always allowed
@@ -2097,14 +2111,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const cleanTranscript = rawTranscript.trim().replace(/[.,!?;:]+$/g, '');
       const strictWakeMatch = WAKE_UP_PATTERNS.some(p => p.test(cleanTranscript));
       // Fuzzy wake only for HIGH confidence verified speaker (not medium benefit-of-the-doubt)
-      const sleepSpkrVerified = !!(spkr?.is_owner && spkr?.confidence_tier === 'high');
+      const sleepSpkrVerified = isVerifiedOwner(spkr, 'high');
       const sleepWakeMatch = strictWakeMatch || isWakeUpCommand(cleanTranscript, sleepSpkrVerified);
       if (sleepWakeMatch) {
         const wakeSpkr = sttResult?.speakerInfo;
         // Allow wake word even with TV-corrupted embeddings — "Jarvis" is rare on TV.
         // Session stays unauthenticated so follow-up commands need clean speaker verify.
         transition('ACTIVE', 'wake-word');
-        authenticatedSession = !!(wakeSpkr?.is_owner);
+        authenticatedSession = isVerifiedOwner(wakeSpkr, 'high');
         resetIdleSleepTimer();
         // Strip wake word prefix: try standard patterns first, fall back to fuzzy vocative
         let stripped = rawTranscript.replace(/^(hey\s+)?jarvis[,.]?\s*/i, '').trim();
@@ -2133,7 +2147,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const wakeSpkr = sttResult?.speakerInfo;
         // Allow wake word even with TV-corrupted embeddings (see SLEEP comment above)
         transition('ACTIVE', 'wake-word-from-idle');
-        authenticatedSession = !!(wakeSpkr?.is_owner);
+        authenticatedSession = isVerifiedOwner(wakeSpkr, 'high');
         resetIdleSleepTimer();
         // fall through -- checkWakeWord handles transcript cleaning
       } else if (isContinuationPhrase(rawTranscript) && hasRecentContext(userId)) {
@@ -2143,7 +2157,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         authenticatedSession = true; // trust context -- was authenticated before IDLE
         resetIdleSleepTimer();
         // fall through to process
-      } else if (spkr?.is_owner && spkr?.confidence_tier === 'high' && hasRecentContext(userId) && isFollowUpExpected()) {
+      } else if (isVerifiedOwner(spkr, 'high') && hasRecentContext(userId) && isFollowUpExpected()) {
         // Verified owner responding to an alert/prompt -- speaker ID is the auth
         console.log(`Owner response to alert/prompt in IDLE (speaker=${spkr.confidence} tier=${spkr.confidence_tier}) -- no wake word needed`);
         transition('ACTIVE', 'owner-response-from-idle');
@@ -2201,8 +2215,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // 2. Wake word check
     // For fuzzy wake word: accept medium confidence tier too — Whisper mishears "Jarvis" as
     // phonetically similar words (Curtis, Gervas, jargos) which score medium, not high.
-    // is_owner=true (high confidence) OR medium tier both count as "speaker likely verified".
-    const speakerLikelyOwner = !!(spkr?.is_owner) || spkr?.confidence_tier === 'medium';
+    // High confidence = strong match; medium = likely owner with codec degradation.
+    const speakerLikelyOwner = isVerifiedOwner(spkr, 'medium');
     const { detected, cleanedTranscript, wakeWordUsed } = checkWakeWord(rawTranscript, userId, speakerLikelyOwner);
     if (!detected) return;
 
@@ -2213,7 +2227,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (speakerInfo && !authenticatedSession) {
       // Wake word detected -- this is the authentication moment
       // confidence_tier from server: "high" (auto-accept), "medium" (accept in session context), "low" (reject)
-      if (speakerInfo.is_owner) {
+      if (isVerifiedOwner(speakerInfo, 'high')) {
         authenticatedSession = true;
         const tier = speakerInfo.confidence_tier || 'unknown';
         console.log(`Session authenticated (wake word confidence=${speakerInfo.confidence} tier=${tier})`);
@@ -2248,7 +2262,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     } else if (authenticatedSession) {
       // Session authenticated -- but still reject clearly non-owner audio (TV/ambient)
       // The per-utterance filter above catches most, but double-check here for safety
-      if (speakerInfo && !speakerInfo.is_owner && speakerInfo.confidence_tier === 'low') {
+      if (speakerInfo && !isVerifiedOwner(speakerInfo, 'medium') && speakerInfo.confidence_tier === 'low') {
         console.log(`🔇 Active session: non-owner audio rejected (confidence=${speakerInfo.confidence} tier=${speakerInfo.confidence_tier})`);
         return;
       }
