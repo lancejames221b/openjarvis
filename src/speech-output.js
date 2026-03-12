@@ -37,6 +37,8 @@ export function getIsSpeaking() { return isSpeaking; }
 export function setIsSpeaking(val) { isSpeaking = val; }
 
 // ── Audio Queue ──────────────────────────────────────────────────────
+const AUDIO_QUEUE_MAX_SIZE = parseInt(process.env.AUDIO_QUEUE_MAX_SIZE || '50');
+
 class AudioQueue {
   constructor() {
     this.queue = [];
@@ -44,6 +46,11 @@ class AudioQueue {
   }
   
   add(audioSource, metadata = {}) {
+    if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
+      const dropped = this.queue.shift();
+      console.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
+      try { unlinkSync(dropped.audioSource); } catch {}
+    }
     this.queue.push({ audioSource, metadata });
     if (!this.playing) this.playNext();
   }

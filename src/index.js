@@ -241,18 +241,18 @@ function startHealthMonitor() {
 
 // Conversation history per user (local backup — gateway session is primary)
 const conversations = new Map(); // userId -> { history: [], lastActive: timestamp }
-const CONVERSATION_TTL_MS = 30 * 60 * 1000; // Prune inactive conversations after 30 min
+const CONVERSATION_TTL_MS = 60 * 60 * 1000; // Prune inactive conversations after 1 hour
 
 function pruneConversations() {
-  const now = Date.now();
-  for (const [userId, conv] of conversations) {
-    if (now - (conv.lastActive || 0) > CONVERSATION_TTL_MS) {
+  const cutoff = Date.now() - CONVERSATION_TTL_MS;
+  for (const [userId, conv] of conversations.entries()) {
+    if (conv.lastActive && conv.lastActive < cutoff) {
       conversations.delete(userId);
     }
   }
 }
-// Run pruning every 5 minutes
-setInterval(pruneConversations, 5 * 60 * 1000);
+// Run pruning every 10 minutes
+setInterval(pruneConversations, 10 * 60 * 1000);
 
 // Voice activity tracking
 const userSpeaking = new Map();
@@ -652,6 +652,8 @@ function truncate(str, len = 80) {
 
 // ── Audio Queue (for streaming TTS) ──────────────────────────────────
 
+const AUDIO_QUEUE_MAX_SIZE = parseInt(process.env.AUDIO_QUEUE_MAX_SIZE || '50');
+
 class AudioQueue {
   constructor() {
     this.queue = [];
@@ -659,6 +661,11 @@ class AudioQueue {
   }
   
   add(audioSource, metadata = {}) {
+    if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
+      const dropped = this.queue.shift();
+      console.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
+      try { unlinkSync(dropped.audioSource); } catch {}
+    }
     this.queue.push({ audioSource, metadata });
     if (!this.playing) this.playNext();
   }
@@ -3112,8 +3119,16 @@ process.on('SIGTERM', () => {
 
 // ── Start ────────────────────────────────────────────────────────────
 
-if (!process.env.DISCORD_TOKEN) {
-  console.error('❌ DISCORD_TOKEN required. See .env.example');
+const REQUIRED_ENV = [
+  'DISCORD_TOKEN',
+  'DISCORD_GUILD_ID',
+  'CLAWDBOT_GATEWAY_URL',
+  'SPEAKER_VERIFY_URL',
+];
+const missing = REQUIRED_ENV.filter(v => !process.env[v]);
+if (missing.length > 0) {
+  console.error(`[startup] Missing required env vars: ${missing.join(', ')}`);
+  console.error('[startup] See .env.example for reference. Exiting.');
   process.exit(1);
 }
 

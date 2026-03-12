@@ -579,10 +579,11 @@ def diarize():
             is_owner = raw_score >= SPEAKER_THRESHOLD or norm_score > -0.5
             owner_confidence = raw_score
             if is_owner:
-                # Make sure "Lance" is in clusters for participant tracking
-                if not any(c['label'] == 'Lance' for c in diarize_state['clusters']):
+                # Make sure owner label is in clusters for participant tracking
+                _owner_label = os.environ.get('DIARIZATION_OWNER_LABEL', 'Lance')
+                if not any(c['label'] == _owner_label for c in diarize_state['clusters']):
                     diarize_state['clusters'].append({
-                        'label': 'Lance',
+                        'label': _owner_label,
                         'centroid': embedding.copy(),
                         'count': 1,
                         'rms_sum': rms_db,
@@ -590,25 +591,27 @@ def diarize():
                     })
                 else:
                     for c in diarize_state['clusters']:
-                        if c['label'] == 'Lance':
+                        if c['label'] == _owner_label:
                             c['centroid'] = (c['centroid'] * c['count'] + embedding) / (c['count'] + 1)
                             c['count'] += 1
                             c['rms_sum'] = c.get('rms_sum', 0) + rms_db
                             c['rms_count'] = c.get('rms_count', 0) + 1
                             break
-                logger.info(f"Diarize: Lance (raw={raw_score:.3f} norm={norm_score:.3f} dB={rms_db})")
-                return jsonify({"speaker": "Lance", "confidence": round(raw_score, 4), "is_owner": True, "rms_db": rms_db})
+                logger.info(f"Diarize: {_owner_label} (raw={raw_score:.3f} norm={norm_score:.3f} dB={rms_db})")
+                return jsonify({"speaker": _owner_label, "confidence": round(raw_score, 4), "is_owner": True, "rms_db": rms_db})
         elif owner_voiceprint is not None:
             raw_score = cosine_similarity(embedding, owner_voiceprint)
             if raw_score >= SPEAKER_THRESHOLD:
-                logger.info(f"Diarize: Lance (raw={raw_score:.3f} dB={rms_db})")
-                return jsonify({"speaker": "Lance", "confidence": round(raw_score, 4), "is_owner": True, "rms_db": rms_db})
+                _owner_label = os.environ.get('DIARIZATION_OWNER_LABEL', 'Lance')
+                logger.info(f"Diarize: {_owner_label} (raw={raw_score:.3f} dB={rms_db})")
+                return jsonify({"speaker": _owner_label, "confidence": round(raw_score, 4), "is_owner": True, "rms_db": rms_db})
 
         # Cluster matching for non-owner voices
         best_sim = -1.0
         best_cluster = None
+        _owner_label = os.environ.get('DIARIZATION_OWNER_LABEL', 'Lance')
         for cluster in diarize_state['clusters']:
-            if cluster['label'] == 'Lance':
+            if cluster['label'] == _owner_label:
                 continue
             sim = cosine_similarity(embedding, cluster['centroid'])
             if sim > best_sim:
