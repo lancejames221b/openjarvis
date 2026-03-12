@@ -2260,7 +2260,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     queueUtterance(userId, transcript, conv, speakerName, sentiment);
     
   } catch (err) {
-    logger.error('❌ Speech dispatch error:', err);
+    logger.error({ err }, `❌ Speech dispatch error: ${err.message}`);
     // Only give audio feedback for real STT service failures (not empty/ambient noise)
     if (err.message && err.message.includes('STT failed') && !err.message.includes('Empty transcript')) {
       try {

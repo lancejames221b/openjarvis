@@ -8,6 +8,7 @@
 
 import { createClient } from '@deepgram/sdk';
 import { createReadStream } from 'fs';
+import logger from './logger.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
