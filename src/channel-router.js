@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { joinVoiceChannel } from '@discordjs/voice';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -195,7 +196,7 @@ export function loadDirective(directivePath) {
     
     return truncated;
   } catch (err) {
-    console.error(`Failed to load directive ${directivePath}:`, err.message);
+    logger.error(`Failed to load directive ${directivePath}:`, err.message);
     return null;
   }
 }

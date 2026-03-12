@@ -1,3 +1,4 @@
+const logger = require('./logger.js');
 /**
  * Self-Mute TTS Queue
  *
@@ -21,7 +22,7 @@ export function activate() {
   if (_active) return;
   _active = true;
   _activeSince = Date.now();
-  console.log('🔇 Mute queue activated — TTS output will be queued');
+  logger.info('🔇 Mute queue activated — TTS output will be queued');
 }
 
 /** Deactivate (owner unmuted). Does NOT clear — caller debriefs first. */
@@ -29,7 +30,7 @@ export function deactivate() {
   if (!_active) return;
   _active = false;
   const duration = _activeSince ? Date.now() - _activeSince : 0;
-  console.log(`🔊 Mute queue deactivated after ${Math.round(duration / 1000)}s — ${_entries.length} entries queued`);
+  logger.info(`🔊 Mute queue deactivated after ${Math.round(duration / 1000)}s — ${_entries.length} entries queued`);
   _activeSince = null;
 }
 
@@ -63,7 +64,7 @@ export function addEntry(text, source = 'update', priority = 3) {
     _entries.splice(idx >= 0 ? idx : 0, 1);
   }
 
-  console.log(`🔇 Mute queue: +1 (${source}) — ${_entries.length} total`);
+  logger.info(`🔇 Mute queue: +1 (${source}) — ${_entries.length} total`);
 }
 
 export function getEntries() {
@@ -163,7 +164,7 @@ export function getContextBlock() {
 export function clear() {
   const count = _entries.length;
   _entries.length = 0;
-  if (count > 0) console.log(`🗑️  Mute queue cleared (${count} entries)`);
+  if (count > 0) logger.info(`🗑️  Mute queue cleared (${count} entries)`);
   return count;
 }
 

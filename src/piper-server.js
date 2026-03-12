@@ -15,6 +15,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { watch } from 'fs';
 import { randomUUID } from 'crypto';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MODELS_DIR = join(__dirname, '..', 'models', 'jarvis');
@@ -48,7 +49,7 @@ function getPiperProcess(model = DEFAULT_MODEL) {
   }
   
   const modelPath = MODELS[model] || MODELS[DEFAULT_MODEL];
-  console.log(`🔧 Starting persistent Piper process (${model})...`);
+  logger.info(`🔧 Starting persistent Piper process (${model})...`);
   
   const proc = spawn(PIPER_BIN, [
     '--model', modelPath,
@@ -91,7 +92,7 @@ function getPiperProcess(model = DEFAULT_MODEL) {
   });
   
   proc.on('close', (code) => {
-    console.log(`⚠️ Piper process (${model}) exited with code ${code}`);
+    logger.info(`⚠️ Piper process (${model}) exited with code ${code}`);
     state.dead = true;
     // Reject all pending
     for (const pending of state.queue) {
@@ -102,7 +103,7 @@ function getPiperProcess(model = DEFAULT_MODEL) {
   });
   
   proc.on('error', (err) => {
-    console.error(`❌ Piper process error: ${err.message}`);
+    logger.error(`❌ Piper process error: ${err.message}`);
     state.dead = true;
   });
   
@@ -187,7 +188,7 @@ const server = createServer(async (req, res) => {
         });
         res.end(audio);
       } catch (err) {
-        console.error('TTS error:', err.message);
+        logger.error('TTS error:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -205,8 +206,8 @@ await ensureOutputDir();
 getPiperProcess(DEFAULT_MODEL);
 
 server.listen(PORT, BIND, () => {
-  console.log(`🗣️  Piper TTS (JARVIS) listening on ${BIND}:${PORT}`);
-  console.log(`   Mode: persistent (model stays warm in memory)`);
-  console.log(`   Default model: ${DEFAULT_MODEL}`);
-  console.log(`   Endpoint: POST /tts { "text": "...", "model": "medium|high" }`);
+  logger.info(`🗣️  Piper TTS (JARVIS) listening on ${BIND}:${PORT}`);
+  logger.info(`   Mode: persistent (model stays warm in memory)`);
+  logger.info(`   Default model: ${DEFAULT_MODEL}`);
+  logger.info(`   Endpoint: POST /tts { "text": "...", "model": "medium|high" }`);
 });

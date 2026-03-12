@@ -1,3 +1,4 @@
+const logger = require('./logger.js');
 /**
  * Alert Queue - Stores pending voice alerts for briefing on join
  * 5-tier numeric priority: P1 (critical) through P5 (info)
@@ -47,7 +48,7 @@ export function queueAlert(alert) {
     return a.timestamp - b.timestamp;
   });
 
-  console.log(`📬 Alert queued [P${getPri(alert)}]: ${alert.message.substring(0, 50)}...`);
+  logger.info(`📬 Alert queued [P${getPri(alert)}]: ${alert.message.substring(0, 50)}...`);
 }
 
 export function getPendingAlerts() {
@@ -62,7 +63,7 @@ export function getAlertsByPriority(maxLevel = 5) {
 export function clearAlerts() {
   const count = pendingAlerts.length;
   pendingAlerts.length = 0;
-  console.log(`🗑️  Cleared ${count} alerts`);
+  logger.info(`🗑️  Cleared ${count} alerts`);
   return count;
 }
 

@@ -16,6 +16,7 @@ import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { Readable } from 'stream';
 import { formatNumbersForSpeech } from './number-formatter.js';
+import logger from './logger.js';
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,14 +54,14 @@ const TTS_CIRCUIT_BREAKER = {
     if (this.failures.length >= this.threshold && !this.tripped) {
       this.tripped = true;
       this.trippedAt = now;
-      console.log(`⚡ TTS circuit breaker OPEN — Edge TTS down (${this.threshold} failures in ${this.windowMs / 1000}s). Text-only mode for ${this.cooldownMs / 1000}s.`);
+      logger.info(`⚡ TTS circuit breaker OPEN — Edge TTS down (${this.threshold} failures in ${this.windowMs / 1000}s). Text-only mode for ${this.cooldownMs / 1000}s.`);
     }
   },
   
   recordSuccess() {
     // Single success after recovery resets everything
     if (this.tripped) {
-      console.log('🟢 TTS circuit breaker CLOSED — Edge TTS recovered');
+      logger.info('🟢 TTS circuit breaker CLOSED — Edge TTS recovered');
     }
     this.tripped = false;
     this.trippedAt = null;
@@ -71,7 +72,7 @@ const TTS_CIRCUIT_BREAKER = {
     if (!this.tripped) return false;
     // Check if cooldown has elapsed — allow a probe
     if (Date.now() - this.trippedAt > this.cooldownMs) {
-      console.log('🟡 TTS circuit breaker cooldown elapsed — probing Edge TTS');
+      logger.info('🟡 TTS circuit breaker cooldown elapsed — probing Edge TTS');
       this.tripped = false;
       this.trippedAt = null;
       return false;
@@ -124,7 +125,7 @@ function sanitizeTextForTTS(text) {
   // If text is ONLY punctuation marks (e.g., just "?", "!", "..."), return null
   const textWithoutPunctuation = cleaned.replace(/[.,!?;:\-—…'"]/g, '').trim();
   if (textWithoutPunctuation.length === 0) {
-    console.log('⏭️  Text is only punctuation, skipping TTS synthesis');
+    logger.info('⏭️  Text is only punctuation, skipping TTS synthesis');
     return null;
   }
   
@@ -149,13 +150,13 @@ export async function synthesizeSpeech(text) {
   // Sanitize input
   const sanitized = sanitizeTextForTTS(text);
   if (!sanitized) {
-    console.log('⏭️  Empty/invalid text after sanitization, skipping synthesis');
+    logger.info('⏭️  Empty/invalid text after sanitization, skipping synthesis');
     return null;
   }
   
   // Circuit breaker check — if open, skip TTS entirely
   if (TTS_CIRCUIT_BREAKER.isOpen()) {
-    console.log('⏭️  TTS circuit breaker open — skipping synthesis (text-only mode)');
+    logger.info('⏭️  TTS circuit breaker open — skipping synthesis (text-only mode)');
     return null;
   }
   
@@ -164,13 +165,13 @@ export async function synthesizeSpeech(text) {
     const piperResult = await synthesizePiper(sanitized);
     if (piperResult) return piperResult;
     // Piper failed — retry once with backoff before giving up
-    console.warn('⚠️ Piper TTS failed, retrying once in 500ms...');
+    logger.warn('⚠️ Piper TTS failed, retrying once in 500ms...');
     await new Promise(r => setTimeout(r, 500));
     const retryResult = await synthesizePiper(sanitized);
     if (retryResult) return retryResult;
     // Both attempts failed — degrade to text-only (NO voice switch)
     // Switching to Edge mid-conversation changes the voice identity
-    console.warn('⚠️ Piper TTS unavailable after retry — text-only mode (no voice switch)');
+    logger.warn('⚠️ Piper TTS unavailable after retry — text-only mode (no voice switch)');
     return null;
   }
   
@@ -193,7 +194,7 @@ async function synthesizePiper(text) {
     });
     
     if (!res.ok) {
-      console.warn(`⚠️ Piper TTS returned ${res.status}, falling back to Edge`);
+      logger.warn(`⚠️ Piper TTS returned ${res.status}, falling back to Edge`);
       return null;
     }
     
@@ -203,10 +204,10 @@ async function synthesizePiper(text) {
     await writeFile(outputPath, buffer);
     
     const latency = res.headers.get('X-Piper-Latency-Ms') || '?';
-    console.log(`🎭 Piper JARVIS TTS: ${latency}ms`);
+    logger.info(`🎭 Piper JARVIS TTS: ${latency}ms`);
     return outputPath;
   } catch (err) {
-    console.warn(`⚠️ Piper TTS unavailable: ${err.message}, falling back to Edge`);
+    logger.warn(`⚠️ Piper TTS unavailable: ${err.message}, falling back to Edge`);
     return null;
   }
 }
@@ -222,20 +223,20 @@ export async function synthesizeSpeechStream(text) {
   // Sanitize input
   const sanitized = sanitizeTextForTTS(text);
   if (!sanitized) {
-    console.log('⏭️  Empty/invalid text after sanitization, skipping synthesis');
+    logger.info('⏭️  Empty/invalid text after sanitization, skipping synthesis');
     return null;
   }
   
   // Circuit breaker check
   if (TTS_CIRCUIT_BREAKER.isOpen()) {
-    console.log('⏭️  TTS circuit breaker open — skipping stream synthesis (text-only mode)');
+    logger.info('⏭️  TTS circuit breaker open — skipping stream synthesis (text-only mode)');
     return null;
   }
   
   try {
     return await synthesizeEdgeStream(sanitized);
   } catch (err) {
-    console.error(`❌ Edge TTS stream failed: ${err.message}`);
+    logger.error(`❌ Edge TTS stream failed: ${err.message}`);
     TTS_CIRCUIT_BREAKER.recordFailure();
     return null;
   }
@@ -255,7 +256,7 @@ async function synthesizeEdge(text) {
     TTS_CIRCUIT_BREAKER.recordSuccess();
     return outputPath;
   } catch (err) {
-    console.error(`❌ Edge TTS failed: ${err.message}`);
+    logger.error(`❌ Edge TTS failed: ${err.message}`);
     TTS_CIRCUIT_BREAKER.recordFailure();
     return null;
   }

@@ -10,6 +10,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = `${__dirname}/../.env`;
@@ -85,7 +86,7 @@ export function setTldrMode(enabled) {
     writeFileSync(ENV_FILE, envContent, 'utf-8');
     return true;
   } catch (err) {
-    console.error('Failed to update VOICE_TLDR_MODE in .env:', err.message);
+    logger.error('Failed to update VOICE_TLDR_MODE in .env:', err.message);
     return false;
   }
 }
@@ -180,7 +181,7 @@ export function setTranscriptMode(enabled) {
     writeFileSync(ENV_FILE, envContent, 'utf-8');
     return true;
   } catch (err) {
-    console.error('Failed to update VOICE_FULL_TRANSCRIPT_MODE in .env:', err.message);
+    logger.error('Failed to update VOICE_FULL_TRANSCRIPT_MODE in .env:', err.message);
     return false;
   }
 }
@@ -231,7 +232,7 @@ export function setAskMode(enabled) {
     writeFileSync(ENV_FILE, envContent, 'utf-8');
     return true;
   } catch (err) {
-    console.error('Failed to update VOICE_ASK_MODE in .env:', err.message);
+    logger.error('Failed to update VOICE_ASK_MODE in .env:', err.message);
     return false;
   }
 }

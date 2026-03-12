@@ -6,6 +6,7 @@
  */
 
 import {
+import logger from './logger.js';
   joinVoiceChannel,
   VoiceConnectionStatus,
   entersState,
@@ -28,7 +29,7 @@ const reconnectState = {
   
   reset() {
     if (this.attempts > 0) {
-      console.log(`🟢 Voice reconnect successful (was at attempt #${this.attempts})`);
+      logger.info(`🟢 Voice reconnect successful (was at attempt #${this.attempts})`);
     }
     this.attempts = 0;
     this.currentDelayMs = this.baseDelayMs;
@@ -83,7 +84,7 @@ export async function joinChannel(options) {
   });
   
   connection.on('error', (err) => {
-    console.error('🔴 Voice connection error:', err.message);
+    logger.error('🔴 Voice connection error:', err.message);
   });
 
   await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
@@ -104,11 +105,11 @@ export async function joinChannel(options) {
     } catch {
       connection.destroy();
       const delay = reconnectState.nextDelay();
-      console.log(`⚠️  Disconnected (attempt #${reconnectState.attempts}), rejoining in ${delay / 1000}s...`);
+      logger.info(`⚠️  Disconnected (attempt #${reconnectState.attempts}), rejoining in ${delay / 1000}s...`);
       
       if (reconnectState.attempts >= 5 && !reconnectState.textModeNotified) {
         reconnectState.textModeNotified = true;
-        console.error('🔴 Voice connection unstable after 5 reconnect attempts');
+        logger.error('🔴 Voice connection unstable after 5 reconnect attempts');
         if (postToTextChannel) postToTextChannel('⚠️ **Voice connection unstable.** Standing by in text mode. Will keep retrying.');
       }
       
@@ -117,7 +118,7 @@ export async function joinChannel(options) {
           await joinChannel({ ...options, greeting: false });
           reconnectState.reset();
         } catch (err) {
-          console.error(`❌ Reconnect attempt #${reconnectState.attempts} failed: ${err.message}`);
+          logger.error(`❌ Reconnect attempt #${reconnectState.attempts} failed: ${err.message}`);
         }
       }, delay);
     }
@@ -163,7 +164,7 @@ function setupAudioReceiver(connection, { onUserSpeech, onBargeIn, isSpeaking, a
       if (!bargeInTimers.has(userId)) {
         const timer = setTimeout(() => {
           if (isSpeaking()) {
-            console.log(`⚡ Barge-in — stopping playback`);
+            logger.info(`⚡ Barge-in — stopping playback`);
             onBargeIn(userId);
           }
           bargeInTimers.delete(userId);
@@ -185,7 +186,7 @@ function setupAudioReceiver(connection, { onUserSpeech, onBargeIn, isSpeaking, a
       decoder.on('data', (chunk) => chunks.push(chunk));
       
       audioStream.once('error', (err) => {
-        console.error(`Audio stream error for ${userId}:`, err.message);
+        logger.error(`Audio stream error for ${userId}:`, err.message);
         userSpeaking.delete(userId);
         decoder.destroy();
       });

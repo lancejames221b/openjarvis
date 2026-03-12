@@ -14,6 +14,7 @@ import { queueAlert, getPendingAlerts, clearAlerts } from './alert-queue.js';
 import { markCompleted, getActiveTasks, getLedgerStats } from './task-ledger.js';
 import { setActiveAlert } from './alert-context.js';
 import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './bot-state.js';
+import logger from './logger.js';
 
 const app = express();
 app.use(express.json({ limit: '50kb' })); // Larger limit for cron results
@@ -73,12 +74,12 @@ export function initAlertWebhook(discordClient, guildId, allowedUsers, briefCall
   // Start periodic escalation check for stale alerts
   if (escalationInterval) clearInterval(escalationInterval);
   escalationInterval = setInterval(checkStaleAlerts, ESCALATION_CHECK_INTERVAL_MS);
-  console.log('🔔 Alert escalation check enabled (1hr threshold, 5min interval)');
+  logger.info('🔔 Alert escalation check enabled (1hr threshold, 5min interval)');
   
   // Start periodic reminder escalation check
   if (reminderCheckInterval) clearInterval(reminderCheckInterval);
   reminderCheckInterval = setInterval(checkReminderEscalation, REMINDER_CHECK_INTERVAL_MS);
-  console.log('⏰ Reminder escalation check enabled (60s interval)');
+  logger.info('⏰ Reminder escalation check enabled (60s interval)');
 }
 
 /**
@@ -110,13 +111,13 @@ async function checkStaleAlerts() {
       const ageMin = Math.round((now - alert.timestamp) / 60_000);
       const escalationMsg = `📢 **Missed voice alert** (${ageMin}m ago): ${alert.message}`;
       await channel.send(escalationMsg);
-      console.log(`📢 Escalated stale alert to text: "${alert.message.substring(0, 60)}..." (${ageMin}m old)`);
+      logger.info(`📢 Escalated stale alert to text: "${alert.message.substring(0, 60)}..." (${ageMin}m old)`);
     }
     
     // Clear the escalated alerts so they don't re-escalate
     clearAlerts();
   } catch (err) {
-    console.error(`❌ Alert escalation failed: ${err.message}`);
+    logger.error(`❌ Alert escalation failed: ${err.message}`);
   }
 }
 
@@ -165,7 +166,7 @@ async function executeReminderTier(id, reminder) {
   const tier = REMINDER_ESCALATION_TIERS[reminder.tier];
   const now = Date.now();
   
-  console.log(`⏰ Reminder #${id} escalating to tier ${reminder.tier} (${tier.name}): "${reminder.message.substring(0, 60)}..."`);
+  logger.info(`⏰ Reminder #${id} escalating to tier ${reminder.tier} (${tier.name}): "${reminder.message.substring(0, 60)}..."`);
   
   reminder.attempts.push({ tier: reminder.tier, tierName: tier.name, timestamp: now });
   
@@ -177,9 +178,9 @@ async function executeReminderTier(id, reminder) {
         if (userInVoice && speakCallback) {
           speakCallback(`Reminder: ${reminder.message}`);
           reminder.delivered = true;
-          console.log(`🔊 Reminder #${id} delivered via voice`);
+          logger.info(`🔊 Reminder #${id} delivered via voice`);
         } else {
-          console.log(`⏭️  Reminder #${id}: user not in voice, will escalate to text`);
+          logger.info(`⏭️  Reminder #${id}: user not in voice, will escalate to text`);
         }
         break;
       }
@@ -192,7 +193,7 @@ async function executeReminderTier(id, reminder) {
           if (channel) {
             await channel.send(`⏰ **Reminder**: ${reminder.message}`);
             reminder.delivered = true;
-            console.log(`📝 Reminder #${id} delivered via text channel`);
+            logger.info(`📝 Reminder #${id} delivered via text channel`);
           }
         }
         break;
@@ -205,9 +206,9 @@ async function executeReminderTier(id, reminder) {
             const user = await client.users.fetch(ALLOWED_USERS[0]);
             await user.send(`⏰ **Reminder** (unacknowledged for ${Math.round((now - reminder.fireTime) / 60_000)}m): ${reminder.message}`);
             reminder.delivered = true;
-            console.log(`📱 Reminder #${id} delivered via DM`);
+            logger.info(`📱 Reminder #${id} delivered via DM`);
           } catch (err) {
-            console.error(`❌ Reminder #${id} DM failed: ${err.message}`);
+            logger.error(`❌ Reminder #${id} DM failed: ${err.message}`);
           }
         }
         break;
@@ -244,12 +245,12 @@ async function executeReminderTier(id, reminder) {
           
           if (res.ok) {
             reminder.delivered = true;
-            console.log(`🌐 Reminder #${id} delivered via Clawdbot gateway`);
+            logger.info(`🌐 Reminder #${id} delivered via Clawdbot gateway`);
           } else {
-            console.error(`❌ Reminder #${id} gateway delivery failed: ${res.status}`);
+            logger.error(`❌ Reminder #${id} gateway delivery failed: ${res.status}`);
           }
         } catch (err) {
-          console.error(`❌ Reminder #${id} gateway delivery failed: ${err.message}`);
+          logger.error(`❌ Reminder #${id} gateway delivery failed: ${err.message}`);
         }
         break;
       }
@@ -257,12 +258,12 @@ async function executeReminderTier(id, reminder) {
     
     // If we've exhausted all tiers, mark as done to prevent infinite loops
     if (reminder.tier >= REMINDER_ESCALATION_TIERS.length - 1) {
-      console.log(`✅ Reminder #${id} exhausted all escalation tiers`);
+      logger.info(`✅ Reminder #${id} exhausted all escalation tiers`);
       // Keep in map for acknowledgment tracking but don't escalate further
     }
     
   } catch (err) {
-    console.error(`❌ Reminder #${id} tier ${tier.name} execution error: ${err.message}`);
+    logger.error(`❌ Reminder #${id} tier ${tier.name} execution error: ${err.message}`);
   }
 }
 
@@ -273,7 +274,7 @@ export function acknowledgeReminder(id) {
   const reminder = pendingReminders.get(id);
   if (reminder) {
     reminder.acknowledgedAt = Date.now();
-    console.log(`✅ Reminder #${id} acknowledged`);
+    logger.info(`✅ Reminder #${id} acknowledged`);
     pendingReminders.delete(id);
     return true;
   }
@@ -347,7 +348,7 @@ app.post('/alert', async (req, res) => {
     if (numericPriority <= 2) await sendTextNotification(alert);
   } else if (shouldVoice && speakCallback) {
     const currentState = getState();
-    console.log(`[P${numericPriority}] Alert in ${currentState}: "${message.substring(0, 60)}"`);
+    logger.info(`[P${numericPriority}] Alert in ${currentState}: "${message.substring(0, 60)}"`);
 
     if (currentState === 'SLEEP' || currentState === 'IDLE') {
       transition('ALERT', `p${numericPriority}-alert`);
@@ -396,7 +397,7 @@ app.post('/speak', async (req, res) => {
   
   // ── Cross-path content deduplication ──
   if (_isDuplicateContentFn && _isDuplicateContentFn(message)) {
-    console.log(`⏭️  /speak dedup: skipping duplicate content (${message.substring(0, 40)}...)`);
+    logger.info(`⏭️  /speak dedup: skipping duplicate content (${message.substring(0, 40)}...)`);
     return res.json({ ok: true, delivered: 'dedup-skip' });
   }
 
@@ -408,14 +409,14 @@ app.post('/speak', async (req, res) => {
     // If taskId provided, mark that specific task. Otherwise mark most recent active task.
     if (taskId) {
       markCompleted(taskId, 'speak-endpoint', message.substring(0, 200));
-      console.log(`📋 Task #${taskId} completed via /speak callback`);
+      logger.info(`📋 Task #${taskId} completed via /speak callback`);
     } else {
       // Find most recent active task and mark it
       const active = getActiveTasks();
       if (active.length > 0) {
         const mostRecent = active[active.length - 1];
         markCompleted(mostRecent.taskId, 'speak-endpoint', message.substring(0, 200));
-        console.log(`📋 Task #${mostRecent.taskId} completed via /speak callback (auto-matched)`);
+        logger.info(`📋 Task #${mostRecent.taskId} completed via /speak callback (auto-matched)`);
       }
     }
   }
@@ -429,7 +430,7 @@ app.post('/speak', async (req, res) => {
   
   if (userInVoice && speakCallback) {
     // Speak immediately via TTS — voice is primary delivery
-    console.log(`🗣️  Speaking (${source || 'cron'}): "${message.substring(0, 60)}..."`);
+    logger.info(`🗣️  Speaking (${source || 'cron'}): "${message.substring(0, 60)}..."`);
     speakCallback(message);
     // Refresh conversation window so follow-ups don't need wake word
     if (markBotResponseCallback) {
@@ -442,7 +443,7 @@ app.post('/speak', async (req, res) => {
     res.json({ ok: true, delivered: 'voice', userInVoice: true });
   } else {
     // Not in voice — loud text notification + queue for next join
-    console.log(`📝 User not in voice — posting text + queueing (${source || 'cron'})`);
+    logger.info(`📝 User not in voice — posting text + queueing (${source || 'cron'})`);
     if (ALERTS_ALSO_POST_TEXT && postToTextCallback) {
       const sourceBadge = source ? `**${source}**` : '**Voice Result**';
       postToTextCallback(`🗣️ ${sourceBadge}: ${message}`);
@@ -517,14 +518,14 @@ app.post('/stop', async (req, res) => {
     const { stopSpeaking } = await import('./speech-output.js').catch(() => ({}));
     if (typeof stopSpeaking === 'function') {
       await stopSpeaking();
-      console.log('🛑 /stop: TTS halted via button');
+      logger.info('🛑 /stop: TTS halted via button');
       return res.json({ ok: true, action: 'stopped' });
     }
     // Fallback: just acknowledge
-    console.log('🛑 /stop: received (no stopSpeaking export available)');
+    logger.info('🛑 /stop: received (no stopSpeaking export available)');
     res.json({ ok: true, action: 'acknowledged' });
   } catch (err) {
-    console.error('/stop error:', err.message);
+    logger.error('/stop error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -539,13 +540,13 @@ app.post('/replay', async (req, res) => {
     const { replayLast } = await import('./speech-output.js').catch(() => ({}));
     if (typeof replayLast === 'function') {
       await replayLast();
-      console.log('▶ /replay: replaying last phrase via button');
+      logger.info('▶ /replay: replaying last phrase via button');
       return res.json({ ok: true, action: 'replaying' });
     }
-    console.log('▶ /replay: received (no replayLast export available)');
+    logger.info('▶ /replay: received (no replayLast export available)');
     res.json({ ok: true, action: 'acknowledged' });
   } catch (err) {
-    console.error('/replay error:', err.message);
+    logger.error('/replay error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -602,7 +603,7 @@ app.post('/context/active', (req, res) => {
   activeContext.summary = summary;
   activeContext.lastUpdated = Date.now();
   
-  console.log(`📋 Active context set: ${surface} ${channelId ? `#${channelId}` : ''} → "${topic || 'untitled'}"`);
+  logger.info(`📋 Active context set: ${surface} ${channelId ? `#${channelId}` : ''} → "${topic || 'untitled'}"`);
   
   res.json({
     ok: true,
@@ -630,7 +631,7 @@ app.delete('/context/active', (req, res) => {
   
   clearActiveContext();
   
-  console.log(`🗑️  Active context cleared${hadContext ? ` (was: "${previousTopic}")` : ''}`);
+  logger.info(`🗑️  Active context cleared${hadContext ? ` (was: "${previousTopic}")` : ''}`);
   
   res.json({ ok: true, cleared: hadContext });
 });
@@ -662,7 +663,7 @@ app.post('/handoff', async (req, res) => {
   // so voice output goes back to the same thread
   if (channelId && threadId) {
     activeThreads.set(channelId, { threadId, title: topic || channel || 'Voice Handoff', lastUsed: Date.now() });
-    console.log(`📌 Active thread set: #${channel} → thread ${threadId}`);
+    logger.info(`📌 Active thread set: #${channel} → thread ${threadId}`);
     // Pin session status in the thread
     await pinSessionStatus(threadId, topic || channel);
   } else if (channelId) {
@@ -679,14 +680,14 @@ app.post('/handoff', async (req, res) => {
     (Date.now() - h.timestamp) < 60000
   );
   if (isDupe) {
-    console.log(`⏭️ Duplicate handoff from #${handoff.channel} — skipping`);
+    logger.info(`⏭️ Duplicate handoff from #${handoff.channel} — skipping`);
     return res.json({ ok: true, queued: false, duplicate: true });
   }
 
   pendingHandoffs.push(handoff);
   while (pendingHandoffs.length > MAX_HANDOFFS) pendingHandoffs.shift();
   
-  console.log(`📋 Handoff queued from #${channel}: "${summary.substring(0, 60)}..."`);
+  logger.info(`📋 Handoff queued from #${channel}: "${summary.substring(0, 60)}..."`);
   
   // Update active context
   activeContext.topic = topic || channel;
@@ -695,7 +696,7 @@ app.post('/handoff', async (req, res) => {
   activeContext.threadId = threadId || null;
   activeContext.summary = summary;
   activeContext.lastUpdated = Date.now();
-  console.log(`📋 Active context set from handoff: ${activeContext.surface} → voice`);
+  logger.info(`📋 Active context set from handoff: ${activeContext.surface} → voice`);
   
   // Post to activity feed
   if (postActivityCallback) {
@@ -731,9 +732,9 @@ app.post('/handoff', async (req, res) => {
         max_tokens: 50,
       }),
     });
-    console.log(`📋 Handoff context injected into gateway session`);
+    logger.info(`📋 Handoff context injected into gateway session`);
   } catch (err) {
-    console.error(`⚠️ Failed to inject handoff context: ${err.message}`);
+    logger.error(`⚠️ Failed to inject handoff context: ${err.message}`);
   }
 
   const userInVoice = isUserInVoice(ALLOWED_USERS[0]);
@@ -819,7 +820,7 @@ app.post('/remind', async (req, res) => {
   
   const firesIn = computedFireTime - now;
   const firesInStr = firesIn <= 0 ? 'now' : `in ${Math.round(firesIn / 1000)}s`;
-  console.log(`⏰ Reminder #${id} created: "${message.substring(0, 60)}..." fires ${firesInStr}`);
+  logger.info(`⏰ Reminder #${id} created: "${message.substring(0, 60)}..." fires ${firesInStr}`);
   
   // If firing immediately and user is in voice, try voice delivery right away
   if (firesIn <= 0) {
@@ -972,12 +973,12 @@ async function pinSessionStatus(channelOrThreadId, topic, status = 'active') {
     if (status !== 'active') return null; // Don't create new pins for 'ended'
     
     const msg = await target.send(statusText);
-    await msg.pin().catch((e) => console.error(`⚠️ Pin failed: ${e.message}`));
+    await msg.pin().catch((e) => logger.error(`⚠️ Pin failed: ${e.message}`));
     activePins.set(channelOrThreadId, { messageId: msg.id, topic });
-    console.log(`📌 Pinned voice session status in ${target.name || channelOrThreadId}`);
+    logger.info(`📌 Pinned voice session status in ${target.name || channelOrThreadId}`);
     return msg.id;
   } catch (err) {
-    console.error(`⚠️ Failed to pin session status: ${err.message}`);
+    logger.error(`⚠️ Failed to pin session status: ${err.message}`);
     return null;
   }
 }
@@ -1063,11 +1064,11 @@ app.post('/post', async (req, res) => {
       await thread.send(chunk);
     }
     
-    console.log(`📤 ${isNew ? 'Created' : 'Reused'} thread "${threadTitle}" in #${channel.name} (${chunks.length} chunks)`);
+    logger.info(`📤 ${isNew ? 'Created' : 'Reused'} thread "${threadTitle}" in #${channel.name} (${chunks.length} chunks)`);
     
     res.json({ ok: true, channelId, threadId: thread.id, title: threadTitle, reused: !isNew });
   } catch (err) {
-    console.error(`❌ Failed to post thread: ${err.message}`);
+    logger.error(`❌ Failed to post thread: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1131,16 +1132,16 @@ async function sendTextNotification(alert) {
     const priorityBadge = alert.priority === 'urgent' ? '🚨 **Urgent Alert**' : '🔔 **Alert**';
     const sourceBadge = alert.source ? `\n*Source: ${alert.source}*` : '';
     await user.send(`${priorityBadge}\n${alert.message}${sourceBadge}\n\nJoin voice for briefing.`);
-    console.log(`📱 Text notification sent to user`);
+    logger.info(`📱 Text notification sent to user`);
   } catch (err) {
-    console.error(`❌ Failed to send DM: ${err.message}`);
+    logger.error(`❌ Failed to send DM: ${err.message}`);
   }
 }
 
 export function startAlertWebhook() {
   const TAILSCALE_IP = process.env.TAILSCALE_IP || 'localhost';
   app.listen(WEBHOOK_PORT, TAILSCALE_IP, () => {
-    console.log(`🔔 Alert webhook listening on ${TAILSCALE_IP}:${WEBHOOK_PORT} (Tailscale only)`);
-    console.log(`   Endpoints: /alert, /speak, /handoff, /post, /remind, /remind/:id/ack, /reminders, /context/active, /health`);
+    logger.info(`🔔 Alert webhook listening on ${TAILSCALE_IP}:${WEBHOOK_PORT} (Tailscale only)`);
+    logger.info(`   Endpoints: /alert, /speak, /handoff, /post, /remind, /remind/:id/ack, /reminders, /context/active, /health`);
   });
 }

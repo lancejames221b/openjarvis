@@ -9,6 +9,7 @@ import { createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriber
 import { unlinkSync } from 'fs';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { generateTldr } from './tldr-mode.js';
+import logger from './logger.js';
 
 // ── Audio Player ─────────────────────────────────────────────────────
 // Default player -- replaced by index.js via setPlayer() to share the
@@ -48,7 +49,7 @@ class AudioQueue {
   add(audioSource, metadata = {}) {
     if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
       const dropped = this.queue.shift();
-      console.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
+      logger.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
       try { unlinkSync(dropped.audioSource); } catch {}
     }
     this.queue.push({ audioSource, metadata });
@@ -72,7 +73,7 @@ class AudioQueue {
     this.playing = true;
     isSpeaking = true;
     const { audioSource } = this.queue.shift();
-    try { await playAudio(audioSource); } catch (err) { console.error('Queue playback error:', err.message); }
+    try { await playAudio(audioSource); } catch (err) { logger.error('Queue playback error:', err.message); }
     try { unlinkSync(audioSource); } catch {}
     setImmediate(() => this.playNext());
   }
@@ -172,7 +173,7 @@ export async function speakText(text, fallbackPost = null) {
   // Validate voice connection before synthesizing -- don't waste TTS cycles
   // if audio will play to nowhere
   if (!isVoiceConnectionReady()) {
-    console.warn('⚠️  speakText: voice connection not ready -- falling back to text');
+    logger.warn('⚠️  speakText: voice connection not ready -- falling back to text');
     if (fallbackPost) {
       fallbackPost(`🔇 ${text}`);
     }
@@ -190,7 +191,7 @@ export async function speakText(text, fallbackPost = null) {
         fallbackPost(`🔇 ${sentence}`);
       }
     } catch (err) {
-      console.error('TTS synthesis failed:', err.message);
+      logger.error('TTS synthesis failed:', err.message);
     }
   }
 }

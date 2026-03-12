@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = `${__dirname}/../.env`;
@@ -83,7 +84,7 @@ export function setTtsProvider(provider) {
     
     return true;
   } catch (err) {
-    console.error('Failed to update TTS provider in .env:', err.message);
+    logger.error('Failed to update TTS provider in .env:', err.message);
     return false;
   }
 }

@@ -1,3 +1,4 @@
+const logger = require('./logger.js');
 /**
  * Conversation Session Manager
  * 
@@ -73,7 +74,7 @@ export class ConversationSession {
     }
     
     this._resetTimeout();
-    console.log(`🎧 Listening mode ON — waiting for command (stop word or ${LISTEN_TIMEOUT_MS/1000}s silence)`);
+    logger.info(`🎧 Listening mode ON — waiting for command (stop word or ${LISTEN_TIMEOUT_MS/1000}s silence)`);
   }
 
   /**
@@ -91,7 +92,7 @@ export class ConversationSession {
     }
     
     if (isStop) {
-      console.log(`🛑 Stop word detected — processing command`);
+      logger.info(`🛑 Stop word detected — processing command`);
       this._complete();
       return false;
     }
@@ -113,14 +114,14 @@ export class ConversationSession {
    */
   cancel() {
     this._cleanup();
-    console.log(`🎧 Listening mode cancelled`);
+    logger.info(`🎧 Listening mode cancelled`);
   }
 
   _resetTimeout() {
     if (this.timeoutHandle) clearTimeout(this.timeoutHandle);
     this.timeoutHandle = setTimeout(() => {
       if (this.listening) {
-        console.log(`⏰ Listen timeout (${LISTEN_TIMEOUT_MS/1000}s silence) — processing command`);
+        logger.info(`⏰ Listen timeout (${LISTEN_TIMEOUT_MS/1000}s silence) — processing command`);
         this._complete();
       }
     }, LISTEN_TIMEOUT_MS);
@@ -132,10 +133,10 @@ export class ConversationSession {
     this._cleanup();
     
     if (fullCommand && callback) {
-      console.log(`🎧 Full command: "${fullCommand}"`);
+      logger.info(`🎧 Full command: "${fullCommand}"`);
       callback(fullCommand);
     } else {
-      console.log(`🎧 Empty command — ignoring`);
+      logger.info(`🎧 Empty command — ignoring`);
     }
   }
 

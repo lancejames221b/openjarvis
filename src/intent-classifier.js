@@ -1,3 +1,4 @@
+const logger = require('./logger.js');
 /**
  * Intent Classifier - Dynamic Response Intelligence
  *
@@ -88,12 +89,12 @@ export function isHallucination(rawTranscript) {
   if (words.length < 3 && !SHORT_COMMAND_WHITELIST.has(check)) {
     // Skip TV filter when follow-up is expected (conversation in progress)
     if (_followUpExpectedFn && _followUpExpectedFn()) {
-      console.log(`💬 Short phrase allowed (follow-up expected): "${check}"`);
+      logger.info(`💬 Short phrase allowed (follow-up expected): "${check}"`);
     } else {
       // Also allow if it contains a wake word variant (might be "jarvis" + noise)
       const hasWakeWord = /\b(jarvis|harvest|harvey|harvis|jarvas|jarvi|service|gargis)\b/i.test(check);
       if (!hasWakeWord) {
-        console.log(`🔇 TV noise filter: "${check}" (${words.length} words, not a known command)`);
+        logger.info(`🔇 TV noise filter: "${check}" (${words.length} words, not a known command)`);
         return true;
       }
     }

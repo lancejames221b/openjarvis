@@ -1,3 +1,4 @@
+import logger from './logger.js';
 /**
  * Bot State FSM - 4-state finite state machine replacing binary sleepMode
  *
@@ -61,7 +62,7 @@ export function transition(newState, reason = '') {
 
   const valid = VALID_TRANSITIONS[_state];
   if (!valid || !valid.includes(newState)) {
-    console.warn(`[FSM] Invalid transition: ${_state} -> ${newState} (reason: ${reason})`);
+    logger.warn(`[FSM] Invalid transition: ${_state} -> ${newState} (reason: ${reason})`);
     return false;
   }
 
@@ -75,12 +76,12 @@ export function transition(newState, reason = '') {
   _state = newState;
   _lastTransition = Date.now();
 
-  console.log(`[FSM] ${oldState} -> ${newState} (${reason})`);
+  logger.info(`[FSM] ${oldState} -> ${newState} (${reason})`);
 
   // Fire listeners
   for (const cb of _listeners) {
     try { cb(oldState, newState, reason); } catch (e) {
-      console.error(`[FSM] Listener error: ${e.message}`);
+      logger.error(`[FSM] Listener error: ${e.message}`);
     }
   }
 

@@ -6,6 +6,7 @@
  */
 
 import 'dotenv/config';
+import logger from './logger.js';
 
 // ── Feature Flag: VOICE_WAKE_WORD_ENABLED ─────────────────────────────────────
 // Clean on/off toggle for wake word detection.
@@ -54,9 +55,9 @@ const WAKE_WORD_FUZZY_REQUIRE_SPEAKER = process.env.WAKE_WORD_FUZZY_REQUIRE_SPEA
 
 // Startup log: wake word feature flag status
 if (WAKE_WORD_ENABLED) {
-  console.log(`🎯 Wake word: ENABLED (VOICE_WAKE_WORD_ENABLED=true) — phrases: [${WAKE_WORD_PHRASES.join(', ')}]`);
+  logger.info(`🎯 Wake word: ENABLED (VOICE_WAKE_WORD_ENABLED=true) — phrases: [${WAKE_WORD_PHRASES.join(', ')}]`);
 } else {
-  console.log(`🎤 Wake word: DISABLED (VOICE_WAKE_WORD_ENABLED=false) — free-listen mode`);
+  logger.info(`🎤 Wake word: DISABLED (VOICE_WAKE_WORD_ENABLED=false) — free-listen mode`);
 }
 
 // Track when the bot last spoke to each user for conversation window
@@ -103,7 +104,7 @@ export function setOthersPresent(hasOthers) {
   const prev = othersPresent;
   othersPresent = hasOthers;
   if (prev !== hasOthers) {
-    console.log(`👥 Others in voice: ${hasOthers ? 'YES — wake word REQUIRED' : 'no — free listen'}`);
+    logger.info(`👥 Others in voice: ${hasOthers ? 'YES — wake word REQUIRED' : 'no — free listen'}`);
   }
 }
 
@@ -147,7 +148,7 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
     const windowMs = getEffectiveWindowMs();
     if (timeSinceLastResponse < windowMs) {
       const reason = windowMs > CONVERSATION_WINDOW_MS ? 'extended' : 'standard';
-      console.log(`💬 Within ${reason} conversation window (${Math.round(timeSinceLastResponse / 1000)}s ago, ${Math.round(windowMs/1000)}s window) — wake word not required`);
+      logger.info(`💬 Within ${reason} conversation window (${Math.round(timeSinceLastResponse / 1000)}s ago, ${Math.round(windowMs/1000)}s window) — wake word not required`);
       return { detected: true, cleanedTranscript: transcript, wakeWordUsed: false };
     }
   }
@@ -173,7 +174,7 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
       const re = new RegExp('^' + flexPattern + sep, 'i');
       const match = transcript.match(re);
       const cleaned = match ? transcript.substring(match[0].length).trim() : transcript.substring(phrase.length).trim();
-      console.log(`🎯 Wake word detected: "${phrase}"`);
+      logger.info(`🎯 Wake word detected: "${phrase}"`);
       return { detected: true, cleanedTranscript: cleaned, wakeWordUsed: true };
     }
 
@@ -187,7 +188,7 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
       const re = new RegExp(flexPattern + sep, 'i');
       const match = transcript.match(re);
       const cleaned = match ? (transcript.substring(0, match.index) + transcript.substring(match.index + match[0].length)).trim() : transcript;
-      console.log(`🎯 Wake word detected (flexible): "${phrase}"`);
+      logger.info(`🎯 Wake word detected (flexible): "${phrase}"`);
       return { detected: true, cleanedTranscript: cleaned, wakeWordUsed: true };
     }
   }
@@ -198,7 +199,7 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
   // Requires: WAKE_WORD_FUZZY=true AND (speaker verified OR WAKE_WORD_FUZZY_REQUIRE_SPEAKER=false)
   if (WAKE_WORD_FUZZY) {
     if (WAKE_WORD_FUZZY_REQUIRE_SPEAKER && !speakerVerified) {
-      console.log(`🔍 Fuzzy wake word: skipped (speaker not verified)`);
+      logger.info(`🔍 Fuzzy wake word: skipped (speaker not verified)`);
     } else {
       // Match: one word (1–WAKE_WORD_FUZZY_MAX_PREFIX chars), optional separator, then sentence
       // Handles: "word, sentence" / "word. sentence" / "word.sentence" / "word sentence"
@@ -223,7 +224,7 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
           'alright', 'hi', 'hello', 'good', 'hmm', 'anyway', 'wow',
         ];
         if (!COMMON_SENTENCE_STARTERS.includes(prefix.toLowerCase())) {
-          console.log(`🎯 Fuzzy wake word detected: "${prefix}" (vocative pattern, speaker verified: ${speakerVerified})`);
+          logger.info(`🎯 Fuzzy wake word detected: "${prefix}" (vocative pattern, speaker verified: ${speakerVerified})`);
           return {
             detected: true,
             cleanedTranscript: sentence,
@@ -232,13 +233,13 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
             fuzzyPrefix: prefix,
           };
         } else {
-          console.log(`🔍 Fuzzy wake word: rejected prefix "${prefix}" (common sentence starter)`);
+          logger.info(`🔍 Fuzzy wake word: rejected prefix "${prefix}" (common sentence starter)`);
         }
       }
     }
   }
 
-  console.log(`🚫 No wake word detected in: "${transcript.substring(0, 50)}..."`);
+  logger.info(`🚫 No wake word detected in: "${transcript.substring(0, 50)}..."`);
   return { detected: false, cleanedTranscript: transcript, wakeWordUsed: false };
 }
 
@@ -313,7 +314,7 @@ export function hasRecentContext(userId) {
 export function endConversationWindow(userId) {
   if (userId && lastBotResponseTime.has(userId)) {
     lastBotResponseTime.delete(userId);
-    console.log(`🛑 Conversation window force-closed for user ${userId}`);
+    logger.info(`🛑 Conversation window force-closed for user ${userId}`);
     return true;
   }
   return false;

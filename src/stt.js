@@ -53,13 +53,13 @@ const STT_CIRCUIT_BREAKER = {
     if (this.failures.length >= this.threshold && !this.tripped) {
       this.tripped = true;
       this.trippedAt = now;
-      console.log(`⚡ STT provider: deepgram → whisper (${this.threshold} failures in ${this.windowMs / 1000}s)`);
+      logger.info(`⚡ STT provider: deepgram → whisper (${this.threshold} failures in ${this.windowMs / 1000}s)`);
     }
   },
 
   recordSuccess() {
     if (this.tripped) {
-      console.log('🟢 STT provider: whisper → deepgram (recovered)');
+      logger.info('🟢 STT provider: whisper → deepgram (recovered)');
       this.tripped = false;
       this.trippedAt = null;
       this.failures = [];
@@ -69,7 +69,7 @@ const STT_CIRCUIT_BREAKER = {
   shouldUseWhisper() {
     if (!this.tripped) return false;
     if (Date.now() - this.trippedAt > this.cooldownMs) {
-      console.log('🟡 STT circuit breaker cooldown elapsed - probing deepgram');
+      logger.info('🟡 STT circuit breaker cooldown elapsed - probing deepgram');
       this.tripped = false;
       this.trippedAt = null;
       return false;
@@ -129,7 +129,7 @@ async function verifySpeaker(wavPath) {
           return { is_owner: false, has_speech: true, no_voiceprint: true, confidence: 0 };
         }
         // Soft mode: bypass verification, log once
-        console.log('Speaker verify: no voiceprint enrolled, bypassing');
+        logger.info('Speaker verify: no voiceprint enrolled, bypassing');
         return null;
       }
       throw new Error(`Speaker verify HTTP ${response.status}`);
@@ -139,11 +139,11 @@ async function verifySpeaker(wavPath) {
     return data;
   } catch (err) {
     if (err.name === 'AbortError') {
-      console.warn('Speaker verify timed out, bypassing');
+      logger.warn('Speaker verify timed out, bypassing');
     } else if (err.code === 'ECONNREFUSED') {
       // Service not running -- silent bypass
     } else {
-      console.warn(`Speaker verify error: ${err.message}, bypassing`);
+      logger.warn(`Speaker verify error: ${err.message}, bypassing`);
     }
     return null; // Graceful degradation
   }
@@ -180,9 +180,9 @@ export async function diarizeSpeaker(wavPath) {
     return await response.json();
   } catch (err) {
     if (err.name === 'AbortError') {
-      console.warn('Diarize timed out, falling back');
+      logger.warn('Diarize timed out, falling back');
     } else if (err.code !== 'ECONNREFUSED') {
-      console.warn(`Diarize error: ${err.message}`);
+      logger.warn(`Diarize error: ${err.message}`);
     }
     return null;
   }
@@ -199,7 +199,7 @@ export async function diarizeControl(action) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {
-    console.warn(`Diarize ${action} failed: ${err.message}`);
+    logger.warn(`Diarize ${action} failed: ${err.message}`);
     return null;
   }
 }
@@ -221,13 +221,13 @@ function isLowConfidenceTranscript(sttData, speakerInfo = null) {
 
   // High no_speech_prob means Whisper thinks there's no real speech
   if (sttData.no_speech_prob != null && sttData.no_speech_prob > nspThreshold) {
-    console.log(`Confidence filter: no_speech_prob=${sttData.no_speech_prob} > ${nspThreshold}${ownerVerified ? ' (owner-relaxed)' : ''}`);
+    logger.info(`Confidence filter: no_speech_prob=${sttData.no_speech_prob} > ${nspThreshold}${ownerVerified ? ' (owner-relaxed)' : ''}`);
     return true;
   }
 
   // Low confidence (exp of avg_logprob) means Whisper is guessing
   if (sttData.confidence != null && sttData.confidence < CONFIDENCE_THRESHOLD) {
-    console.log(`Confidence filter: confidence=${sttData.confidence} < ${CONFIDENCE_THRESHOLD}`);
+    logger.info(`Confidence filter: confidence=${sttData.confidence} < ${CONFIDENCE_THRESHOLD}`);
     return true;
   }
 
@@ -291,6 +291,7 @@ async function transcribeWithMoonshine(wavPath) {
     const pythonCode = `
 import json
 import sys
+import logger from './logger.js';
 from moonshine_voice import load
 
 model = load('moonshine/medium-streaming', language='en')
@@ -310,10 +311,10 @@ print(json.dumps({'text': result.get('text', '')}))
       throw new Error('Empty transcript from Moonshine');
     }
 
-    console.log(`🌙 Moonshine: "${transcript.substring(0, 80)}..."`);
+    logger.info(`🌙 Moonshine: "${transcript.substring(0, 80)}..."`);
     return transcript;
   } catch (err) {
-    console.error('Moonshine STT Error:', err.message);
+    logger.error('Moonshine STT Error:', err.message);
     throw err;
   }
 }
@@ -344,12 +345,12 @@ export async function transcribeAudio(wavPath) {
       const transcript = await transcribeWithMoonshine(wavPath);
       result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
     } catch (err) {
-      console.warn('⚠️  Moonshine failed, falling back to Whisper CLI:', err.message);
+      logger.warn('⚠️  Moonshine failed, falling back to Whisper CLI:', err.message);
       try {
         const transcript = await transcribeWithWhisper(wavPath);
         result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
       } catch (whisperErr) {
-        console.error('❌ Both Moonshine and Whisper failed');
+        logger.error('❌ Both Moonshine and Whisper failed');
         throw new Error(`STT failed: Moonshine: ${err.message}, Whisper: ${whisperErr.message}`);
       }
     }
@@ -360,12 +361,12 @@ export async function transcribeAudio(wavPath) {
       const transcript = await transcribeWithMLXWhisper(wavPath);
       result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
     } catch (err) {
-      console.warn('⚠️  MLX Whisper failed, falling back to local Faster Whisper:', err.message);
+      logger.warn('⚠️  MLX Whisper failed, falling back to local Faster Whisper:', err.message);
       try {
         const transcript = await transcribeWithFasterWhisper(wavPath);
         result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
       } catch (fwErr) {
-        console.error('❌ All STT providers failed');
+        logger.error('❌ All STT providers failed');
         throw new Error(`STT failed: MLX: ${err.message}, FW: ${fwErr.message}`);
       }
     }
@@ -376,7 +377,7 @@ export async function transcribeAudio(wavPath) {
       const transcript = await transcribeWithVosk(wavPath);
       result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
     } catch (err) {
-      console.error('❌ Vosk STT failed:', err.message);
+      logger.error('❌ Vosk STT failed:', err.message);
       throw new Error(`STT failed: ${err.message}`);
     }
   }
@@ -405,9 +406,9 @@ export async function transcribeAudio(wavPath) {
         };
         const tier = speakerInfo.confidence_tier || '';
         if (speakerResult.is_owner) {
-          console.log(`Speaker verified (confidence=${speakerResult.confidence} norm=${speakerInfo.norm_score} tier=${tier})`);
+          logger.info(`Speaker verified (confidence=${speakerResult.confidence} norm=${speakerInfo.norm_score} tier=${tier})`);
         } else {
-          console.log(`Speaker rejected (confidence=${speakerResult.confidence} norm=${speakerInfo.norm_score} tier=${tier})`);
+          logger.info(`Speaker rejected (confidence=${speakerResult.confidence} norm=${speakerInfo.norm_score} tier=${tier})`);
         }
       }
     }
@@ -420,7 +421,7 @@ export async function transcribeAudio(wavPath) {
       if (typeof fwResult === 'object' && fwResult.sttMeta) {
         // Check confidence scores to filter hallucinations
         if (isLowConfidenceTranscript(fwResult.sttMeta, speakerInfo)) {
-          console.log(`Confidence filter rejected: "${fwResult.text?.substring(0, 40)}..."`);
+          logger.info(`Confidence filter rejected: "${fwResult.text?.substring(0, 40)}..."`);
           return { text: '', sentiment: null, segments: [], rejected: 'low_confidence' };
         }
         result = { text: postProcessTranscript(fwResult.text), sentiment: null, segments: [], needsEnrollment, speakerInfo };
@@ -430,7 +431,7 @@ export async function transcribeAudio(wavPath) {
         result = { text: postProcessTranscript(transcript), sentiment: null, segments: [], needsEnrollment, speakerInfo };
       }
     } catch (err) {
-      console.error('Faster Whisper STT failed:', err.message);
+      logger.error('Faster Whisper STT failed:', err.message);
       // Fallback to basic Whisper CLI
       try {
         const transcript = await transcribeWithWhisper(wavPath);
@@ -447,7 +448,7 @@ export async function transcribeAudio(wavPath) {
       const transcript = await transcribeWithWhisper(wavPath);
       result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
     } catch (err) {
-      console.error('❌ Whisper STT failed:', err.message);
+      logger.error('❌ Whisper STT failed:', err.message);
       throw new Error(`STT failed: ${err.message}`);
     }
   }
@@ -462,13 +463,13 @@ export async function transcribeAudio(wavPath) {
         segments: dgResult.segments,
       };
     } catch (err) {
-      console.warn('⚠️  Deepgram failed, falling back to Whisper:', err.message);
+      logger.warn('⚠️  Deepgram failed, falling back to Whisper:', err.message);
       STT_CIRCUIT_BREAKER.recordFailure();
       try {
         const transcript = await transcribeWithWhisper(wavPath);
         result = { text: postProcessTranscript(transcript), sentiment: null, segments: [] };
       } catch (whisperErr) {
-        console.error('❌ Both STT providers failed:', whisperErr.message);
+        logger.error('❌ Both STT providers failed:', whisperErr.message);
         throw new Error(`STT failed: Deepgram: ${err.message}, Whisper: ${whisperErr.message}`);
       }
     }
@@ -519,7 +520,7 @@ async function transcribeWithDeepgram(wavPath) {
       segments,
     };
   } catch (err) {
-    console.error('Deepgram STT Error:', err.message);
+    logger.error('Deepgram STT Error:', err.message);
     throw err;
   }
 }
@@ -556,7 +557,7 @@ async function transcribeWithWhisper(wavPath) {
 
     return transcript;
   } catch (err) {
-    console.error('Local Whisper STT Error:', err.message);
+    logger.error('Local Whisper STT Error:', err.message);
     throw err;
   }
 }
@@ -595,10 +596,10 @@ async function transcribeWithMLXWhisper(wavPath) {
       throw new Error('Empty transcript from MLX Whisper');
     }
     
-    console.log(`🎯 MLX Whisper: "${transcript.substring(0, 80)}..." (${(data.duration || 0).toFixed(1)}s audio)`);
+    logger.info(`🎯 MLX Whisper: "${transcript.substring(0, 80)}..." (${(data.duration || 0).toFixed(1)}s audio)`);
     return transcript;
   } catch (err) {
-    console.error('MLX Whisper error:', err.message);
+    logger.error('MLX Whisper error:', err.message);
     throw err;
   }
 }
@@ -647,14 +648,14 @@ async function transcribeWithFasterWhisper(wavPath) {
 
     const confStr = sttMeta.confidence != null ? ` conf=${sttMeta.confidence}` : '';
     const nspStr = sttMeta.no_speech_prob != null ? ` nsp=${sttMeta.no_speech_prob}` : '';
-    console.log(`Faster Whisper: "${transcript.substring(0, 80)}..."${confStr}${nspStr}`);
+    logger.info(`Faster Whisper: "${transcript.substring(0, 80)}..."${confStr}${nspStr}`);
 
     return { text: transcript, sttMeta };
   } catch (err) {
     if (err.code === 'ECONNREFUSED') {
-      console.error('Faster Whisper service not running (ECONNREFUSED) -- falling back to local Whisper');
+      logger.error('Faster Whisper service not running (ECONNREFUSED) -- falling back to local Whisper');
     } else {
-      console.error('Faster Whisper service error:', err.message);
+      logger.error('Faster Whisper service error:', err.message);
     }
     throw err;
   }
@@ -665,7 +666,7 @@ async function transcribeWithVosk(wavPath) {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', `${VOSK_SCRIPT} ${wavPath}`], { timeout: 10000 });
 
     if (stderr) {
-      console.warn('Vosk stderr:', stderr);
+      logger.warn('Vosk stderr:', stderr);
     }
 
     const transcript = stdout.trim();
@@ -675,7 +676,7 @@ async function transcribeWithVosk(wavPath) {
 
     return transcript;
   } catch (err) {
-    console.error('Vosk transcription error:', err.message);
+    logger.error('Vosk transcription error:', err.message);
     throw err;
   }
 }
@@ -691,7 +692,7 @@ export async function checkSttHealth() {
   const url = process.env.STT_URL ?? process.env.WHISPER_URL ?? process.env.MLX_WHISPER_URL;
 
   if (!url || provider.includes('deepgram') || provider.includes('openai')) {
-    console.log(`[stt] Provider ${provider} — skipping health check (external or no URL configured)`);
+    logger.info(`[stt] Provider ${provider} — skipping health check (external or no URL configured)`);
     return;
   }
 
@@ -699,9 +700,9 @@ export async function checkSttHealth() {
   try {
     const res = await fetch(baseUrl + '/health', { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    console.log(`[stt] Provider ${provider} healthy at ${baseUrl}`);
+    logger.info(`[stt] Provider ${provider} healthy at ${baseUrl}`);
   } catch (err) {
-    console.error(`[stt] WARNING: Provider ${provider} unreachable at ${baseUrl}: ${err.message}`);
-    console.error('[stt] Bot will start but speech recognition will fail until STT is available');
+    logger.error(`[stt] WARNING: Provider ${provider} unreachable at ${baseUrl}: ${err.message}`);
+    logger.error('[stt] Bot will start but speech recognition will fail until STT is available');
   }
 }

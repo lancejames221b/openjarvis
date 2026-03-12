@@ -1,3 +1,4 @@
+import logger from './logger.js';
 /**
  * Voice State Persistence
  * 
@@ -21,7 +22,7 @@ const voiceState = {
  */
 export function updateVoiceState(updates) {
   Object.assign(voiceState, updates, { updatedAt: Date.now() });
-  console.log('📍 Voice state updated:', voiceState);
+  logger.info('📍 Voice state updated:', voiceState);
 }
 
 /**
@@ -32,7 +33,7 @@ export function getVoiceStateContext() {
   
   const age = Date.now() - voiceState.updatedAt;
   if (age > STATE_TTL_MS) {
-    console.log('⏰ Voice state expired, clearing');
+    logger.info('⏰ Voice state expired, clearing');
     clearVoiceState();
     return '';
   }

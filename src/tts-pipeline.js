@@ -1,3 +1,4 @@
+import logger from './logger.js';
 /**
  * TTS Pipeline - Properly throttled parallel generation with ordered playback
  * 
@@ -12,7 +13,7 @@ export class TtsPipeline {
     this.synthesize = synthesizeFn;
     this.audioQueue = audioQueue;
     this.maxConcurrent = options.maxConcurrent || 3;
-    this.onError = options.onError || ((err) => console.error('TTS pipeline error:', err));
+    this.onError = options.onError || ((err) => logger.error('TTS pipeline error:', err));
     
     this.queue = [];          // Sentences waiting to start TTS
     this.inFlight = [];       // { index, promise, audio, ready, failed }
@@ -35,7 +36,7 @@ export class TtsPipeline {
 
     if (this.queue.length > MAX_QUEUE_SIZE) {
       const dropped = this.queue.shift();
-      console.warn(`[tts] Queue full (${this.queue.length + 1}/${MAX_QUEUE_SIZE}), dropping oldest sentence (index ${dropped.index})`);
+      logger.warn(`[tts] Queue full (${this.queue.length + 1}/${MAX_QUEUE_SIZE}), dropping oldest sentence (index ${dropped.index})`);
     }
 
     this._processQueue();
@@ -49,7 +50,7 @@ export class TtsPipeline {
       const { sentence, index } = this.queue.shift();
       this.activeCount++;
       
-      console.log(`🎬 TTS: Generating sentence ${index} (${this.activeCount}/${this.maxConcurrent} active)`);
+      logger.info({ sentenceIndex: index, active: this.activeCount, maxConcurrent: this.maxConcurrent }, '🎬 tts generating sentence');
       
       this.synthesize(sentence)
         .then(audio => {
@@ -79,7 +80,7 @@ export class TtsPipeline {
       const audio = this.completed.get(this.nextPlayIndex);
       this.completed.delete(this.nextPlayIndex);
       if (audio) {
-        console.log(`🎵 TTS: Playing sentence ${this.nextPlayIndex}`);
+        logger.info({ sentenceIndex: this.nextPlayIndex }, '🎵 tts playing sentence');
         this.audioQueue.add(audio);
       }
       this.nextPlayIndex++;
@@ -93,7 +94,7 @@ export class TtsPipeline {
       for (const k of toRemove) {
         this.completed.delete(k);
       }
-      console.warn(`[tts] completed Map pruned ${toRemove.length} old entries (was over ${completedCap} cap)`);
+      logger.warn(`[tts] completed Map pruned ${toRemove.length} old entries (was over ${completedCap} cap)`);
     }
 
     // If everything is done, resolve drain

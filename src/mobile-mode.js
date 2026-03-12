@@ -13,6 +13,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = `${__dirname}/../.env`;
@@ -80,7 +81,7 @@ export function setMobileMode(enabled) {
     writeFileSync(ENV_FILE, envContent, 'utf-8');
     return true;
   } catch (err) {
-    console.error('Failed to update VOICE_MOBILE_MODE in .env:', err.message);
+    logger.error('Failed to update VOICE_MOBILE_MODE in .env:', err.message);
     return false;
   }
 }

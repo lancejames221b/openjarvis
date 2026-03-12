@@ -7,6 +7,7 @@
 
 import { Transform } from 'stream';
 import prism from 'prism-media';
+import logger from './logger.js';
 
 export class OpusDecoder extends Transform {
   constructor() {
@@ -23,7 +24,7 @@ export class OpusDecoder extends Transform {
     
     this.decoder.on('error', (err) => {
       // Ignore decode errors (corrupted frames happen)
-      console.debug('Opus decode error:', err.message);
+      logger.debug('Opus decode error:', err.message);
     });
   }
   

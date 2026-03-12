@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -55,7 +56,7 @@ function loadLedger() {
       return data.tasks || [];
     }
   } catch (err) {
-    console.error('Failed to load task ledger:', err.message);
+    logger.error('Failed to load task ledger:', err.message);
   }
   return [];
 }
@@ -70,7 +71,7 @@ function saveLedger() {
     try {
       writeFileSync(LEDGER_PATH, JSON.stringify({ tasks: ledger, savedAt: new Date().toISOString() }, null, 2));
     } catch (err) {
-      console.error('Failed to save task ledger:', err.message);
+      logger.error('Failed to save task ledger:', err.message);
     }
   }, 500);
 }
@@ -113,7 +114,7 @@ export function createTask(taskId, transcript, userId) {
   };
   ledger.push(entry);
   saveLedger();
-  console.log(`📋 Ledger: Task #${taskId} created — "${transcript.substring(0, 60)}..."`);
+  logger.info(`📋 Ledger: Task #${taskId} created — "${transcript.substring(0, 60)}..."`);
   return entry;
 }
 
@@ -123,7 +124,7 @@ export function createTask(taskId, transcript, userId) {
 export function updateTask(taskId, updates) {
   const task = ledger.find(t => t.taskId === taskId);
   if (!task) {
-    console.warn(`📋 Ledger: Task #${taskId} not found for update`);
+    logger.warn(`📋 Ledger: Task #${taskId} not found for update`);
     return null;
   }
   Object.assign(task, updates, { updatedAt: Date.now() });
@@ -304,16 +305,16 @@ export function reconcileOnStartup() {
   const pending = getPendingFollowups();
   
   if (orphans.length > 0) {
-    console.log(`📋 Ledger: Found ${orphans.length} orphaned tasks from previous run`);
+    logger.info(`📋 Ledger: Found ${orphans.length} orphaned tasks from previous run`);
     for (const task of orphans) {
-      console.log(`  ❗ Task #${task.taskId}: "${task.transcript}" (${task.state})`);
+      logger.info(`  ❗ Task #${task.taskId}: "${task.transcript}" (${task.state})`);
     }
   }
   
   if (pending.length > 0) {
-    console.log(`📋 Ledger: Found ${pending.length} tasks awaiting follow-up`);
+    logger.info(`📋 Ledger: Found ${pending.length} tasks awaiting follow-up`);
     for (const task of pending) {
-      console.log(`  ⏳ Task #${task.taskId}: "${task.transcript}" (${task.state})`);
+      logger.info(`  ⏳ Task #${task.taskId}: "${task.transcript}" (${task.state})`);
     }
   }
   

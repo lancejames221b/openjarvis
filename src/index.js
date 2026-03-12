@@ -38,6 +38,7 @@ import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriori
 // Task ledger stripped — voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection } from './speech-output.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
+import logger from './logger.js';
 
 const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Webhook server bind address — matches TAILSCALE_IP in alert-webhook.js (defaults to localhost for non-Tailscale users)
@@ -80,12 +81,12 @@ async function checkGatewayHealth() {
       // 4xx (auth issues) and 5xx are both unhealthy
       throw new Error(`Gateway ${res.status}`);
     }
-    if (!_gatewayHealthy) console.log('🟢 Gateway is healthy');
+    if (!_gatewayHealthy) logger.info('🟢 Gateway is healthy');
     _gatewayHealthy = true;
     return true;
   } catch (err) {
     _gatewayHealthy = false;
-    console.warn(`🔴 Gateway health check failed: ${err.message}`);
+    logger.warn(`🔴 Gateway health check failed: ${err.message}`);
     return false;
   }
 }
@@ -103,18 +104,18 @@ async function cleanupStaleTmpAudio() {
         if (age > 60_000) { await fsPromises.unlink(`/tmp/${f}`); removed++; } // older than 1 min = stale
       } catch {}
     }
-    if (removed > 0) console.log(`🧹 Cleaned up ${removed} stale audio file(s) from /tmp`);
+    if (removed > 0) logger.info(`🧹 Cleaned up ${removed} stale audio file(s) from /tmp`);
   } catch {}
 }
 
 async function startGatewayHealthCheck() {
   await cleanupStaleTmpAudio(); // Remove leftover TTS files from previous crashed runs
-  console.log('🏥 Running initial gateway health check...');
+  logger.info('🏥 Running initial gateway health check...');
   const healthy = await checkGatewayHealth();
   if (healthy) {
-    console.log('✅ Gateway reachable on startup');
+    logger.info('✅ Gateway reachable on startup');
   } else {
-    console.warn('⚠️  Gateway unreachable on startup — will retry every 10s');
+    logger.warn('⚠️  Gateway unreachable on startup — will retry every 10s');
   }
   // Adaptive polling: 10s when unhealthy, 60s when healthy, auto-switches
   const scheduleHealthPoll = (intervalMs) => {
@@ -191,7 +192,7 @@ const reconnectState = {
   
   reset() {
     if (this.attempts > 0) {
-      console.log(`🟢 Voice reconnect successful (was at attempt #${this.attempts})`);
+      logger.info(`🟢 Voice reconnect successful (was at attempt #${this.attempts})`);
     }
     this.attempts = 0;
     this.currentDelayMs = this.baseDelayMs;
@@ -214,12 +215,12 @@ function startHealthMonitor() {
     
     // Memory monitoring
     if (rssMb > MEMORY_CRITICAL_MB) {
-      console.error(`🔴 CRITICAL: Memory usage ${rssMb}MB > ${MEMORY_CRITICAL_MB}MB — attempting graceful restart`);
+      logger.error(`🔴 CRITICAL: Memory usage ${rssMb}MB > ${MEMORY_CRITICAL_MB}MB — attempting graceful restart`);
       postToTextChannel(`🔴 **Memory critical** (${rssMb}MB). Restarting gracefully.`);
       // Give time for the message to send, then exit (systemd will restart)
       setTimeout(() => process.exit(1), 2000);
     } else if (rssMb > MEMORY_WARNING_MB) {
-      console.warn(`🟡 Memory usage high: ${rssMb}MB > ${MEMORY_WARNING_MB}MB`);
+      logger.warn(`🟡 Memory usage high: ${rssMb}MB > ${MEMORY_WARNING_MB}MB`);
     }
     
     // Event loop lag monitoring
@@ -229,9 +230,9 @@ function startHealthMonitor() {
     
     if (lag > EVENT_LOOP_LAG_WARNING_MS) {
       eventLoopLagWarnings++;
-      console.warn(`🟡 Event loop lag: ${lag}ms (warning #${eventLoopLagWarnings})`);
+      logger.warn(`🟡 Event loop lag: ${lag}ms (warning #${eventLoopLagWarnings})`);
       if (eventLoopLagWarnings >= 3) {
-        console.error(`🔴 Sustained event loop lag (${eventLoopLagWarnings} warnings)`);
+        logger.error(`🔴 Sustained event loop lag (${eventLoopLagWarnings} warnings)`);
         postToTextChannel(`⚠️ **Event loop lag** detected (${lag}ms, ${eventLoopLagWarnings} warnings). Performance may be degraded.`);
         eventLoopLagWarnings = 0; // Reset after reporting
       }
@@ -250,7 +251,7 @@ function startHealthMonitor() {
     });
   }, HEALTH_CHECK_INTERVAL_MS);
   
-  console.log('🏥 Process health monitor started (30s interval)');
+  logger.info('🏥 Process health monitor started (30s interval)');
 }
 
 // Conversation history per user (local backup — gateway session is primary)
@@ -343,7 +344,7 @@ function flushPendingUtterance() {
   if (!merged) return;
 
   if (parts.length > 1) {
-    console.log(`🔗 Merged ${parts.length} utterances: "${merged.substring(0, 80)}..."`);
+    logger.info(`🔗 Merged ${parts.length} utterances: "${merged.substring(0, 80)}..."`);
   }
 
   const taskId = ++taskIdCounter;
@@ -352,7 +353,7 @@ function flushPendingUtterance() {
 
   const sleepTag = autoSleepAfterTask ? ' [auto-sleep]' : '';
   const speakerTag = speakerName ? ` [${speakerName}]` : '';
-  console.log(`🚀 Task #${taskId}${speakerTag}${sleepTag} dispatched: "${merged.substring(0, 60)}..." (${activeTasks.size} active)`);
+  logger.info({ taskId, userId, speakerName, autoSleepAfterTask, activeTasks: activeTasks.size, transcript: merged.substring(0, 60) }, `🚀 dispatching brain task`);
 
   postActivity(`🚀 **Task #${taskId}**${speakerTag}${sleepTag} started${activeTasks.size > 1 ? ` (${activeTasks.size} active)` : ''}\n> ${truncate(merged, 120)}`);
 
@@ -362,7 +363,7 @@ function flushPendingUtterance() {
   if (autoSleepAfterTask) brainOptions.autoSleepAfterTask = true;
 
   processBrainTask(taskId, userId, merged, conv ? [...conv.history] : [], controller.signal, brainOptions)
-    .catch(err => console.error(`Task #${taskId} error:`, err.message));
+    .catch(err => logger.error(`Task #${taskId} error:`, err.message));
 }
 
 function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
@@ -446,7 +447,7 @@ function resetIdleSleepTimer() {
     if (getState() === 'ACTIVE' && !enrollmentState.active) {
       transition('IDLE', 'active-timeout');
       authenticatedSession = false;
-      console.log(`ACTIVE -> IDLE: no interaction for ${Math.round(effectiveMs / 1000)}s`);
+      logger.info(`ACTIVE -> IDLE: no interaction for ${Math.round(effectiveMs / 1000)}s`);
 
       _idleTimer = setTimeout(() => {
         if (getState() === 'IDLE' && !enrollmentState.active) {
@@ -458,7 +459,7 @@ function resetIdleSleepTimer() {
             _pendingUtterance.parts = [];
             _pendingUtterance.userId = null;
           }
-          console.log('IDLE -> SLEEP: no interaction after IDLE timeout');
+          logger.info('IDLE -> SLEEP: no interaction after IDLE timeout');
         }
       }, IDLE_TO_SLEEP_MS);
     }
@@ -496,14 +497,14 @@ function _applyImplicitWakeOnUnmute(userId) {
   if (currentState !== 'ACTIVE') {
     transition('ACTIVE', 'implicit-wake-unmute');
     authenticatedSession = true; // device is authenticated; voiceprint confirms on first utterance
-    console.log(`🎙️  Implicit wake: self-unmute opened conversation window (was ${currentState})`);
+    logger.info(`🎙️  Implicit wake: self-unmute opened conversation window (was ${currentState})`);
   }
   // Mark bot response to open the conversation window — followUpLikely=false
   // so we get the standard 2-min window (extended to 5 if velocity is high),
   // not the alert-debrief extended window.
   markBotResponse(userId, { followUpLikely: false });
   resetIdleSleepTimer();
-  console.log(`🎙️  Implicit wake window open — first utterance does not require wake word`);
+  logger.info(`🎙️  Implicit wake window open — first utterance does not require wake word`);
 }
 
 /**
@@ -518,12 +519,12 @@ async function handleSleepCheck(transcript, transitionReason, userId) {
   if (!shouldSleep(transcript)) return false;
   if (hasTaskContent(transcript)) {
     // Tier 2: sign-off embedded in a task — let it flow, sleep after response
-    console.log(`Task detected with sign-off (${transitionReason}) — will auto-sleep after response: "${transcript}"`);
+    logger.info(`Task detected with sign-off (${transitionReason}) — will auto-sleep after response: "${transcript}"`);
     _pendingUtterance.autoSleepAfterTask = true;
     return false;
   }
   // Tier 1: pure sleep command — no task content
-  console.log(`Sleep mode activated (${transitionReason}): "${transcript}"`);
+  logger.info(`Sleep mode activated (${transitionReason}): "${transcript}"`);
   transition('SLEEP', transitionReason);
   // Clear pending utterance timer so a stale fragment can't re-wake immediately
   if (_pendingUtterance.timer) {
@@ -569,7 +570,7 @@ function isWakeUpCommand(transcript, speakerVerified = false) {
         'basically', 'literally',
       ];
       if (!COMMON.includes(prefix)) {
-        console.log(`🎯 Fuzzy wake (FSM gate): "${prefix}" → treating as wake word (speaker verified)`);
+        logger.info(`🎯 Fuzzy wake (FSM gate): "${prefix}" → treating as wake word (speaker verified)`);
         return true;
       }
     }
@@ -705,7 +706,7 @@ async function postActivity(message) {
     const channel = client.channels.cache.get(ACTIVITY_CHANNEL_ID);
     if (channel) return await channel.send(message);
   } catch (err) {
-    console.error('Activity post failed:', err.message);
+    logger.error('Activity post failed:', err.message);
   }
   return null;
 }
@@ -730,7 +731,7 @@ class AudioQueue {
   add(audioSource, metadata = {}) {
     if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
       const dropped = this.queue.shift();
-      console.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
+      logger.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
       try { unlinkSync(dropped.audioSource); } catch {}
     }
     this.queue.push({ audioSource, metadata });
@@ -757,7 +758,7 @@ class AudioQueue {
     // Mute-gated: hold response when others present + owner unmuted
     // Skip mute-gating when wake word is active — wake word handles filtering
     if (isOthersPresent() && !ownerMuted && !WAKE_WORD_ENABLED) {
-      console.log(`🤫 Holding response — owner unmuted with others present (${this.queue.length} queued)`);
+      logger.info(`🤫 Holding response — owner unmuted with others present (${this.queue.length} queued)`);
       this.playing = false;
       isSpeaking = false;
       return; // Will resume when owner mutes (voiceStateUpdate fires playNext)
@@ -777,7 +778,7 @@ class AudioQueue {
         audioSource = padded;
       }
     }
-    try { await playAudioEnhanced(audioSource); } catch (err) { console.error('Queue playback error:', err.message); }
+    try { await playAudioEnhanced(audioSource); } catch (err) { logger.error('Queue playback error:', err.message); }
     // Clean up TTS temp file after playback
     try { unlinkSync(audioSource); } catch {}
     setImmediate(() => this.playNext());
@@ -917,8 +918,8 @@ const client = new Client({
 });
 
 client.once('ready', async () => {
-  console.log(`🤖 Jarvis Voice Bot online as ${client.user.tag}`);
-  console.log(`📡 Guild: ${GUILD_ID} | Voice: ${VOICE_CHANNEL_ID} | Multi-user: ${MULTI_USER_ENABLED} | Callback: ${WEBHOOK_CALLBACK_MODE}`);
+  logger.info(`🤖 Jarvis Voice Bot online as ${client.user.tag}`);
+  logger.info(`📡 Guild: ${GUILD_ID} | Voice: ${VOICE_CHANNEL_ID} | Multi-user: ${MULTI_USER_ENABLED} | Callback: ${WEBHOOK_CALLBACK_MODE}`);
   
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
   
@@ -941,7 +942,7 @@ client.once('ready', async () => {
         const source = speakOpts.source || 'speak';
         const priority = speakOpts.priority || 3;
         muteQueueAdd(message.trim(), source, priority);
-        console.log(`🔇 /speak intercepted — queued for mute debrief (${source})`);
+        logger.info(`🔇 /speak intercepted — queued for mute debrief (${source})`);
         return;
       }
 
@@ -957,7 +958,7 @@ client.once('ready', async () => {
         }
       }
     } catch (err) {
-      console.error('Speak callback TTS failed:', err.message);
+      logger.error('Speak callback TTS failed:', err.message);
     }
   });
   
@@ -995,9 +996,9 @@ client.once('ready', async () => {
       const ownerMember = await guild.members.fetch(ALLOWED_USERS[0]);
       ownerChannel = ownerMember?.voice?.channelId;
       ownerMuted = !!ownerMember?.voice?.selfMute;
-      if (ownerChannel) console.log(`👀 Owner is in voice channel ${ownerChannel} (${ownerMuted ? 'muted' : 'unmuted'})`);
+      if (ownerChannel) logger.info(`👀 Owner is in voice channel ${ownerChannel} (${ownerMuted ? 'muted' : 'unmuted'})`);
     } catch (e) {
-      console.log(`Could not fetch owner voice state: ${e.message}`);
+      logger.info(`Could not fetch owner voice state: ${e.message}`);
     }
     
     const targetChannel = ownerChannel || VOICE_CHANNEL_ID;
@@ -1011,7 +1012,7 @@ client.once('ready', async () => {
         attempt++;
         try {
           await joinChannel(targetChannel, { greeting: false });
-          console.log(`✅ Joined voice channel ${targetChannel}${ownerChannel ? ' (owner is here)' : ' (default)'}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+          logger.info(`✅ Joined voice channel ${targetChannel}${ownerChannel ? ' (owner is here)' : ' (default)'}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
           joined = true;
           // Auto-enter record mode on startup if owner is in the record channel
           if (RECORD_CHANNEL_ID && targetChannel === RECORD_CHANNEL_ID) {
@@ -1020,20 +1021,20 @@ client.once('ready', async () => {
         } catch (err) {
           if (attempt < maxAttempts) {
             const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-            console.error(`⚠️ Join attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`);
+            logger.error(`⚠️ Join attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`);
             await new Promise(resolve => setTimeout(resolve, delay));
           } else {
-            console.error('⚠️ Failed to join voice channel after 3 attempts:', err.message);
-            console.log('🔄 Will auto-join when owner enters a voice channel');
+            logger.error('⚠️ Failed to join voice channel after 3 attempts:', err.message);
+            logger.info('🔄 Will auto-join when owner enters a voice channel');
           }
         }
       }
     } else {
-      console.log('🔄 No default channel and owner not in voice — waiting for owner to join');
+      logger.info('🔄 No default channel and owner not in voice — waiting for owner to join');
     }
   } catch (err) {
-    console.error('⚠️ Failed to join voice channel:', err.message);
-    console.log('🔄 Will auto-join when owner enters a voice channel');
+    logger.error('⚠️ Failed to join voice channel:', err.message);
+    logger.info('🔄 Will auto-join when owner enters a voice channel');
   }
 });
 
@@ -1048,7 +1049,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
     setOthersPresent(others > 0);
     // Others just left — flush any held responses
     if (wasOthers && others === 0 && audioQueue && audioQueue.queue.length > 0 && !audioQueue.playing) {
-      console.log(`▶️  Others left channel — playing ${audioQueue.queue.length} held response(s)`);
+      logger.info(`▶️  Others left channel — playing ${audioQueue.queue.length} held response(s)`);
       audioQueue.playNext();
     }
   }
@@ -1061,7 +1062,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   const wasMuted = ownerMuted;
   ownerMuted = !!newState.selfMute;
   if (wasMuted !== ownerMuted) {
-    console.log(`🎙️ Owner ${ownerMuted ? 'MUTED' : 'UNMUTED'}`);
+    logger.info(`🎙️ Owner ${ownerMuted ? 'MUTED' : 'UNMUTED'}`);
 
     if (ownerMuted) {
       // ── Owner just MUTED ──────────────────────────────────────────
@@ -1070,11 +1071,11 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         muteQueueActivate();
         // Clear audio already queued/playing (don't dump it while they're muted)
         audioQueue.clear();
-        console.log(`🔇 Mute queue active — TTS will be queued until unmute`);
+        logger.info(`🔇 Mute queue active — TTS will be queued until unmute`);
       } else {
         // Legacy behaviour: flush held responses on mute (mute-gated output)
         if (audioQueue && audioQueue.queue.length > 0 && !audioQueue.playing) {
-          console.log(`▶️  Owner muted — playing ${audioQueue.queue.length} held response(s)`);
+          logger.info(`▶️  Owner muted — playing ${audioQueue.queue.length} held response(s)`);
           audioQueue.playNext();
         }
       }
@@ -1087,7 +1088,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           // Offer debrief — smart-collapsed summary
           const summary = muteQueueSummary();
           if (summary) {
-            console.log(`🔊 Mute queue debrief: ${count} entries — offering summary`);
+            logger.info(`🔊 Mute queue debrief: ${count} entries — offering summary`);
 
             // Build conversation context so AI can answer follow-ups
             const ctxBlock = muteQueueContext();
@@ -1113,7 +1114,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             if (MUTE_QUEUE_WAKE_BYPASS) {
               const userId = ALLOWED_USERS[0];
               markBotResponse(userId, { followUpLikely: true });
-              console.log(`🎙️  Wake bypass active — unmute response does not require wake word`);
+              logger.info(`🎙️  Wake bypass active — unmute response does not require wake word`);
             }
 
             // Speak the summary (fires immediately, won't re-queue)
@@ -1121,7 +1122,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
               const audio = await synthesizeSpeech(summary);
               if (audio) audioQueue.add(audio);
             } catch (err) {
-              console.error('Mute queue debrief TTS failed:', err.message);
+              logger.error('Mute queue debrief TTS failed:', err.message);
             }
 
             // Clear queue after debrief offered (details available via conversation history)
@@ -1147,7 +1148,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   
   // User switched or joined a voice channel — follow them
   if (joinedChannel && joinedChannel !== currentVoiceChannelId) {
-    console.log(`🔀 Owner moved to channel ${joinedChannel} — following`);
+    logger.info(`🔀 Owner moved to channel ${joinedChannel} — following`);
     
     // Retry logic with exponential backoff
     let attempt = 0;
@@ -1158,7 +1159,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       attempt++;
       try {
         await joinChannel(joinedChannel, { greeting: false });
-        console.log(`✅ Followed owner to ${joinedChannel}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+        logger.info(`✅ Followed owner to ${joinedChannel}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
         joined = true;
         // Auto-enter record mode for dedicated recording channel
         if (RECORD_CHANNEL_ID && joinedChannel === RECORD_CHANNEL_ID) {
@@ -1167,10 +1168,10 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       } catch (err) {
         if (attempt < maxAttempts) {
           const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-          console.error(`⚠️ Follow attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`);
+          logger.error(`⚠️ Follow attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`);
           await new Promise(resolve => setTimeout(resolve, delay));
         } else {
-          console.error(`❌ Failed to follow owner after ${maxAttempts} attempts: ${err.message}`);
+          logger.error(`❌ Failed to follow owner after ${maxAttempts} attempts: ${err.message}`);
         }
       }
     }
@@ -1178,7 +1179,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   
   if (joinedChannel && (!leftChannel || leftChannel !== joinedChannel)) {
     userDisconnected = false; // Reset disconnect flag on join
-    console.log(`👋 User joined voice channel ${joinedChannel}`);
+    logger.info(`👋 User joined voice channel ${joinedChannel}`);
     // Record channel: auto-start recording, skip greeting
     if (RECORD_CHANNEL_ID && joinedChannel === RECORD_CHANNEL_ID) {
       // Cancel pending stop timer if rejoining within grace period
@@ -1215,7 +1216,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         if (res.ok) {
           const { context } = await res.json();
           if (context && context.summary) {
-            console.log(`📋 Active context detected from ${context.surface} — briefing user`);
+            logger.info(`📋 Active context detected from ${context.surface} — briefing user`);
             const briefMsg = `${context.topic ? context.topic + '. ' : ''}${context.summary.substring(0, 300)}`;
             const briefAudio = await synthesizeSpeech(briefMsg);
             if (briefAudio) {
@@ -1230,7 +1231,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           }
         }
       } catch (err) {
-        console.error(`⚠️ Failed to check active context: ${err.message}`);
+        logger.error(`⚠️ Failed to check active context: ${err.message}`);
       }
       
       // Brief pending alerts after greeting
@@ -1250,7 +1251,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         const count = muteQueueCount();
         const summary = muteQueueSummary();
         if (summary) {
-          console.log(`🔊 Mute queue debrief on reconnect: ${count} entries`);
+          logger.info(`🔊 Mute queue debrief on reconnect: ${count} entries`);
           // Inject context so AI can answer follow-ups
           const ctxBlock = muteQueueContext();
           if (ctxBlock) {
@@ -1272,7 +1273,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             const audio = await synthesizeSpeech(summary);
             if (audio) audioQueue.add(audio);
           } catch (err) {
-            console.error('Mute queue reconnect debrief TTS failed:', err.message);
+            logger.error('Mute queue reconnect debrief TTS failed:', err.message);
           }
           muteQueueClear();
         }
@@ -1282,13 +1283,13 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   
   // User left voice entirely (not just switching channels)
   if (leftChannel && !joinedChannel) {
-    console.log(`👋 User left voice entirely`);
+    logger.info(`👋 User left voice entirely`);
     userDisconnected = true;
     // If owner left while self-muted, deactivate the mute queue
     // so it's in the right state when they reconnect on another device
     if (MUTE_QUEUE_ENABLED && isMuteQueueActive()) {
       muteQueueDeactivate();
-      console.log(`🔇 Mute queue deactivated on disconnect (${muteQueueCount()} entries held for reconnect)`);
+      logger.info(`🔇 Mute queue deactivated on disconnect (${muteQueueCount()} entries held for reconnect)`);
     }
     // Stop recording after grace period (30s for brief disconnects)
     if (recordMode.active) {
@@ -1338,7 +1339,7 @@ export function isDuplicateContent(text) { return _isDuplicateContent(text); }
 setInterval(() => {
   if (_processedMsgIds.size > DEDUP_MSG_ID_MAX) {
     _processedMsgIds.clear();
-    console.log('🧹 Cleared message ID dedup cache');
+    logger.info('🧹 Cleared message ID dedup cache');
   }
 }, 5 * 60 * 1000);
 
@@ -1365,18 +1366,18 @@ client.on('messageCreate', async (message) => {
   
   // ── Deduplication: message ID ──
   if (_processedMsgIds.has(message.id)) {
-    console.log(`⏭️  Dedup: skipping duplicate message ID ${message.id}`);
+    logger.info(`⏭️  Dedup: skipping duplicate message ID ${message.id}`);
     return;
   }
   _processedMsgIds.add(message.id);
   
   // ── Deduplication: content hash (catches cross-path dupes from /speak) ──
   if (_isDuplicateContent(text)) {
-    console.log(`⏭️  Dedup: skipping duplicate content (${text.substring(0, 40)}...)`);
+    logger.info(`⏭️  Dedup: skipping duplicate content (${text.substring(0, 40)}...)`);
     return;
   }
   
-  console.log(`📩 Callback received (${text.length} chars, id: ${message.id}): "${text.substring(0, 80)}..."`);
+  logger.info(`📩 Callback received (${text.length} chars, id: ${message.id}): "${text.substring(0, 80)}..."`);
   
   // Clean for voice
   const voiceText = trimForVoice(text);
@@ -1403,15 +1404,15 @@ client.on('messageCreate', async (message) => {
           await postToTextChannel(`🔇 ${sentence}`);
         }
       } catch (err) {
-        console.error('Callback TTS failed:', err.message);
+        logger.error('Callback TTS failed:', err.message);
       }
     }
     
     const duration = ((Date.now() - lastInteractionTime) / 1000).toFixed(1);
-    console.log(`💬 Callback spoken (${duration}s since request)`);
+    logger.info(`💬 Callback spoken (${duration}s since request)`);
   } else {
     // User not in voice — ping them in the text channel so they see it
-    console.log(`📝 Callback received but user not in voice — pinging in text channel`);
+    logger.info(`📝 Callback received but user not in voice — pinging in text channel`);
     const userId = ALLOWED_USERS[0];
     await postToTextChannel(`<@${userId}> 🎙️ **Voice task complete:**\n${voiceText}`);
   }
@@ -1438,7 +1439,7 @@ client.on('messageCreate', async (message) => {
 
   if (!content) return; // Empty mention, nothing to respond to
 
-  console.log(`@mention from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
+  logger.info(`@mention from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
 
   // Show typing indicator while we process
   try { await message.channel.sendTyping(); } catch (_) {}
@@ -1451,7 +1452,7 @@ client.on('messageCreate', async (message) => {
 
     if (!result.text || result.text.length < 2) {
       // Agent probably spawned a sub-agent -- it'll post back on its own
-      console.log(`@mention: empty response (sub-agent likely spawned)`);
+      logger.info(`@mention: empty response (sub-agent likely spawned)`);
       return;
     }
 
@@ -1481,9 +1482,9 @@ client.on('messageCreate', async (message) => {
       }
     }
 
-    console.log(`@mention: replied (${response.length} chars)`);
+    logger.info(`@mention: replied (${response.length} chars)`);
   } catch (err) {
-    console.error(`@mention handler error:`, err.message);
+    logger.error(`@mention handler error:`, err.message);
     try {
       await message.reply("Having trouble processing that right now, sir.");
     } catch (_) {}
@@ -1495,12 +1496,12 @@ client.on('messageCreate', async (message) => {
 async function sendDM(userId, message) {
   try {
     const user = await client.users.fetch(userId);
-    console.log(`📤 Sending DM to user ${userId}...`);
+    logger.info(`📤 Sending DM to user ${userId}...`);
     await user.send(message);
-    console.log(`✅ DM sent successfully`);
+    logger.info(`✅ DM sent successfully`);
     return true;
   } catch (err) {
-    console.error(`❌ Failed to send DM: ${err.message}`);
+    logger.error(`❌ Failed to send DM: ${err.message}`);
     return false;
   }
 }
@@ -1515,29 +1516,29 @@ async function postToCC(prefix, text) {
     const msg = `${prefix} ${text}`.substring(0, 2000);
     await channel.send(msg);
   } catch (err) {
-    console.warn(`CC post failed: ${err.message}`);
+    logger.warn(`CC post failed: ${err.message}`);
   }
 }
 
 async function postToTextChannel(message) {
   if (!TEXT_CHANNEL_ID) {
-    console.warn('⚠️  No text channel configured, skipping channel post');
+    logger.warn('⚠️  No text channel configured, skipping channel post');
     return false;
   }
   
   try {
     const channel = client.channels.cache.get(TEXT_CHANNEL_ID);
     if (!channel) {
-      console.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
+      logger.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
       return false;
     }
     
-    console.log(`📤 Posting to ${channel.name} (${TEXT_CHANNEL_ID})...`);
+    logger.info(`📤 Posting to ${channel.name} (${TEXT_CHANNEL_ID})...`);
     await channel.send(message);
-    console.log(`✅ Posted to ${channel.name} successfully`);
+    logger.info(`✅ Posted to ${channel.name} successfully`);
     return true;
   } catch (err) {
-    console.error(`❌ Failed to post to channel: ${err.message}`);
+    logger.error(`❌ Failed to post to channel: ${err.message}`);
     return false;
   }
 }
@@ -1547,19 +1548,19 @@ async function postToTextChannel(message) {
  */
 async function postTranscriptThread(taskId, userTranscript, jarvisResponse, duration) {
   if (!TEXT_CHANNEL_ID) {
-    console.warn('⚠️  No text channel configured, skipping transcript thread');
+    logger.warn('⚠️  No text channel configured, skipping transcript thread');
     return false;
   }
   
   try {
     const channel = client.channels.cache.get(TEXT_CHANNEL_ID);
     if (!channel) {
-      console.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
+      logger.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
       return false;
     }
     
     // Post the initial message with task ID and user's question
-    console.log(`📤 Posting voice transcript thread (task #${taskId}) to ${channel.name}...`);
+    logger.info(`📤 Posting voice transcript thread (task #${taskId}) to ${channel.name}...`);
     const initialMsg = await channel.send(`🎙️ **Task #${taskId}** | You: ${userTranscript}`);
     
     // Create a thread on that message with task ID in the name
@@ -1571,10 +1572,10 @@ async function postTranscriptThread(taskId, userTranscript, jarvisResponse, dura
     // Post Jarvis's full response with timing in the thread
     await thread.send(`**Jarvis Response:**\n${jarvisResponse}\n\n_Task completed in ${duration}s_`);
     
-    console.log(`✅ Posted voice transcript thread (task #${taskId}) to ${channel.name}`);
+    logger.info(`✅ Posted voice transcript thread (task #${taskId}) to ${channel.name}`);
     return true;
   } catch (err) {
-    console.error(`❌ Failed to post transcript thread: ${err.message}`);
+    logger.error(`❌ Failed to post transcript thread: ${err.message}`);
     return false;
   }
 }
@@ -1611,15 +1612,15 @@ async function startRecordMode(userId) {
     }
     if (recChannel) {
       await recChannel.send(`**Recording started** -- ${dateStr}, ${timeStr}`);
-      console.log(`REC: notification posted to #meeting-transcripts`);
+      logger.info(`REC: notification posted to #meeting-transcripts`);
     } else {
-      console.log(`REC: channel ${chId} not found for notification`);
+      logger.info(`REC: channel ${chId} not found for notification`);
     }
   } catch (err) {
-    console.error(`REC: notification failed: ${err.message}`);
+    logger.error(`REC: notification failed: ${err.message}`);
   }
 
-  console.log(`REC: started -> ${recordMode.filePath}`);
+  logger.info(`REC: started -> ${recordMode.filePath}`);
 }
 
 async function stopRecordMode() {
@@ -1648,10 +1649,10 @@ async function stopRecordMode() {
       await recChannel.send(`**Recording stopped** -- ${durationStr}, ${entryCount} entries\n\`${filePath}\``);
     }
   } catch (err) {
-    console.error(`REC: failed to post stop notification: ${err.message}`);
+    logger.error(`REC: failed to post stop notification: ${err.message}`);
   }
 
-  console.log(`REC: stopped (${durationStr}, ${entryCount} entries) -> ${filePath}`);
+  logger.info(`REC: stopped (${durationStr}, ${entryCount} entries) -> ${filePath}`);
 
   recordMode.active = false;
   recordMode.thread = null;
@@ -1681,7 +1682,7 @@ function handleRecordModeSpeech(userId, sttResult) {
     try { appendFileSync(recordMode.filePath, line + '\n'); } catch {}
   }
   recordMode.entryCount++;
-  console.log(`REC: [${mm}:${ss}] "${text.substring(0, 50)}"`);
+  logger.info(`REC: [${mm}:${ss}] "${text.substring(0, 50)}"`);
 }
 
 async function handleVoiceDisconnect(userId) {
@@ -1690,20 +1691,20 @@ async function handleVoiceDisconnect(userId) {
   
   // Handle in-flight tasks — they'll detect userDisconnected and post to text
   if (activeTasks.size > 0) {
-    console.log(`📤 ${activeTasks.size} tasks in flight — will handoff to text channel when ready`);
+    logger.info(`📤 ${activeTasks.size} tasks in flight — will handoff to text channel when ready`);
     return;
   }
   
   // Handle recent conversation handoff
   if (wasRecentlyActive && lastUserMessage) {
-    console.log(`📤 Active conversation detected — posting handoff note to text channel`);
+    logger.info(`📤 Active conversation detected — posting handoff note to text channel`);
     const handoffMsg = `🎙️ Voice session ended. Last topic: "${lastUserMessage}". Continuing in text.`;
     await postToTextChannel(handoffMsg);
     return;
   }
   
   // Idle disconnect — silent exit
-  console.log(`🔇 Idle disconnect (${Math.round(timeSinceLastInteraction / 1000)}s since last interaction) — no handoff`);
+  logger.info(`🔇 Idle disconnect (${Math.round(timeSinceLastInteraction / 1000)}s since last interaction) — no handoff`);
 }
 
 async function joinChannel(voiceChannelId, options = {}) {
@@ -1715,7 +1716,7 @@ async function joinChannel(voiceChannelId, options = {}) {
     try { channel = await guild.channels.fetch(voiceChannelId); } catch {}
   }
   if (!channel) throw new Error(`Voice channel ${voiceChannelId} not found`);
-  console.log(`🔗 Joining voice channel: ${channel.name} (${voiceChannelId})`);
+  logger.info(`🔗 Joining voice channel: ${channel.name} (${voiceChannelId})`);
   
   // Destroy existing connection if switching channels
   if (currentConnection) {
@@ -1734,19 +1735,19 @@ async function joinChannel(voiceChannelId, options = {}) {
   
   // Catch voice connection errors (UDP/networking) to prevent process crash
   connection.on('error', (err) => {
-    console.error('🔴 Voice connection error:', err.message);
+    logger.error('🔴 Voice connection error:', err.message);
   });
   
   // Log state transitions for debugging
   connection.on('stateChange', (oldState, newState) => {
-    console.log(`🔊 Voice state: ${oldState.status} → ${newState.status}`);
+    logger.info(`🔊 Voice state: ${oldState.status} → ${newState.status}`);
   });
 
   // Wait for Ready state with timeout — destroy and retry if stuck
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
   } catch (err) {
-    console.error(`⚠️ Connection timeout (stuck in ${connection.state.status}) — destroying and retrying`);
+    logger.error(`⚠️ Connection timeout (stuck in ${connection.state.status}) — destroying and retrying`);
     try { connection.destroy(); } catch {}
     throw err; // Let caller handle retry
   }
@@ -1771,12 +1772,12 @@ async function joinChannel(voiceChannelId, options = {}) {
     } catch {
       try { connection.destroy(); } catch {} // Guard against double-destroy race condition
       const delay = reconnectState.nextDelay();
-      console.log(`⚠️  Disconnected (attempt #${reconnectState.attempts}), rejoining in ${delay / 1000}s...`);
+      logger.info(`⚠️  Disconnected (attempt #${reconnectState.attempts}), rejoining in ${delay / 1000}s...`);
       
       // After 5 failed reconnects, notify text channel and stand by
       if (reconnectState.attempts >= 5 && !reconnectState.textModeNotified) {
         reconnectState.textModeNotified = true;
-        console.error('🔴 Voice connection unstable after 5 reconnect attempts');
+        logger.error('🔴 Voice connection unstable after 5 reconnect attempts');
         postToTextChannel('⚠️ **Voice connection unstable.** Standing by in text mode. Will keep retrying.');
       }
       
@@ -1785,7 +1786,7 @@ async function joinChannel(voiceChannelId, options = {}) {
           await joinChannel(voiceChannelId);
           reconnectState.reset();
         } catch (err) {
-          console.error(`❌ Reconnect attempt #${reconnectState.attempts} failed: ${err.message}`);
+          logger.error(`❌ Reconnect attempt #${reconnectState.attempts} failed: ${err.message}`);
           // The next disconnect handler will trigger another attempt
         }
       }, delay);
@@ -1816,7 +1817,7 @@ async function joinChannel(voiceChannelId, options = {}) {
       if (!bargeInTimers.has(userId)) {
         const timer = setTimeout(() => {
           if (isSpeaking) {
-            console.log(`⚡ Barge-in — stopping playback`);
+            logger.info(`⚡ Barge-in — stopping playback`);
             bargeInEvents.add(userId);
             player.stop(true);
             audioQueue.clear();
@@ -1842,7 +1843,7 @@ async function joinChannel(voiceChannelId, options = {}) {
       
       // Clean up userSpeaking on error so future audio isn't blocked
       audioStream.once('error', (err) => {
-        console.error(`Audio stream error for ${userId}:`, err.message);
+        logger.error(`Audio stream error for ${userId}:`, err.message);
         userSpeaking.delete(userId);
         decoder.destroy();
       });
@@ -1877,7 +1878,7 @@ async function playGreeting() {
     const audio = await synthesizeSpeech('Jarvis online. Voice channel is live.');
     if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   } catch (err) {
-    console.error('Greeting failed:', err.message);
+    logger.error('Greeting failed:', err.message);
   }
 }
 
@@ -1924,7 +1925,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       if (/\b(cancel|stop|quit|abort)\b/i.test(retryCheck) && !/passport/i.test(retryCheck)) {
         try { unlinkSync(enrollWavPath); } catch {}
         enrollmentState.cancel();
-        console.log('Enrollment cancelled by voice command');
+        logger.info('Enrollment cancelled by voice command');
         const audio = await synthesizeSpeech('Enrollment cancelled.');
         if (audio) { audioQueue.add(audio); }
         return;
@@ -1968,7 +1969,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         enrollmentState.promptIndex = 0;
         enrollmentState.recorded = new Array(ENROLLMENT_PROMPTS.length).fill(false);
         const firstPrompt = enrollmentState.currentPrompt();
-        console.log('Enrollment restarted from 1/10');
+        logger.info('Enrollment restarted from 1/10');
         postToCC('Enrollment', `Starting over. [1/${enrollmentState.clipsNeeded}] Repeat: **${firstPrompt}**`);
         const audio = await synthesizeSpeech(`Starting over. First phrase: ${firstPrompt}`);
         if (audio) { audioQueue.add(audio); }
@@ -1983,7 +1984,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           if (finalResult.saved) {
             const audio = await synthesizeSpeech(`Voiceprint saved with ${finalResult.clips_saved || enrollmentState.clipsCollected} samples. Speaker verification is active.`);
             if (audio) { audioQueue.add(audio); }
-            console.log(`Enrollment finalized early: ${enrollmentState.clipsCollected} clips`);
+            logger.info(`Enrollment finalized early: ${enrollmentState.clipsCollected} clips`);
             postToCC('Enrollment', `Voiceprint saved (${enrollmentState.clipsCollected} clips). Done.`);
           }
         } else {
@@ -2007,7 +2008,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       // Server checks: Silero VAD speech presence, speech duration (>400ms),
       // and embedding consistency (outlier detection after 3 clips)
       if (clipTranscript) {
-        console.log(`Enrollment clip transcript: "${clipTranscript}"`);
+        logger.info(`Enrollment clip transcript: "${clipTranscript}"`);
         postToCC('Enrollment', clipTranscript);
       }
 
@@ -2015,7 +2016,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       try { unlinkSync(enrollWavPath); } catch {}
       if (result.accepted) {
         const consistencyStr = result.consistency_score != null ? ` consistency=${result.consistency_score}` : '';
-        console.log(`Enrollment clip ${enrollmentState.clipsCollected}/${enrollmentState.clipsNeeded} accepted${consistencyStr}`);
+        logger.info(`Enrollment clip ${enrollmentState.clipsCollected}/${enrollmentState.clipsNeeded} accepted${consistencyStr}`);
 
         if (enrollmentState.learnMode) {
           postToCC('Learn', `Clip ${enrollmentState.clipsCollected} added. Keep going or say **"done"** to save.`);
@@ -2025,7 +2026,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           const finalResult = await enrollmentState.finalize();
           if (finalResult.saved) {
             const count = finalResult.clips_saved || enrollmentState.clipsCollected;
-            console.log(`Enrollment complete: ${count} clips saved`);
+            logger.info(`Enrollment complete: ${count} clips saved`);
             postToCC('Enrollment', `${enrollmentState.clipsCollected}/${enrollmentState.clipsNeeded} done. Voiceprint saved.`);
             const audio = await synthesizeSpeech(`${enrollmentState.clipsCollected} of ${enrollmentState.clipsNeeded}. Voiceprint saved with ${count} samples. Speaker verification is now active. Welcome aboard. Say "learn mode" any time to add more samples.`);
             if (audio) { audioQueue.add(audio); }
@@ -2044,7 +2045,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         }
       } else {
         // Clip rejected by server (no speech, too short, or outlier embedding)
-        console.log(`Enrollment clip rejected: ${result.reason}`);
+        logger.info(`Enrollment clip rejected: ${result.reason}`);
         const prompt = enrollmentState.currentPrompt();
         if (result.reason === 'outlier_embedding') {
           postToCC('Enrollment', `Audio didn't match your voice pattern. Retry: **${prompt}**`);
@@ -2061,7 +2062,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         }
       }
     } catch (err) {
-      console.error('Enrollment capture error:', err.message);
+      logger.error('Enrollment capture error:', err.message);
       try { unlinkSync(enrollWavPath); } catch {}
     }
     return;
@@ -2081,7 +2082,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     let sttResult = null;
     if (preTranscribed) {
       rawTranscript = preTranscribed;
-      console.log(`(pre-transcribed) "${rawTranscript}"`);
+      logger.info(`(pre-transcribed) "${rawTranscript}"`);
     } else {
       wavPath = join(TMP_DIR, `speech_${userId}_${Date.now()}.wav`);
       await savePcmAsWav(audioBuffer, wavPath);
@@ -2126,12 +2127,12 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const trimmed = rawTranscript.trim();
       const startsWithWakeWord = /^(hey[,.]?\s+)?jarvis\b/i.test(trimmed);
       if (startsWithWakeWord) {
-        console.log(`🎯 Wake word from non-owner embedding (confidence=${spkr.confidence} norm=${spkr.norm_score}) — passing to FSM gate`);
+        logger.info(`🎯 Wake word from non-owner embedding (confidence=${spkr.confidence} norm=${spkr.norm_score}) — passing to FSM gate`);
         // Let it through — FSM gate will handle wake-up with unauthenticated session
       } else {
         const isLong = rawTranscript.length > 80;
         if (spkr.confidence_tier === 'low' || spkr.norm_score < 0.5 || isLong) {
-          console.log(`🔇 Non-owner audio filtered (confidence=${spkr.confidence} norm=${spkr.norm_score} tier=${spkr.confidence_tier} len=${rawTranscript.length}): "${rawTranscript.substring(0, 50)}..."`);
+          logger.info(`🔇 Non-owner audio filtered (confidence=${spkr.confidence} norm=${spkr.norm_score} tier=${spkr.confidence_tier} len=${rawTranscript.length}): "${rawTranscript.substring(0, 50)}..."`);
           return;
         }
       }
@@ -2150,11 +2151,11 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const extracted = sentenceEnd && sentenceEnd.length >= 2
           ? fromJarvis.substring(0, fromJarvis.indexOf(sentenceEnd[1]) + sentenceEnd[1].length).trim()
           : fromJarvis.substring(0, 200).trim();
-        console.log(`🔧 TV noise extraction: ${rawTranscript.length} chars → ${extracted.length} chars: "${extracted.substring(0, 80)}"`);
+        logger.info(`🔧 TV noise extraction: ${rawTranscript.length} chars → ${extracted.length} chars: "${extracted.substring(0, 80)}"`);
         rawTranscript = extracted;
       } else if (jarvisIdx === -1 && spkr && spkr.confidence_tier === 'low') {
         // Long transcript, no Jarvis, LOW confidence only -- pure TV dialogue
-        console.log(`🔇 TV dialogue filtered (norm=${spkr.norm_score} tier=${spkr.confidence_tier} len=${rawTranscript.length}): "${rawTranscript.substring(0, 60)}..."`);
+        logger.info(`🔇 TV dialogue filtered (norm=${spkr.norm_score} tier=${spkr.confidence_tier} len=${rawTranscript.length}): "${rawTranscript.substring(0, 60)}..."`);
         return;
       }
     }
@@ -2167,7 +2168,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // ── FSM State Gate: SLEEP drops all except wake-up, IDLE requires wake word ──
     const currentState = getState();
     const spkrTag = spkr ? `${spkr.confidence_tier}(${spkr.confidence})` : 'null';
-    console.log(`[FSM-gate] state=${currentState} speaker=${spkrTag} transcript="${rawTranscript.substring(0, 40)}..."`);
+    logger.info(`[FSM-gate] state=${currentState} speaker=${spkrTag} transcript="${rawTranscript.substring(0, 40)}..."`);
     postActivity(`🎤 \`${currentState}\` speaker=${spkrTag} → "${truncate(rawTranscript, 100)}"`);
 
     // SLEEP: only wake-up commands pass (including fuzzy wake word when speaker verified)
@@ -2199,10 +2200,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           stripped = rawTranscript.replace(/^[a-zA-Z]{1,12}[,.]?\s+/i, '').trim();
         }
         if (stripped.length > 2) {
-          console.log(`SLEEP -> ACTIVE with command (authenticated=${authCtx.isOwner}): "${stripped}"`);
+          logger.info(`SLEEP -> ACTIVE with command (authenticated=${authCtx.isOwner}): "${stripped}"`);
           // fall through to process
         } else {
-          console.log(`SLEEP -> ACTIVE (bare wake word, authenticated=${authCtx.isOwner})`);
+          logger.info(`SLEEP -> ACTIVE (bare wake word, authenticated=${authCtx.isOwner})`);
           const audio = await synthesizeSpeech('Back online. What do you need?');
           if (audio) { audioQueue.add(audio); }
           markBotResponse(userId);
@@ -2225,7 +2226,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         // fall through -- checkWakeWord handles transcript cleaning
       } else if (isContinuationPhrase(rawTranscript) && hasRecentContext(userId)) {
         // Follow-up to recent conversation -- no wake word needed
-        console.log(`💬 Continuation phrase in IDLE: "${rawTranscript.substring(0, 50)}" -- resuming`);
+        logger.info(`💬 Continuation phrase in IDLE: "${rawTranscript.substring(0, 50)}" -- resuming`);
         transition('ACTIVE', 'continuation-from-idle');
         authCtx.isOwner = true;
         authenticatedSession = true; // trust context -- was authenticated before IDLE
@@ -2233,7 +2234,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         // fall through to process
       } else if (isVerifiedOwner(spkr, 'high') && hasRecentContext(userId) && isFollowUpExpected()) {
         // Verified owner responding to an alert/prompt -- speaker ID is the auth
-        console.log(`Owner response to alert/prompt in IDLE (speaker=${spkr.confidence} tier=${spkr.confidence_tier}) -- no wake word needed`);
+        logger.info(`Owner response to alert/prompt in IDLE (speaker=${spkr.confidence} tier=${spkr.confidence_tier}) -- no wake word needed`);
         transition('ACTIVE', 'owner-response-from-idle');
         authCtx.isOwner = true;
         authenticatedSession = true;
@@ -2246,11 +2247,11 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     // Filter Whisper hallucinations — phantom phrases from silence/ambient
     if (isHallucination(rawTranscript)) {
-      console.log(`Whisper hallucination filtered: "${rawTranscript}"`);
+      logger.info(`Whisper hallucination filtered: "${rawTranscript}"`);
       return;
     }
 
-    console.log(`📝 "${rawTranscript}" (${Date.now() - startTime}ms)`);
+    logger.info(`📝 "${rawTranscript}" (${Date.now() - startTime}ms)`);
     postToCC('🎤', rawTranscript);
 
     // ── Pre-wake-word sleep check (two-tier) ──
@@ -2263,7 +2264,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // Log sentiment if detected
     if (sentiment && sentiment.sentiment) {
       const scoreStr = sentiment.sentiment_score != null ? ` (${sentiment.sentiment_score.toFixed(2)})` : '';
-      console.log(`🎭 Sentiment: ${sentiment.sentiment}${scoreStr}`);
+      logger.info(`🎭 Sentiment: ${sentiment.sentiment}${scoreStr}`);
       postActivity(`🎭 Sentiment: ${sentiment.sentiment}${scoreStr}`);
     }
 
@@ -2287,14 +2288,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         authCtx.isOwner = true;
         authenticatedSession = true;
         const tier = speakerInfo.confidence_tier || 'unknown';
-        console.log(`Session authenticated (wake word confidence=${speakerInfo.confidence} tier=${tier})`);
+        logger.info(`Session authenticated (wake word confidence=${speakerInfo.confidence} tier=${tier})`);
       } else {
         // Check for passphrase override
         const cleanLowerAuth = cleanedTranscript.toLowerCase().replace(/[.,!?]/g, '').trim();
         if (SESSION_PASSPHRASE && cleanLowerAuth.includes(SESSION_PASSPHRASE.toLowerCase())) {
           authCtx.isOwner = true;
           authenticatedSession = true;
-          console.log(`🔓 Session authenticated (passphrase override, confidence=${speakerInfo.confidence})`);
+          logger.info(`🔓 Session authenticated (passphrase override, confidence=${speakerInfo.confidence})`);
         } else {
           // Speaker doesn't match on wake word — reject with throttled rebuff
           const now = Date.now();
@@ -2306,13 +2307,13 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
               "I don't recognize you. Only my principal can wake me.",
             ];
             const rebuff = rebuffs[Math.floor(Math.random() * rebuffs.length)];
-            console.log(`🔒 Wake word rejected: confidence=${speakerInfo.confidence}`);
+            logger.info(`🔒 Wake word rejected: confidence=${speakerInfo.confidence}`);
             try {
               const audio = await synthesizeSpeech(rebuff);
               if (audio) { audioQueue.add(audio); }
             } catch {}
           } else {
-            console.log(`🔒 Wake word rejected (throttled): confidence=${speakerInfo.confidence}`);
+            logger.info(`🔒 Wake word rejected (throttled): confidence=${speakerInfo.confidence}`);
           }
           return;
         }
@@ -2321,11 +2322,11 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       // Session authenticated -- but still reject clearly non-owner audio (TV/ambient)
       // The per-utterance filter above catches most, but double-check here for safety
       if (speakerInfo && !isVerifiedOwner(speakerInfo, 'medium') && speakerInfo.confidence_tier === 'low') {
-        console.log(`🔇 Active session: non-owner audio rejected (confidence=${speakerInfo.confidence} tier=${speakerInfo.confidence_tier})`);
+        logger.info(`🔇 Active session: non-owner audio rejected (confidence=${speakerInfo.confidence} tier=${speakerInfo.confidence_tier})`);
         return;
       }
       if (speakerInfo) {
-        console.log(`Session active (confidence=${speakerInfo.confidence} tier=${speakerInfo.confidence_tier || ''})`);
+        logger.info(`Session active (confidence=${speakerInfo.confidence} tier=${speakerInfo.confidence_tier || ''})`);
       }
     }
     // If speakerInfo is null (service down / disabled), allow through (graceful degradation)
@@ -2354,7 +2355,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       if (!isEnrollCmd) {
         if (!handleSpeech._lastEnrollPrompt || Date.now() - handleSpeech._lastEnrollPrompt > 30000) {
           handleSpeech._lastEnrollPrompt = Date.now();
-          console.log('No voiceprint enrolled -- prompting enrollment');
+          logger.info('No voiceprint enrolled -- prompting enrollment');
           const audio = await synthesizeSpeech('No voiceprint on file. Say "Jarvis, enroll my voice" to set up speaker verification.');
           if (audio) { audioQueue.add(audio); }
         }
@@ -2365,20 +2366,20 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // 3. Stop words — dismiss phrases that don't need a response (length-gated)
     const dismissResult = shouldDismiss(cleanedTranscript);
     if (dismissResult.dismiss) {
-      console.log(`🤚 Stop word dismissed (${dismissResult.reason}): "${cleanedTranscript}"`);
+      logger.info(`🤚 Stop word dismissed (${dismissResult.reason}): "${cleanedTranscript}"`);
       return;
     }
 
     // 3b. Side-talk — short non-directed speech in conversation window
     if (isSideTalk(cleanedTranscript, wakeWordUsed)) {
-      console.log(`💭 Side-talk dismissed (no wake word, short): "${cleanedTranscript}"`);
+      logger.info(`💭 Side-talk dismissed (no wake word, short): "${cleanedTranscript}"`);
       return;
     }
 
     // 4. Bare wake word — just "Jarvis" / "Jarvis." / "Jarvis?" with no real command.
     const bareCheck = cleanedTranscript.replace(/[.,!?;:\-'"]/g, '').trim();
     if (!bareCheck || bareCheck.length === 0) {
-      console.log(`🎯 Bare wake word — acknowledging`);
+      logger.info(`🎯 Bare wake word — acknowledging`);
       const acks = ['Sir?', 'At your service.', 'Yes, sir?', 'How can I help?', 'Listening.'];
       const ack = acks[Math.floor(Math.random() * acks.length)];
       const audio = await synthesizeSpeech(ack);
@@ -2393,7 +2394,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const STOP_WORDS = ['sounds good', 'thank you', 'thanks', 'obviously', 'ok', 'okay'];
     const normalizedTranscript = transcript.trim().toLowerCase().replace(/[.,!?]+$/, '');
     if (STOP_WORDS.includes(normalizedTranscript)) {
-      console.log(`[voice] stop word filtered: "${transcript}"`);
+      logger.info(`[voice] stop word filtered: "${transcript}"`);
       return;
     }
 
@@ -2407,7 +2408,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const newState = tldrToggle ? 'enabled' : 'disabled';
       const success = setTldrMode(tldrToggle);
       if (success) {
-        console.log(`🎙️ Voice TL;DR mode ${newState}`);
+        logger.info(`🎙️ Voice TL;DR mode ${newState}`);
         const ack = await synthesizeSpeech(`Voice TL;DR mode ${newState}.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
@@ -2420,7 +2421,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const newState = transcriptToggle ? 'enabled' : 'disabled';
       const success = setTranscriptMode(transcriptToggle);
       if (success) {
-        console.log(`📝 Voice full transcript mode ${newState}`);
+        logger.info(`📝 Voice full transcript mode ${newState}`);
         const ack = await synthesizeSpeech(`Full transcript mode ${newState}.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
@@ -2433,7 +2434,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const newState = askToggle ? 'enabled' : 'disabled';
       const success = setAskMode(askToggle);
       if (success) {
-        console.log(`🛡️ Ask mode ${newState}`);
+        logger.info(`🛡️ Ask mode ${newState}`);
         const ack = await synthesizeSpeech(askToggle
           ? `Ask mode enabled. I'll confirm before taking any actions.`
           : `Ask mode disabled. Executing freely.`);
@@ -2448,7 +2449,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const success = setTtsProvider(ttsToggle);
       if (success) {
         const voiceName = ttsToggle === 'edge' ? 'Ryan' : 'JARVIS';
-        console.log(`🎭 Switched to ${ttsToggle} TTS (${voiceName})`);
+        logger.info(`🎭 Switched to ${ttsToggle} TTS (${voiceName})`);
         const ack = await synthesizeSpeech(`Switched to ${voiceName} voice.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
@@ -2461,7 +2462,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const newState = mobileToggle ? 'enabled' : 'disabled';
       const success = setMobileMode(mobileToggle);
       if (success) {
-        console.log(`📱 Mobile mode ${newState}`);
+        logger.info(`📱 Mobile mode ${newState}`);
         const ack = await synthesizeSpeech(mobileToggle
           ? `Mobile mode on. I'll narrate as I work and keep you updated hands-free.`
           : `Mobile mode off. Back to standard voice output.`);
@@ -2492,15 +2493,15 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         try { ul(vp2); } catch {}
         // Reset on the service side too
         await fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST' }).catch(() => {});
-        console.log('Voiceprints wiped — starting fresh enrollment');
-      } catch (e) { console.error('Voiceprint wipe error:', e.message); }
+        logger.info('Voiceprints wiped — starting fresh enrollment');
+      } catch (e) { logger.error('Voiceprint wipe error:', e.message); }
       // Fall through to start enrollment
     }
     // "learn mode" / "add samples" — add more clips to existing voiceprint
     const learnMatch = cleanedTranscript.match(/^(learn\s*mode|add\s*(more\s*)?samples|improve\s*voice)/i);
     if (ALLOWED_USERS.includes(userId) && learnMatch) {
       enrollmentState.start(userId, true); // learn=true
-      console.log('Learn mode started — adding samples to voiceprint');
+      logger.info('Learn mode started — adding samples to voiceprint');
       postToCC('🎙️ Learn Mode', 'Speak naturally. Each clip improves your voiceprint. Say **"done"** to save.');
       const audio = await synthesizeSpeech('Learn mode on. Just talk naturally and I\'ll add each clip to your voiceprint. Say done when finished.');
       if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
@@ -2510,7 +2511,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (ALLOWED_USERS.includes(userId) && (enrollMatch || restartEnrollMatch)) {
       enrollmentState.start(userId);
       const firstPrompt = enrollmentState.currentPrompt();
-      console.log(`Voice enrollment started -- ${enrollmentState.clipsNeeded} guided phrases`);
+      logger.info(`Voice enrollment started -- ${enrollmentState.clipsNeeded} guided phrases`);
       postToCC('🎙️ Enrollment', [
         `Starting voice enrollment (${enrollmentState.clipsNeeded} phrases).`,
         `**"retry"** — repeat the current phrase`,
@@ -2530,7 +2531,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // This MUST stay local -- it needs to kill in-flight audio/tasks immediately
     // Only ALLOWED_USERS can use interrupt commands (admin control)
     if (ALLOWED_USERS.includes(userId) && isInterruptCommand(rawTranscript)) {
-      console.log(`⛔ Interrupt command: "${rawTranscript}"`);
+      logger.info(`⛔ Interrupt command: "${rawTranscript}"`);
       cancelAllTasks();
       const stopAudio = await synthesizeSpeech('Stopped.');
       if (stopAudio) { await playAudioEnhanced(stopAudio); try { unlinkSync(stopAudio); } catch {} }
@@ -2573,7 +2574,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (!handleSpeech._recentTranscripts) handleSpeech._recentTranscripts = new Map();
     const lastSeen = handleSpeech._recentTranscripts.get(transcriptKey);
     if (lastSeen && now - lastSeen < TRANSCRIPT_DEDUP_MS) {
-      console.log(`⏭️  Transcript dedup: skipping duplicate "${transcript.substring(0, 40)}..." (${now - lastSeen}ms ago)`);
+      logger.info(`⏭️  Transcript dedup: skipping duplicate "${transcript.substring(0, 40)}..." (${now - lastSeen}ms ago)`);
       return;
     }
     handleSpeech._recentTranscripts.set(transcriptKey, now);
@@ -2588,7 +2589,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     queueUtterance(userId, transcript, conv, speakerName, sentiment);
     
   } catch (err) {
-    console.error('❌ Speech dispatch error:', err);
+    logger.error('❌ Speech dispatch error:', err);
     // Only give audio feedback for real STT service failures (not empty/ambient noise)
     if (err.message && err.message.includes('STT failed') && !err.message.includes('Empty transcript')) {
       try {
@@ -2627,7 +2628,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   try {
     // Graceful degradation: if gateway is down, tell the user instead of failing silently
     if (isGatewayCircuitOpen()) {
-      console.warn(`🔴 Task #${taskId} — gateway circuit breaker is open, informing user`);
+      logger.warn(`🔴 Task #${taskId} — gateway circuit breaker is open, informing user`);
       const degradedMsg = "I'm having trouble reaching my brain at the moment. Give me a moment to recover.";
       try {
         const audio = await synthesizeSpeech(degradedMsg);
@@ -2639,10 +2640,10 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     }
 
     if (!isGatewayHealthy()) {
-      console.warn(`🟡 Task #${taskId} — gateway unhealthy, proceeding with caution`);
+      logger.warn(`🟡 Task #${taskId} — gateway unhealthy, proceeding with caution`);
     }
 
-    console.log(`🧠 Task #${taskId} thinking...`);
+    logger.info({ taskId, transcript: transcript.substring(0, 60), gatewayHealthy: isGatewayHealthy() }, '🧠 brain task processing');
 
     // Phase 1: Fast Ack (Haiku)
     // Buy time for the main model to think. Returns in ~1-2s.
@@ -2653,12 +2654,12 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       try {
         const ackText = await generateAck(transcript);
         if (ackText) {
-          console.log(`⚡ Ack: "${ackText}"`);
+          logger.info(`⚡ Ack: "${ackText}"`);
           const ackAudio = await synthesizeSpeech(ackText);
           if (ackAudio) audioQueue.add(ackAudio);
         }
       } catch (e) {
-        console.warn(`⚠️ Ack failed: ${e.message}`);
+        logger.warn(`⚠️ Ack failed: ${e.message}`);
       }
     }
 
@@ -2672,7 +2673,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       // Only fire contextual ack if the old generic ack system is OFF
       // (avoids double-acking). Contextual ack replaces the generic system.
       contextualAckPromise = generateContextualAck(transcript).catch(err => {
-        console.warn(`⚠️ Contextual ack failed: ${err.message}`);
+        logger.warn(`⚠️ Contextual ack failed: ${err.message}`);
         return null;
       });
     }
@@ -2680,7 +2681,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // TTS pipeline for parallel sentence generation
     const ttsPipeline = new TtsPipeline(synthesizeSpeech, audioQueue, {
       maxConcurrent: TTS_PIPELINE_CONCURRENCY,
-      onError: (err) => console.error(`TTS pipeline error for task #${taskId}:`, err.message),
+      onError: (err) => logger.error(`TTS pipeline error for task #${taskId}:`, err.message),
     });
     
     // ── Streaming TTS with pipelined delivery ──────────────────────────
@@ -2709,13 +2710,13 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       // Deduplicate repeated phrases (e.g. "On it, sir.On it, sir." -> "On it, sir.")
       const deduped = text.replace(/(.{8,}?[.!?])\s*\1/g, '$1');
       if (deduped !== text) {
-        console.log(`🔁 Deduped chunk: "${text.substring(0, 40)}" → "${deduped.substring(0, 40)}"`);
+        logger.info(`🔁 Deduped chunk: "${text.substring(0, 40)}" → "${deduped.substring(0, 40)}"`);
         text = deduped;
       }
       if (!text || text.length < 2) return;
       // Skip if identical to last flushed chunk
       if (text === lastFlushedText) {
-        console.log(`⏭️  Skipping duplicate chunk: "${text.substring(0, 40)}"`);
+        logger.info(`⏭️  Skipping duplicate chunk: "${text.substring(0, 40)}"`);
         return;
       }
       lastFlushedText = text;
@@ -2723,12 +2724,12 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       // Self-mute queue intercept — capture text instead of synthesizing
       if (MUTE_QUEUE_ENABLED && isMuteQueueActive()) {
         muteQueueAdd(text, 'task', 3);
-        console.log(`🔇 Chunk intercepted → mute queue (${text.length} chars)`);
+        logger.info(`🔇 Chunk intercepted → mute queue (${text.length} chars)`);
         return;
       }
 
       batchNum++;
-      console.log(`🔊 Chunk #${batchNum}: ${text.length} chars → pipeline`);
+      logger.info(`🔊 Chunk #${batchNum}: ${text.length} chars → pipeline`);
       ttsPipeline.add(text);
     };
     
@@ -2742,10 +2743,10 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       if (!firstAudioLogged) {
         firstAudioLogged = true;
-        console.log(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
+        logger.info(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
       }
 
-      console.log(`📨 Task #${taskId} onSentence: "${sentence.substring(0, 60)}..." (${sentence.length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected}, ttsAvail=${isTTSAvailable()})`);
+      logger.info(`📨 Task #${taskId} onSentence: "${sentence.substring(0, 60)}..." (${sentence.length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected}, ttsAvail=${isTTSAvailable()})`);
 
       if (!tldrModeEnabled) {
         if (userDisconnected) {
@@ -2778,7 +2779,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     
     // Task was cancelled
     if (result.aborted) {
-      console.log(`Task #${taskId} aborted`);
+      logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
       audioQueue.clear();
       postActivity(`**Task #${taskId}** cancelled after ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
@@ -2788,19 +2789,19 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Agent signal (NO_REPLY / HEARTBEAT_OK) — nothing to say, silent drop
     // This is the primary indicator that a sub-agent was spawned.
     if (result.silent) {
-      console.log(`🤫 Task #${taskId} silent/NO_REPLY (${((Date.now() - startTime) / 1000).toFixed(1)}s) — sub-agent likely spawned`);
+      logger.info(`🤫 Task #${taskId} silent/NO_REPLY (${((Date.now() - startTime) / 1000).toFixed(1)}s) — sub-agent likely spawned`);
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
           const ackText = await contextualAckPromise;
           if (ackText) {
-            console.log(`🎯 Contextual dispatch ack: "${ackText}"`);
+            logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
             const ackAudio = await synthesizeSpeech(ackText);
             if (ackAudio) audioQueue.add(ackAudio);
             postActivity(`🎯 **Task #${taskId}** dispatch ack: "${ackText}"`);
           }
         } catch (e) {
-          console.warn(`⚠️ Contextual ack speak failed: ${e.message}`);
+          logger.warn(`⚠️ Contextual ack speak failed: ${e.message}`);
         }
       }
       postActivity(`**Task #${taskId}** silent (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
@@ -2809,19 +2810,19 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // Empty response from gateway -- sub-agent spawned, callback expected via /speak
     if (result.empty) {
-      console.log(`📭 Task #${taskId} empty response (${((Date.now() - startTime) / 1000).toFixed(1)}s) — sub-agent spawned, awaiting /speak callback`);
+      logger.info(`📭 Task #${taskId} empty response (${((Date.now() - startTime) / 1000).toFixed(1)}s) — sub-agent spawned, awaiting /speak callback`);
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
           const ackText = await contextualAckPromise;
           if (ackText) {
-            console.log(`🎯 Contextual dispatch ack: "${ackText}"`);
+            logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
             const ackAudio = await synthesizeSpeech(ackText);
             if (ackAudio) audioQueue.add(ackAudio);
             postActivity(`🎯 **Task #${taskId}** dispatch ack: "${ackText}"`);
           }
         } catch (e) {
-          console.warn(`⚠️ Contextual ack speak failed: ${e.message}`);
+          logger.warn(`⚠️ Contextual ack speak failed: ${e.message}`);
         }
       }
       postActivity(`**Task #${taskId}** returned empty response (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
@@ -2835,7 +2836,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     }
     
     // Flush remaining text and wait for pipeline to finish
-    console.log(`📊 Task #${taskId} final flush check: batchText="${batchText.substring(0, 40)}..." (${batchText.trim().length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected})`);
+    logger.info(`📊 Task #${taskId} final flush check: batchText="${batchText.substring(0, 40)}..." (${batchText.trim().length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected})`);
     if (batchText.trim().length > 0 && !tldrModeEnabled && !userDisconnected) {
       flushToPipeline(batchText);
       batchText = '';
@@ -2849,7 +2850,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       .replace(/\s*_?NO_?R?E?P?L?Y?\s*/gi, ' ')
       .replace(/\s*HEARTBEAT_?O?K?\s*/gi, ' ')
       .trim();
-    console.log(`💬 Task #${taskId} done (${Date.now() - startTime}ms): "${fullText.substring(0, 80)}..."`);
+    logger.info(`💬 Task #${taskId} done (${Date.now() - startTime}ms): "${fullText.substring(0, 80)}..."`);
     // Post Jarvis response to CC — split if over 2000 chars
     if (fullText) {
       const cleanCC = fullText
@@ -2869,7 +2870,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Only post full text to text channel if response was long (no re-speak).
     const outputResult = enforceOutputLength(fullText, tldrModeEnabled);
     if (outputResult.wasTruncated && !userDisconnected) {
-      console.log(`📏 Response was long (${fullText.length} chars) — posting full text to channel (already spoken via streaming)`);
+      logger.info(`📏 Response was long (${fullText.length} chars) — posting full text to channel (already spoken via streaming)`);
       // Post full response to text channel for reference
       await postToTextChannel(`📝 **Full Response (Task #${taskId}):**\n\n${outputResult.full}`);
       // NOTE: Do NOT re-speak here — streaming pipeline already delivered audio
@@ -2878,7 +2879,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
     const transcriptModeEnabled = isTranscriptModeEnabled();
     if (transcriptModeEnabled && !userDisconnected) {
-      console.log(`📝 Full transcript mode enabled — posting conversation as thread (task #${taskId})`);
+      logger.info(`📝 Full transcript mode enabled — posting conversation as thread (task #${taskId})`);
       await postTranscriptThread(taskId, transcript, fullText, duration);
     }
     
@@ -2894,7 +2895,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // Detect if response invites follow-up (extends conversation window)
     const followUp = detectFollowUpLikely(fullText);
-    if (followUp) console.log(`📋 Response invites follow-up — extending conversation window`);
+    if (followUp) logger.info(`📋 Response invites follow-up — extending conversation window`);
     markBotResponse(userId, { followUpLikely: followUp });
 
     // ── Two-tier auto-sleep: sign-off phrase was embedded in a task request ──
@@ -2902,7 +2903,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // No farewell — the task response itself was the last thing spoken.
     const taskMeta = activeTasks.get(taskId);
     if (brainOptions.autoSleepAfterTask || taskMeta?.autoSleepAfterTask) {
-      console.log(`Auto-sleep: task #${taskId} complete with sign-off — transitioning to SLEEP`);
+      logger.info(`Auto-sleep: task #${taskId} complete with sign-off — transitioning to SLEEP`);
       transition('SLEEP', 'auto-sleep-after-task');
       authenticatedSession = false;
       endConversationWindow(userId);
@@ -2918,7 +2919,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     
   } catch (err) {
     if (err.name !== 'AbortError') {
-      console.error(`❌ Task #${taskId} failed:`, err.message);
+      logger.error(`❌ Task #${taskId} failed:`, err.message);
       postActivity(`❌ **Task #${taskId}** failed (${((Date.now() - startTime) / 1000).toFixed(1)}s): ${err.message}`);
       try {
         const audio = await synthesizeSpeech("I had trouble with that one. Try again?");
@@ -2945,13 +2946,13 @@ function cancelAllTasks() {
   const count = activeTasks.size;
   for (const [taskId, task] of activeTasks) {
     task.controller.abort();
-    console.log(`🛑 Cancelled task #${taskId}`);
+    logger.info(`🛑 Cancelled task #${taskId}`);
   }
   activeTasks.clear();
   audioQueue.clear();
   isSpeaking = false;
   serverMuteOwner(false);
-  console.log(`🛑 Cancelled ${count} active tasks, cleared all queues`);
+  logger.info(`🛑 Cancelled ${count} active tasks, cleared all queues`);
   if (count > 0) postActivity(`🛑 **Cancelled ${count} task${count > 1 ? 's' : ''}** (user interrupt)`);
 }
 
@@ -2967,11 +2968,11 @@ async function serverMuteOwner(mute) {
     // Only change if different from current state
     if (member.voice.serverMute === mute) return;
     await member.voice.setMute(mute, mute ? 'Jarvis speaking' : 'Jarvis done speaking');
-    if (mute) console.log('🔇 Server-muted owner (Jarvis speaking)');
-    else console.log('🔊 Server-unmuted owner (Jarvis done)');
+    if (mute) logger.info('🔇 Server-muted owner (Jarvis speaking)');
+    else logger.info('🔊 Server-unmuted owner (Jarvis done)');
   } catch (err) {
     // Non-fatal -- bot may lack permission
-    console.warn(`Server mute ${mute ? 'on' : 'off'} failed: ${err.message}`);
+    logger.warn(`Server mute ${mute ? 'on' : 'off'} failed: ${err.message}`);
   }
 }
 
@@ -3019,10 +3020,10 @@ function prependSilence(audioPath, durationMs) {
     const padded = Buffer.concat([header, silence, buf.subarray(pcmStart, pcmStart + origDataSize)]);
     const paddedPath = audioPath.replace(/\.wav$/, '.bt.wav');
     writeFileSync(paddedPath, padded);
-    console.log(`BT: padded ${durationMs}ms silence (${silenceBytes} bytes) to ${audioPath}`);
+    logger.info(`BT: padded ${durationMs}ms silence (${silenceBytes} bytes) to ${audioPath}`);
     return paddedPath;
   } catch (err) {
-    console.warn(`BT silence pad failed: ${err.message}`);
+    logger.warn(`BT silence pad failed: ${err.message}`);
     return audioPath;
   }
 }
@@ -3137,22 +3138,22 @@ function savePcmAsWav(pcmBuffer, outputPath) {
 // ── Global Error Handlers ─────────────────────────────────────────────
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Promise Rejection:');
-  console.error('Promise:', promise);
-  console.error('Reason:', reason instanceof Error ? reason.stack : reason);
-  console.error('⚠️  Attempting graceful degradation — bot remains running');
+  logger.error('❌ Unhandled Promise Rejection:');
+  logger.error('Promise:', promise);
+  logger.error('Reason:', reason instanceof Error ? reason.stack : reason);
+  logger.error('⚠️  Attempting graceful degradation — bot remains running');
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:');
-  console.error(err.stack || err);
-  console.error('⚠️  Attempting graceful shutdown...');
+  logger.error('❌ Uncaught Exception:');
+  logger.error(err.stack || err);
+  logger.error('⚠️  Attempting graceful shutdown...');
   try {
     cancelAllTasks();
     if (currentConnection) currentConnection.destroy();
     client.destroy();
   } catch (cleanupErr) {
-    console.error('❌ Cleanup error during uncaughtException handler:', cleanupErr);
+    logger.error('❌ Cleanup error during uncaughtException handler:', cleanupErr);
   }
   setTimeout(() => process.exit(1), 1000);
 });
@@ -3183,8 +3184,8 @@ const REQUIRED_ENV = [
 ];
 const missing = REQUIRED_ENV.filter(v => !process.env[v]);
 if (missing.length > 0) {
-  console.error(`[startup] Missing required env vars: ${missing.join(', ')}`);
-  console.error('[startup] See .env.example for reference. Exiting.');
+  logger.error(`[startup] Missing required env vars: ${missing.join(', ')}`);
+  logger.error('[startup] See .env.example for reference. Exiting.');
   process.exit(1);
 }
 

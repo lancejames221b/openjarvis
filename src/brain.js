@@ -1,3 +1,4 @@
+const logger = require('./logger.js');
 /**
  * Brain Module - Thin voice I/O layer to Clawdbot Gateway
  * 
@@ -72,7 +73,7 @@ const circuitBreaker = {
     if (this.failures.length >= CIRCUIT_BREAKER_THRESHOLD) {
       this.tripped = true;
       this.trippedAt = now;
-      console.error(`⚡ Circuit breaker tripped — gateway unavailable (${CIRCUIT_BREAKER_THRESHOLD} failures in ${CIRCUIT_BREAKER_WINDOW_MS / 1000}s)`);
+      logger.error(`⚡ Circuit breaker tripped — gateway unavailable (${CIRCUIT_BREAKER_THRESHOLD} failures in ${CIRCUIT_BREAKER_WINDOW_MS / 1000}s)`);
       if (!wasTripped && _circuitBreakerNotify) {
         _circuitBreakerNotify('open');
       }
@@ -82,7 +83,7 @@ const circuitBreaker = {
   recordSuccess() {
     this.failures = [];
     if (this.tripped) {
-      console.log('🟢 Circuit breaker reset — gateway available');
+      logger.info('🟢 Circuit breaker reset — gateway available');
       this.tripped = false;
       this.trippedAt = null;
       if (_circuitBreakerNotify) {
@@ -95,7 +96,7 @@ const circuitBreaker = {
     if (!this.tripped) return false;
     // Auto-reset after the window expires (allow a probe)
     if (Date.now() - this.trippedAt > CIRCUIT_BREAKER_WINDOW_MS) {
-      console.log('🟡 Circuit breaker half-open — allowing probe request');
+      logger.info('🟡 Circuit breaker half-open — allowing probe request');
       const wasTripped = this.tripped;
       this.tripped = false;
       this.trippedAt = null;
@@ -146,7 +147,7 @@ async function resilientFetch(url, options, externalSignal) {
       throw firstErr; // User-initiated cancel — don't retry
     }
 
-    console.warn(`⚠️  Gateway attempt 1 failed: ${firstErr.message} — retrying in ${GATEWAY_RETRY_DELAY_MS}ms`);
+    logger.warn(`⚠️  Gateway attempt 1 failed: ${firstErr.message} — retrying in ${GATEWAY_RETRY_DELAY_MS}ms`);
     circuitBreaker.recordFailure();
 
     if (circuitBreaker.isOpen()) {
@@ -418,7 +419,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   // split into sentences, feed to onSentence() for TTS pipeline.
   if (!VOICE_STREAMING) {
     try {
-      console.log(`🔄 Non-streaming request to gateway (model: ${voiceModel})`);
+      logger.info(`🔄 Non-streaming request to gateway (model: ${voiceModel})`);
       const res = await resilientFetch(COMPLETIONS_URL, {
         method: 'POST',
         headers: {
@@ -436,7 +437,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
       if (!res.ok) {
         const body = await res.text();
-        console.error('Gateway Error:', res.status, body);
+        logger.error('Gateway Error:', res.status, body);
         throw new Error(`Gateway ${res.status}: ${body}`);
       }
 
@@ -450,7 +451,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       }
 
       if (!fullText || fullText.length < 2) {
-        console.warn('Gateway returned empty/whitespace response (subagent likely spawned)');
+        logger.warn('Gateway returned empty/whitespace response (subagent likely spawned)');
         return { text: '', empty: true };
       }
 
@@ -474,7 +475,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       if (err.name === 'AbortError') {
         return { text: '', aborted: true };
       }
-      console.error('Gateway failed (non-streaming):', err.message);
+      logger.error('Gateway failed (non-streaming):', err.message);
       onSentence("I'm having trouble connecting right now. Try again?");
       return { text: "I'm having trouble connecting right now. Try again?" };
     }
@@ -499,7 +500,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
     if (!res.ok) {
       const body = await res.text();
-      console.error('Gateway Error:', res.status, body);
+      logger.error('Gateway Error:', res.status, body);
       throw new Error(`Gateway ${res.status}: ${body}`);
     }
 
@@ -521,14 +522,14 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           if (AGENT_DISPATCH_ACK_ENABLED) {
             try {
               const interim = await generateContextualInterim(userMessage);
-              console.log(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- contextual interim: "${interim}"`);
+              logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- contextual interim: "${interim}"`);
               onSentence(interim);
             } catch {
-              console.log(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- speaking generic interim`);
+              logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- speaking generic interim`);
               onSentence('One moment.');
             }
           } else {
-            console.log(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- speaking interim`);
+            logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- speaking interim`);
             onSentence('One moment.');
           }
         }
@@ -648,7 +649,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     // Stay silent -- don't ack, the result will come back via webhook.
     const cleanedFull = trimForVoice(fullText);
     if (!cleanedFull || cleanedFull.length < 2) {
-      console.warn('Gateway returned empty/whitespace response (subagent likely spawned)');
+      logger.warn('Gateway returned empty/whitespace response (subagent likely spawned)');
       return { text: '', empty: true };
     }
 
@@ -658,7 +659,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     if (err.name === 'AbortError') {
       return { text: '', aborted: true };
     }
-    console.error('Gateway failed:', err.message);
+    logger.error('Gateway failed:', err.message);
 
     // Flush whatever we have
     if (buffer && buffer.trim()) {
@@ -734,7 +735,7 @@ export async function generateResponse(userMessage, history = [], signal, option
     if (err.name === 'AbortError') {
       return { text: '', aborted: true };
     }
-    console.error('Gateway failed:', err.message);
+    logger.error('Gateway failed:', err.message);
     return { text: "I'm having trouble connecting right now. Try again?" };
   }
 }
@@ -784,7 +785,7 @@ export async function generateAck(userMessage) {
     return text || 'On it.';
   } catch (err) {
     clearTimeout(timer);
-    console.warn(`⚡ Ack generation failed (${err.message}) — using fallback`);
+    logger.warn(`⚡ Ack generation failed (${err.message}) — using fallback`);
     return 'On it.';
   }
 }
@@ -894,7 +895,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
     return text;
   } catch (err) {
     clearTimeout(timer);
-    console.warn(`⚡ Contextual ack timed out or failed (${err.message}) — using canned fallback`);
+    logger.warn(`⚡ Contextual ack timed out or failed (${err.message}) — using canned fallback`);
     return getNextCannedAck();
   }
 }
@@ -1001,7 +1002,7 @@ Post results back to the same channel (channel: "discord", target: "${options.ch
     return { text };
 
   } catch (err) {
-    console.error('Text gateway failed:', err.message);
+    logger.error('Text gateway failed:', err.message);
     return { text: "Having trouble connecting to the gateway right now." };
   }
 }
@@ -1042,14 +1043,14 @@ Replace YOUR_RESPONSE_HERE with your actual spoken response (escaped for JSON). 
 
     if (!res.ok) {
       const body = await res.text();
-      console.error('Webhook dispatch failed:', res.status, body);
+      logger.error('Webhook dispatch failed:', res.status, body);
       return { dispatched: false, error: `${res.status}: ${body}` };
     }
 
-    console.log('📨 Dispatched to gateway webhook (async callback via /speak)');
+    logger.info('📨 Dispatched to gateway webhook (async callback via /speak)');
     return { dispatched: true };
   } catch (err) {
-    console.error('Webhook dispatch error:', err.message);
+    logger.error('Webhook dispatch error:', err.message);
     return { dispatched: false, error: err.message };
   }
 }
