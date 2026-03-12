@@ -51,6 +51,13 @@ const CIRCUIT_BREAKER_THRESHOLD = 3;   // failures to trip
 const CIRCUIT_BREAKER_WINDOW_MS = 60_000; // 60s rolling window
 
 // Circuit breaker state
+let _circuitBreakerNotify = null; // callback(type: 'open'|'close') — set by index.js
+
+/** Register a callback for circuit breaker state transitions. */
+export function setCircuitBreakerNotifyCallback(cb) {
+  _circuitBreakerNotify = cb;
+}
+
 const circuitBreaker = {
   failures: [],    // timestamps of recent failures
   tripped: false,  // true = stop trying
@@ -58,6 +65,7 @@ const circuitBreaker = {
 
   recordFailure() {
     const now = Date.now();
+    const wasTripped = this.tripped;
     this.failures.push(now);
     // Prune failures outside the window
     this.failures = this.failures.filter(t => now - t < CIRCUIT_BREAKER_WINDOW_MS);
@@ -65,6 +73,9 @@ const circuitBreaker = {
       this.tripped = true;
       this.trippedAt = now;
       console.error(`⚡ Circuit breaker tripped — gateway unavailable (${CIRCUIT_BREAKER_THRESHOLD} failures in ${CIRCUIT_BREAKER_WINDOW_MS / 1000}s)`);
+      if (!wasTripped && _circuitBreakerNotify) {
+        _circuitBreakerNotify('open');
+      }
     }
   },
 
@@ -74,6 +85,9 @@ const circuitBreaker = {
       console.log('🟢 Circuit breaker reset — gateway available');
       this.tripped = false;
       this.trippedAt = null;
+      if (_circuitBreakerNotify) {
+        _circuitBreakerNotify('close');
+      }
     }
   },
 
@@ -82,8 +96,12 @@ const circuitBreaker = {
     // Auto-reset after the window expires (allow a probe)
     if (Date.now() - this.trippedAt > CIRCUIT_BREAKER_WINDOW_MS) {
       console.log('🟡 Circuit breaker half-open — allowing probe request');
+      const wasTripped = this.tripped;
       this.tripped = false;
       this.trippedAt = null;
+      if (wasTripped && _circuitBreakerNotify) {
+        _circuitBreakerNotify('close');
+      }
       return false;
     }
     return true;

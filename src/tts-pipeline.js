@@ -5,6 +5,8 @@
  * Previous version fired all requests immediately and only gated the return.
  */
 
+const MAX_QUEUE_SIZE = parseInt(process.env.TTS_QUEUE_MAX ?? '30');
+
 export class TtsPipeline {
   constructor(synthesizeFn, audioQueue, options = {}) {
     this.synthesize = synthesizeFn;
@@ -24,11 +26,18 @@ export class TtsPipeline {
   
   /**
    * Add a sentence. Returns immediately — generation starts when a slot opens.
+   * Drops the oldest queued item if queue exceeds MAX_QUEUE_SIZE.
    */
   add(sentence) {
     if (this._cleared) return;
     const index = this.nextIndex++;
     this.queue.push({ sentence, index });
+
+    if (this.queue.length > MAX_QUEUE_SIZE) {
+      const dropped = this.queue.shift();
+      console.warn(`[tts] Queue full (${this.queue.length + 1}/${MAX_QUEUE_SIZE}), dropping oldest sentence (index ${dropped.index})`);
+    }
+
     this._processQueue();
   }
   
@@ -62,7 +71,8 @@ export class TtsPipeline {
   }
   
   /**
-   * Play completed sentences in order
+   * Play completed sentences in order.
+   * Prunes the completed Map if it grows beyond MAX_QUEUE_SIZE * 2.
    */
   _playReady() {
     while (this.completed.has(this.nextPlayIndex)) {
@@ -74,7 +84,18 @@ export class TtsPipeline {
       }
       this.nextPlayIndex++;
     }
-    
+
+    // Prune completed Map if it has grown too large (e.g. playback fell behind)
+    const completedCap = MAX_QUEUE_SIZE * 2;
+    if (this.completed.size > completedCap) {
+      const sortedKeys = [...this.completed.keys()].sort((a, b) => a - b);
+      const toRemove = sortedKeys.slice(0, this.completed.size - completedCap);
+      for (const k of toRemove) {
+        this.completed.delete(k);
+      }
+      console.warn(`[tts] completed Map pruned ${toRemove.length} old entries (was over ${completedCap} cap)`);
+    }
+
     // If everything is done, resolve drain
     if (this._drainResolve && this.queue.length === 0 && this.activeCount === 0 && this.completed.size === 0) {
       this._drainResolve();

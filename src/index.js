@@ -21,7 +21,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY } from './wakeword.js';
@@ -29,7 +29,7 @@ import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, cl
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback } from './alert-webhook.js';
 import { getTTSHealth } from './tts.js';
-import { getSTTHealth } from './stt.js';
+import { getSTTHealth, checkSttHealth } from './stt.js';
 import { isTldrToggleCommand, setTldrMode, isTldrModeEnabled, generateTldr, isTranscriptToggleCommand, setTranscriptMode, isTranscriptModeEnabled, isAskModeToggleCommand, setAskMode, isAskModeEnabled } from './tldr-mode.js';
 import { isMobileModeToggle, setMobileMode, isMobileModeEnabled } from './mobile-mode.js';
 import { isTtsToggleCommand, setTtsProvider, getCurrentTtsProvider } from './tts-toggle.js';
@@ -777,7 +777,7 @@ class AudioQueue {
         audioSource = padded;
       }
     }
-    try { await playAudio(audioSource); } catch (err) { console.error('Queue playback error:', err.message); }
+    try { await playAudioEnhanced(audioSource); } catch (err) { console.error('Queue playback error:', err.message); }
     // Clean up TTS temp file after playback
     try { unlinkSync(audioSource); } catch {}
     setImmediate(() => this.playNext());
@@ -813,7 +813,7 @@ async function briefPendingAlerts(userId) {
   }
   
   const audio = await synthesizeSpeech(briefing);
-  if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+  if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   markBotResponse(userId, { followUpLikely: true }); // alerts always invite follow-up
 
   // Inject alert context into conversation history so gateway agent can handle follow-ups
@@ -855,7 +855,7 @@ async function briefPendingHandoffs(userId) {
   }
   
   const audio = await synthesizeSpeech(briefing);
-  if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+  if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   markBotResponse(userId, { followUpLikely: true }); // handoffs invite follow-up
 
   // Inject handoff context into conversation history so gateway agent has it
@@ -966,7 +966,19 @@ client.once('ready', async () => {
 
   // Wire up activity feed posting for /speak endpoint
   setPostActivityCallback((message) => postActivity(message));
-  
+
+  // Wire up circuit breaker Discord notifications
+  setCircuitBreakerNotifyCallback((type) => {
+    const cbChannelId = process.env.DISCORD_CIRCUIT_BREAKER_CHANNEL;
+    if (!cbChannelId || !client.isReady()) return;
+    const msg = type === 'open'
+      ? '⚠️ Gateway circuit breaker OPEN — gateway unreachable'
+      : '✅ Gateway circuit breaker CLOSED — gateway recovered';
+    client.channels.fetch(cbChannelId)
+      .then(ch => ch.send(msg))
+      .catch(() => {});
+  });
+
   // Wire up text channel posting for /speak endpoint (belt and suspenders)
   setPostToTextCallback((message) => postToTextChannel(message));
   
@@ -1190,7 +1202,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           .replace('claude-haiku-4-5', 'Claude Haiku')
           .replace('gpt-5.3-codex', 'Codex');
         const audio = await synthesizeSpeech(`Jarvis online. Using ${modelLabel}.`);
-        if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+        if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
       } catch {}
       
       // ── Auto-Brief: Check for active context ──────────────────────
@@ -1207,7 +1219,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             const briefMsg = `${context.topic ? context.topic + '. ' : ''}${context.summary.substring(0, 300)}`;
             const briefAudio = await synthesizeSpeech(briefMsg);
             if (briefAudio) {
-              await playAudio(briefAudio);
+              await playAudioEnhanced(briefAudio);
               try { unlinkSync(briefAudio); } catch {}
             }
             // Clear the context after briefing
@@ -1863,7 +1875,7 @@ async function joinChannel(voiceChannelId, options = {}) {
 async function playGreeting() {
   try {
     const audio = await synthesizeSpeech('Jarvis online. Voice channel is live.');
-    if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+    if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   } catch (err) {
     console.error('Greeting failed:', err.message);
   }
@@ -2397,7 +2409,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       if (success) {
         console.log(`🎙️ Voice TL;DR mode ${newState}`);
         const ack = await synthesizeSpeech(`Voice TL;DR mode ${newState}.`);
-        if (ack) { await playAudio(ack); try { unlinkSync(ack); } catch {} }
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
       return;
     }
@@ -2410,7 +2422,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       if (success) {
         console.log(`📝 Voice full transcript mode ${newState}`);
         const ack = await synthesizeSpeech(`Full transcript mode ${newState}.`);
-        if (ack) { await playAudio(ack); try { unlinkSync(ack); } catch {} }
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
       return;
     }
@@ -2425,7 +2437,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const ack = await synthesizeSpeech(askToggle
           ? `Ask mode enabled. I'll confirm before taking any actions.`
           : `Ask mode disabled. Executing freely.`);
-        if (ack) { await playAudio(ack); try { unlinkSync(ack); } catch {} }
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
       return;
     }
@@ -2438,7 +2450,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const voiceName = ttsToggle === 'edge' ? 'Ryan' : 'JARVIS';
         console.log(`🎭 Switched to ${ttsToggle} TTS (${voiceName})`);
         const ack = await synthesizeSpeech(`Switched to ${voiceName} voice.`);
-        if (ack) { await playAudio(ack); try { unlinkSync(ack); } catch {} }
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
       return;
     }
@@ -2453,7 +2465,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const ack = await synthesizeSpeech(mobileToggle
           ? `Mobile mode on. I'll narrate as I work and keep you updated hands-free.`
           : `Mobile mode off. Back to standard voice output.`);
-        if (ack) { await playAudio(ack); try { unlinkSync(ack); } catch {} }
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
       return;
     }
@@ -2465,7 +2477,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (ALLOWED_USERS.includes(userId) && cancelEnrollMatch && enrollmentState.active) {
       enrollmentState.cancel();
       const audio = await synthesizeSpeech('Enrollment cancelled.');
-      if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+      if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
       return;
     }
     // "restart enrollment" — wipe voiceprints and start fresh
@@ -2491,7 +2503,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       console.log('Learn mode started — adding samples to voiceprint');
       postToCC('🎙️ Learn Mode', 'Speak naturally. Each clip improves your voiceprint. Say **"done"** to save.');
       const audio = await synthesizeSpeech('Learn mode on. Just talk naturally and I\'ll add each clip to your voiceprint. Say done when finished.');
-      if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+      if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
       return;
     }
 
@@ -2510,7 +2522,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         `[1/${enrollmentState.clipsNeeded}] Repeat: **${firstPrompt}**`,
       ].join('\n'));
       const audio = await synthesizeSpeech(`Voice enrollment. ${enrollmentState.clipsNeeded} phrases. First: ${firstPrompt}`);
-      if (audio) { await playAudio(audio); try { unlinkSync(audio); } catch {} }
+      if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
       return;
     }
 
@@ -2521,7 +2533,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       console.log(`⛔ Interrupt command: "${rawTranscript}"`);
       cancelAllTasks();
       const stopAudio = await synthesizeSpeech('Stopped.');
-      if (stopAudio) { await playAudio(stopAudio); try { unlinkSync(stopAudio); } catch {} }
+      if (stopAudio) { await playAudioEnhanced(stopAudio); try { unlinkSync(stopAudio); } catch {} }
       return;
     }
 
@@ -2530,7 +2542,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (!trimmed || trimmed.length < 2) {
       markBotResponse(userId);
       const chime = await synthesizeSpeech('Yes?');
-      if (chime) { playAudio(chime).then(() => { try { unlinkSync(chime); } catch {} }).catch(() => {}); }
+      if (chime) { playAudioEnhanced(chime).then(() => { try { unlinkSync(chime); } catch {} }).catch(() => {}); }
       return;
     }
     
@@ -2581,7 +2593,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (err.message && err.message.includes('STT failed') && !err.message.includes('Empty transcript')) {
       try {
         const failAudio = await synthesizeSpeech("I couldn't understand that. Could you try again?");
-        if (failAudio) { await playAudio(failAudio); try { unlinkSync(failAudio); } catch {} }
+        if (failAudio) { await playAudioEnhanced(failAudio); try { unlinkSync(failAudio); } catch {} }
       } catch {}
     }
   } finally {
@@ -3016,8 +3028,10 @@ function prependSilence(audioPath, durationMs) {
 }
 
 // ── Audio Playback ───────────────────────────────────────────────────
+// playAudioEnhanced wraps the base speechPlayAudio from speech-output.js with
+// Bluetooth silence padding and server-mute logic needed by the voice bot.
 
-async function playAudio(audioPath) {
+async function playAudioEnhanced(audioPath) {
   isSpeaking = true;
   // Mute owner if not already handled by audioQueue
   const standalonePlay = !audioQueue.playing;
@@ -3173,5 +3187,8 @@ if (missing.length > 0) {
   console.error('[startup] See .env.example for reference. Exiting.');
   process.exit(1);
 }
+
+// STT provider health check — warns if local provider unreachable, never exits
+checkSttHealth().catch(() => {});
 
 client.login(process.env.DISCORD_TOKEN);

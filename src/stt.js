@@ -679,3 +679,29 @@ async function transcribeWithVosk(wavPath) {
     throw err;
   }
 }
+
+/**
+ * Health check for the configured STT provider.
+ * External providers (deepgram, openai) are skipped — they're always assumed reachable.
+ * Local providers (faster-whisper, whisper-server, mlx-whisper, vosk) get a GET /health probe.
+ * Does not exit on failure — allows graceful degradation.
+ */
+export async function checkSttHealth() {
+  const provider = process.env.STT_PROVIDER ?? 'faster-whisper';
+  const url = process.env.STT_URL ?? process.env.WHISPER_URL ?? process.env.MLX_WHISPER_URL;
+
+  if (!url || provider.includes('deepgram') || provider.includes('openai')) {
+    console.log(`[stt] Provider ${provider} — skipping health check (external or no URL configured)`);
+    return;
+  }
+
+  const baseUrl = url.replace(/\/transcribe$/, '').replace(/\/$/, '');
+  try {
+    const res = await fetch(baseUrl + '/health', { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.log(`[stt] Provider ${provider} healthy at ${baseUrl}`);
+  } catch (err) {
+    console.error(`[stt] WARNING: Provider ${provider} unreachable at ${baseUrl}: ${err.message}`);
+    console.error('[stt] Bot will start but speech recognition will fail until STT is available');
+  }
+}
