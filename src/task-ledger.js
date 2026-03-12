@@ -37,11 +37,11 @@ export const TaskState = {
 };
 
 // How long before a task is considered orphaned (5 minutes)
-const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
+const ORPHAN_THRESHOLD_MS = parseInt(process.env.TASK_ORPHAN_THRESHOLD_MS ?? '300000');
 // How long to keep completed tasks in ledger (1 hour)
 const COMPLETED_TTL_MS = 60 * 60 * 1000;
 // Max ledger entries to prevent unbounded growth
-const MAX_ENTRIES = 100;
+const MAX_ENTRIES = parseInt(process.env.TASK_LEDGER_MAX ?? '100');
 
 let ledger = loadLedger();
 
@@ -239,7 +239,7 @@ export function getOrphanedTasks() {
  */
 export function getPendingFollowups() {
   const now = Date.now();
-  const FOLLOWUP_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
+  const FOLLOWUP_THRESHOLD_MS = parseInt(process.env.TASK_FOLLOWUP_THRESHOLD_MS ?? '120000');
   return ledger.filter(t => {
     if (t.state !== TaskState.STREAM_DONE && t.state !== TaskState.WORKING) return false;
     return now - t.updatedAt > FOLLOWUP_THRESHOLD_MS;

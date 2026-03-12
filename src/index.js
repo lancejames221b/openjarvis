@@ -268,6 +268,14 @@ function pruneConversations() {
 // Run pruning every 10 minutes
 setInterval(pruneConversations, 10 * 60 * 1000);
 
+// ── Tunable Constants (env var overrides) ────────────────────────────
+const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '60000');
+const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
+const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '40');
+const TTS_PIPELINE_CONCURRENCY = parseInt(process.env.TTS_PIPELINE_CONCURRENCY ?? '3');
+const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? '40');
+const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? '150');
+
 // Voice activity tracking
 const userSpeaking = new Map();
 const SILENCE_THRESHOLD_MS = process.env.VAD_TIMEOUT ? parseInt(process.env.VAD_TIMEOUT) : 1500;
@@ -443,6 +451,13 @@ function resetIdleSleepTimer() {
       _idleTimer = setTimeout(() => {
         if (getState() === 'IDLE' && !enrollmentState.active) {
           transition('SLEEP', 'idle-timeout');
+          // Clear any stale pending utterance so it can't dispatch after waking
+          if (_pendingUtterance.timer) {
+            clearTimeout(_pendingUtterance.timer);
+            _pendingUtterance.timer = null;
+            _pendingUtterance.parts = [];
+            _pendingUtterance.userId = null;
+          }
           console.log('IDLE -> SLEEP: no interaction after IDLE timeout');
         }
       }, IDLE_TO_SLEEP_MS);
@@ -489,6 +504,44 @@ function _applyImplicitWakeOnUnmute(userId) {
   markBotResponse(userId, { followUpLikely: false });
   resetIdleSleepTimer();
   console.log(`🎙️  Implicit wake window open — first utterance does not require wake word`);
+}
+
+/**
+ * Check if transcript is a sleep/sign-off command and handle the transition.
+ * Returns true if handled (caller should return), false if not a sleep command.
+ * If hasTaskContent(), sets autoSleepAfterTask flag and returns false (let task flow through).
+ * @param {string} transcript - lowercased, punctuation-stripped transcript
+ * @param {string} transitionReason - reason label passed to transition('SLEEP', ...)
+ * @param {string} userId
+ */
+async function handleSleepCheck(transcript, transitionReason, userId) {
+  if (!shouldSleep(transcript)) return false;
+  if (hasTaskContent(transcript)) {
+    // Tier 2: sign-off embedded in a task — let it flow, sleep after response
+    console.log(`Task detected with sign-off (${transitionReason}) — will auto-sleep after response: "${transcript}"`);
+    _pendingUtterance.autoSleepAfterTask = true;
+    return false;
+  }
+  // Tier 1: pure sleep command — no task content
+  console.log(`Sleep mode activated (${transitionReason}): "${transcript}"`);
+  transition('SLEEP', transitionReason);
+  // Clear pending utterance timer so a stale fragment can't re-wake immediately
+  if (_pendingUtterance.timer) {
+    clearTimeout(_pendingUtterance.timer);
+    _pendingUtterance.timer = null;
+    _pendingUtterance.parts = [];
+    _pendingUtterance.userId = null;
+  }
+  authenticatedSession = false;
+  endConversationWindow(userId);
+  const isConversational = /\b(sounds?\s*good|thanks?|thank\s*you|cheers|talk\s*to\s*you|catch\s*you|have\s*a\s*good|appreciate|later|all\s*set|im\s*(good|done|all set))\b/i.test(transcript);
+  const farewells = isConversational
+    ? ['Anytime, sir.', 'Of course.', 'Very good, sir.', 'Cheers.']
+    : ['Going quiet. Just say my name when you need me.'];
+  const farewell = farewells[Math.floor(Math.random() * farewells.length)];
+  const ack = await synthesizeSpeech(farewell);
+  if (ack) { audioQueue.add(ack); }
+  return true;
 }
 
 function isWakeUpCommand(transcript, speakerVerified = false) {
@@ -779,7 +832,7 @@ async function briefPendingAlerts(userId) {
   alertContext += `User was told: "${briefing}"\nIf they ask for details, provide the full alert information above.`;
   
   conv.history.push({ role: 'assistant', content: alertContext });
-  while (conv.history.length > 40) conv.history.shift();
+  while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
   
   clearAlerts();
 }
@@ -820,7 +873,7 @@ async function briefPendingHandoffs(userId) {
   context += `\nUser has been briefed via TTS. Continue from this context.`;
   
   conv.history.push({ role: 'assistant', content: context });
-  while (conv.history.length > 40) conv.history.shift();
+  while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
   
   clearHandoffs();
 }
@@ -1031,7 +1084,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
               if (!conversations.has(userId)) conversations.set(userId, { history: [], lastActive: Date.now() });
               const conv = conversations.get(userId);
               conv.history.push({ role: 'assistant', content: ctxBlock });
-              while (conv.history.length > 40) conv.history.shift();
+              while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
               conv.lastActive = Date.now();
             }
 
@@ -1193,7 +1246,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             if (!conversations.has(uid)) conversations.set(uid, { history: [], lastActive: Date.now() });
             const conv = conversations.get(uid);
             conv.history.push({ role: 'assistant', content: ctxBlock });
-            while (conv.history.length > 40) conv.history.shift();
+            while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
             conv.lastActive = Date.now();
           }
           // Wake bypass — just reconnected, don't require wake word for reply
@@ -2003,6 +2056,12 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
   }
 
   try {
+    // Per-request auth context — isolates auth state from concurrent handleSpeech calls.
+    // Reading global authenticatedSession here gives us the session state at the moment
+    // this specific speech event started processing, preventing races where a concurrent
+    // request's auth write bleeds into this request's decision logic.
+    const authCtx = { isOwner: authenticatedSession, userId };
+
     // 1. Transcribe (skip if already transcribed during queue)
     let rawTranscript;
     let sentiment = null;
@@ -2118,7 +2177,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         // Allow wake word even with TV-corrupted embeddings — "Jarvis" is rare on TV.
         // Session stays unauthenticated so follow-up commands need clean speaker verify.
         transition('ACTIVE', 'wake-word');
-        authenticatedSession = isVerifiedOwner(wakeSpkr, 'high');
+        authCtx.isOwner = isVerifiedOwner(wakeSpkr, 'high');
+        authenticatedSession = authCtx.isOwner;
         resetIdleSleepTimer();
         // Strip wake word prefix: try standard patterns first, fall back to fuzzy vocative
         let stripped = rawTranscript.replace(/^(hey\s+)?jarvis[,.]?\s*/i, '').trim();
@@ -2127,10 +2187,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           stripped = rawTranscript.replace(/^[a-zA-Z]{1,12}[,.]?\s+/i, '').trim();
         }
         if (stripped.length > 2) {
-          console.log(`SLEEP -> ACTIVE with command (authenticated=${authenticatedSession}): "${stripped}"`);
+          console.log(`SLEEP -> ACTIVE with command (authenticated=${authCtx.isOwner}): "${stripped}"`);
           // fall through to process
         } else {
-          console.log(`SLEEP -> ACTIVE (bare wake word, authenticated=${authenticatedSession})`);
+          console.log(`SLEEP -> ACTIVE (bare wake word, authenticated=${authCtx.isOwner})`);
           const audio = await synthesizeSpeech('Back online. What do you need?');
           if (audio) { audioQueue.add(audio); }
           markBotResponse(userId);
@@ -2147,13 +2207,15 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const wakeSpkr = sttResult?.speakerInfo;
         // Allow wake word even with TV-corrupted embeddings (see SLEEP comment above)
         transition('ACTIVE', 'wake-word-from-idle');
-        authenticatedSession = isVerifiedOwner(wakeSpkr, 'high');
+        authCtx.isOwner = isVerifiedOwner(wakeSpkr, 'high');
+        authenticatedSession = authCtx.isOwner;
         resetIdleSleepTimer();
         // fall through -- checkWakeWord handles transcript cleaning
       } else if (isContinuationPhrase(rawTranscript) && hasRecentContext(userId)) {
         // Follow-up to recent conversation -- no wake word needed
         console.log(`💬 Continuation phrase in IDLE: "${rawTranscript.substring(0, 50)}" -- resuming`);
         transition('ACTIVE', 'continuation-from-idle');
+        authCtx.isOwner = true;
         authenticatedSession = true; // trust context -- was authenticated before IDLE
         resetIdleSleepTimer();
         // fall through to process
@@ -2161,6 +2223,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         // Verified owner responding to an alert/prompt -- speaker ID is the auth
         console.log(`Owner response to alert/prompt in IDLE (speaker=${spkr.confidence} tier=${spkr.confidence_tier}) -- no wake word needed`);
         transition('ACTIVE', 'owner-response-from-idle');
+        authCtx.isOwner = true;
         authenticatedSession = true;
         resetIdleSleepTimer();
         // fall through to process
@@ -2182,28 +2245,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
     // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
     const preSleepCheck = rawTranscript.toLowerCase().replace(/[.,!?]/g, '').replace(/\bjarvis\b/gi, '').trim();
-    if (shouldSleep(preSleepCheck)) {
-      if (hasTaskContent(preSleepCheck)) {
-        // Tier 2: sign-off embedded in a task request — let the task flow through
-        console.log(`Task detected with sign-off (pre-wake) — will auto-sleep after response: "${preSleepCheck}"`);
-        _pendingUtterance.autoSleepAfterTask = true;
-        // DON'T return — fall through to wake word detection and task dispatch
-      } else {
-        // Tier 1: pure sleep command — no task content
-        console.log(`Sleep mode activated (no wake word): "${preSleepCheck}"`);
-        transition('SLEEP', 'voice-command-pre-wake');
-        authenticatedSession = false;
-        endConversationWindow(userId);
-        const isConversational = /\b(sounds?\s*good|thanks?|thank\s*you|cheers|talk\s*to\s*you|catch\s*you|have\s*a\s*good|appreciate|later|all\s*set|im\s*(good|done|all set))\b/i.test(preSleepCheck);
-        const farewells = isConversational
-          ? ['Anytime, sir.', 'Of course.', 'Very good, sir.', 'Cheers.']
-          : ['Going quiet. Just say my name when you need me.'];
-        const farewell = farewells[Math.floor(Math.random() * farewells.length)];
-        const ack = await synthesizeSpeech(farewell);
-        if (ack) { audioQueue.add(ack); }
-        return;
-      }
-    }
+    if (await handleSleepCheck(preSleepCheck, 'voice-command-pre-wake', userId)) return;
+    // If handleSleepCheck returned false with autoSleepAfterTask set, fall through to dispatch
 
     // Log sentiment if detected
     if (sentiment && sentiment.sentiment) {
@@ -2222,12 +2265,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     // ── Session-Based Speaker Authentication ──
     // Like Siri/Google: verify on wake word, trust the session after.
-    // sttResult.speakerInfo comes from ECAPA-TDNN in stt.js.
+    // Uses authCtx (per-request snapshot) to avoid races with concurrent handleSpeech calls.
+    // Writes still propagate to the global for session persistence (sleep timers, FSM, etc.).
     const speakerInfo = sttResult?.speakerInfo;
-    if (speakerInfo && !authenticatedSession) {
+    if (speakerInfo && !authCtx.isOwner) {
       // Wake word detected -- this is the authentication moment
       // confidence_tier from server: "high" (auto-accept), "medium" (accept in session context), "low" (reject)
       if (isVerifiedOwner(speakerInfo, 'high')) {
+        authCtx.isOwner = true;
         authenticatedSession = true;
         const tier = speakerInfo.confidence_tier || 'unknown';
         console.log(`Session authenticated (wake word confidence=${speakerInfo.confidence} tier=${tier})`);
@@ -2235,12 +2280,13 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         // Check for passphrase override
         const cleanLowerAuth = cleanedTranscript.toLowerCase().replace(/[.,!?]/g, '').trim();
         if (SESSION_PASSPHRASE && cleanLowerAuth.includes(SESSION_PASSPHRASE.toLowerCase())) {
+          authCtx.isOwner = true;
           authenticatedSession = true;
           console.log(`🔓 Session authenticated (passphrase override, confidence=${speakerInfo.confidence})`);
         } else {
           // Speaker doesn't match on wake word — reject with throttled rebuff
           const now = Date.now();
-          if (!handleSpeech._lastRebuff || now - handleSpeech._lastRebuff > 60000) {
+          if (!handleSpeech._lastRebuff || now - handleSpeech._lastRebuff > REBUFF_COOLDOWN_MS) {
             handleSpeech._lastRebuff = now;
             const rebuffs = [
               "I'm sorry, I only respond to my principal's voice.",
@@ -2259,7 +2305,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           return;
         }
       }
-    } else if (authenticatedSession) {
+    } else if (authCtx.isOwner) {
       // Session authenticated -- but still reject clearly non-owner audio (TV/ambient)
       // The per-utterance filter above catches most, but double-check here for safety
       if (speakerInfo && !isVerifiedOwner(speakerInfo, 'medium') && speakerInfo.confidence_tier === 'low') {
@@ -2284,29 +2330,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
     // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
     const cleanLower = cleanedTranscript.toLowerCase().replace(/[.,!?]/g, '').trim();
-    if (shouldSleep(cleanLower)) {
-      if (hasTaskContent(cleanLower)) {
-        // Tier 2: sign-off embedded in a task request — let the task flow through
-        console.log(`Task detected with sign-off (post-wake) — will auto-sleep after response: "${cleanLower}"`);
-        _pendingUtterance.autoSleepAfterTask = true;
-        // DON'T return — fall through to task dispatch
-      } else {
-        // Tier 1: pure sleep command — no task content
-        console.log(`Sleep mode activated: "${cleanLower}"`);
-        transition('SLEEP', 'voice-command');
-        authenticatedSession = false;
-        endConversationWindow(userId);
-        // Natural farewell — match the tone of the sign-off
-        const isConversational = /\b(sounds?\s*good|thanks?|thank\s*you|cheers|talk\s*to\s*you|catch\s*you|have\s*a\s*good|appreciate|later|all\s*set|im\s*(good|done|all set))\b/i.test(cleanLower);
-        const farewells = isConversational
-          ? ['Anytime, sir.', 'Of course.', 'Very good, sir.', 'Cheers.']
-          : ['Going quiet. Just say my name when you need me.'];
-        const farewell = farewells[Math.floor(Math.random() * farewells.length)];
-        const ack = await synthesizeSpeech(farewell);
-        if (ack) { audioQueue.add(ack); }
-        return;
-      }
-    }
+    if (await handleSleepCheck(cleanLower, 'voice-command', userId)) return;
+    // If handleSleepCheck returned false with autoSleepAfterTask set, fall through to task dispatch
     // ──────────────────────────────────────────────────────
 
     // ── Enrollment Gating: no voiceprint enrolled (strict mode) ──
@@ -2517,7 +2542,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     
     // Add user message to history immediately
     conv.history.push({ role: 'user', content: transcript });
-    while (conv.history.length > 40) conv.history.shift();
+    while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
     
     // Resolve speaker display name for multi-user identification
     let speakerName = null;
@@ -2535,7 +2560,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const now = Date.now();
     if (!handleSpeech._recentTranscripts) handleSpeech._recentTranscripts = new Map();
     const lastSeen = handleSpeech._recentTranscripts.get(transcriptKey);
-    if (lastSeen && now - lastSeen < 15000) {
+    if (lastSeen && now - lastSeen < TRANSCRIPT_DEDUP_MS) {
       console.log(`⏭️  Transcript dedup: skipping duplicate "${transcript.substring(0, 40)}..." (${now - lastSeen}ms ago)`);
       return;
     }
@@ -2642,7 +2667,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // TTS pipeline for parallel sentence generation
     const ttsPipeline = new TtsPipeline(synthesizeSpeech, audioQueue, {
-      maxConcurrent: 3,
+      maxConcurrent: TTS_PIPELINE_CONCURRENCY,
       onError: (err) => console.error(`TTS pipeline error for task #${taskId}:`, err.message),
     });
     
@@ -2657,8 +2682,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // 3. Smaller chunks flush sooner → first audio arrives faster
     // 4. <p> markers still create natural pauses between paragraphs
     
-    const BATCH_FLUSH_MIN = 40;   // Min chars before flushing -- lower for faster first-audio
-    const BATCH_FLUSH_MAX = 150;  // Max chars before forced flush (keeps chunks digestible)
+    const BATCH_FLUSH_MIN = BATCH_FLUSH_MIN_CHARS;   // Min chars before flushing -- lower for faster first-audio
+    const BATCH_FLUSH_MAX = BATCH_FLUSH_MAX_CHARS;  // Max chars before forced flush (keeps chunks digestible)
     let batchText = '';
     let batchNum = 0;
     
@@ -2852,7 +2877,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     const conv = conversations.get(userId);
     if (conv) {
       conv.history.push({ role: 'assistant', content: fullText });
-      while (conv.history.length > 40) conv.history.shift();
+      while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
     }
 
     // Detect if response invites follow-up (extends conversation window)
@@ -3019,6 +3044,9 @@ async function playAudio(audioPath) {
     let resolved = false;
     let onIdle, onError, timeoutId, checkInterval;
 
+    // finish() is idempotent (resolved guard) and called by ALL exit paths:
+    //   onIdle (normal completion), onError (player error),
+    //   timeoutId (safety cap), checkInterval (poll fallback).
     const finish = (reason) => {
       if (resolved) return;
       resolved = true;
