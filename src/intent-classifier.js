@@ -133,16 +133,46 @@ const SLEEP_PATTERNS = [
 const SIGNOFF_COMPOUND = /\b(sounds?\s*good|thanks?(\s*you)?|cheers|appreciate\s*it|perfect)\b/i;
 const SIGNOFF_CLOSER = /\b(jarvis|talk\s*to\s*you|later|bye|good\s*night|see\s*you|take\s*care|thats?\s*(all|it)|peace|im\s*(done|out|good)|have\s*a\s*good)/i;
 
+// ── Env-configurable extra sleep/wake words ──────────────────────────────────
+// SLEEP_WORDS: comma-separated phrases appended to SLEEP_PATTERNS at first call
+// SLEEP_WAKE_WORDS: comma-separated phrases used by isEnvWakeFromSleep() in fsm.js
+// Lazy-parsed (on first shouldSleep call) so dotenv has time to load.
+let _extraSleepPatterns = null;
+function getExtraSleepPatterns() {
+  if (_extraSleepPatterns !== null) return _extraSleepPatterns;
+  const raw = process.env.SLEEP_WORDS || '';
+  _extraSleepPatterns = raw
+    .split(',')
+    .map(w => w.trim().toLowerCase())
+    .filter(Boolean)
+    .map(w => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+  return _extraSleepPatterns;
+}
+
+// Exported so fsm.js can check SLEEP_WAKE_WORDS without duplicating parse logic
+let _extraWakeFromSleepWords = null;
+export function getExtraWakeFromSleepWords() {
+  if (_extraWakeFromSleepWords !== null) return _extraWakeFromSleepWords;
+  const raw = process.env.SLEEP_WAKE_WORDS || '';
+  _extraWakeFromSleepWords = raw
+    .split(',')
+    .map(w => w.trim().toLowerCase())
+    .filter(Boolean);
+  return _extraWakeFromSleepWords;
+}
+
 /**
  * Detect sleep/mute commands — bot should transition to SLEEP state.
  * Works for both pre-wake (no wake word) and post-wake contexts.
  * Includes compound sign-offs: "sounds good jarvis", "thanks, talk to you later"
+ * Extra patterns from SLEEP_WORDS env var are appended at first call.
  * @param {string} text - Cleaned transcript text
  * @returns {boolean} true if this is a sleep command
  */
 export function shouldSleep(text) {
   const clean = text.toLowerCase().replace(/[.,!?']/g, '').trim();
   if (SLEEP_PATTERNS.some(p => p.test(clean))) return true;
+  if (getExtraSleepPatterns().some(p => p.test(clean))) return true;
 
   // Compound sign-off: gratitude/acknowledgment + closer/name, max 8 words
   // "sounds good jarvis" / "thanks jarvis talk to you later" / "sounds good thank you"

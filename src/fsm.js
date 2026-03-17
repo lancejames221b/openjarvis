@@ -6,7 +6,7 @@
 
 import { getState, transition } from './bot-state.js';
 import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from './wakeword.js';
-import { hasTaskContent, shouldSleep } from './intent-classifier.js';
+import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from './intent-classifier.js';
 import logger from './logger.js';
 
 // ── FSM Sleep/Idle Timers ─────────────────────────────────────────────
@@ -77,6 +77,13 @@ export const WAKE_UP_PATTERNS = [
 export function isWakeUpCommand(transcript, speakerVerified = false) {
   const clean = transcript.trim().replace(/[.,!?;:]+$/g, '');
   if (WAKE_UP_PATTERNS.some(p => p.test(clean))) return true;
+
+  // Extra wake-from-sleep words from SLEEP_WAKE_WORDS env var
+  const extraWake = getExtraWakeFromSleepWords();
+  if (extraWake.length > 0) {
+    const lower = clean.toLowerCase();
+    if (extraWake.some(w => lower.includes(w))) return true;
+  }
 
   if (WAKE_WORD_FUZZY && speakerVerified) {
     const lower = clean.toLowerCase();

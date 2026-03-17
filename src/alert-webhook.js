@@ -531,6 +531,53 @@ app.post('/stop', async (req, res) => {
 });
 
 /**
+ * POST /sleep_mode — Programmatically toggle bot sleep state
+ *
+ * Body: { "action": "sleep" | "wake" | "status" }
+ *
+ * Responses:
+ *   200  { ok: true, state: "SLEEP",  previous: "ACTIVE" }   — on sleep
+ *   200  { ok: true, state: "ACTIVE", previous: "SLEEP"  }   — on wake
+ *   200  { ok: true, state: <string> }                        — on status
+ *   400  { ok: false, error: "invalid action" }
+ *   401  Unauthorized
+ *
+ * Used by OpenClaw sub-agents and cron jobs to put Jarvis to sleep/wake
+ * without relying on voice commands.
+ */
+app.post('/sleep_mode', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { action } = req.body || {};
+  if (!action || !['sleep', 'wake', 'status'].includes(action)) {
+    return res.status(400).json({ ok: false, error: 'invalid action — expected sleep, wake, or status' });
+  }
+
+  const previous = getState();
+
+  if (action === 'status') {
+    return res.json({ ok: true, state: previous });
+  }
+
+  if (action === 'sleep') {
+    transition('SLEEP', 'api-request');
+    logger.info(`😴 /sleep_mode: transitioned ${previous} → SLEEP via API`);
+    return res.json({ ok: true, state: 'SLEEP', previous });
+  }
+
+  // action === 'wake'
+  transition('ACTIVE', 'api-request');
+  // Restart idle/sleep timers so bot auto-sleeps again if voice goes quiet
+  try {
+    const { resetIdleSleepTimer } = await import('./fsm.js').catch(() => ({}));
+    if (typeof resetIdleSleepTimer === 'function') resetIdleSleepTimer();
+  } catch (_) { /* non-fatal */ }
+  logger.info(`⏰ /sleep_mode: transitioned ${previous} → ACTIVE via API`);
+  return res.json({ ok: true, state: 'ACTIVE', previous });
+});
+
+/**
  * POST /replay — Replay last spoken TTS phrase (CV2 button callback)
  */
 app.post('/replay', async (req, res) => {
@@ -1137,6 +1184,9 @@ async function sendTextNotification(alert) {
     logger.error(`❌ Failed to send DM: ${err.message}`);
   }
 }
+
+// Export the express app for testing (tests start their own server on a random port)
+export { app };
 
 export function startAlertWebhook() {
   const TAILSCALE_IP = process.env.TAILSCALE_IP || 'localhost';
