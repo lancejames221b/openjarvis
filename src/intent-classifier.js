@@ -241,24 +241,29 @@ const COHERENCE_MAX_WORDS = 8;
  * Only triggers when wake word was NOT used and utterance is short.
  *
  * Two layers:
- * 1. SIDE_TALK_RE: explicit filler/social phrases
+ * 1. SIDE_TALK_RE: explicit filler/social phrases (always active)
  * 2. Coherence gate: short fragment (≤8 words) with no task verb = background noise, drop silently
+ *    — SKIPPED when inConversationWindow is true (short follow-up replies are legitimate)
  *
  * @param {string} text - Cleaned transcript
  * @param {boolean} wakeWordUsed - Whether wake word was literally spoken
+ * @param {boolean} [inConversationWindow=false] - Whether we're inside an active conversation window
  * @returns {boolean} true if this is side-talk to be dropped
  */
-export function isSideTalk(text, wakeWordUsed) {
+export function isSideTalk(text, wakeWordUsed, inConversationWindow = false) {
   if (wakeWordUsed) return false;
   if (text.length >= 60) return false;
   const clean = text.toLowerCase().replace(/[.,!?']/g, '').trim();
 
-  // Layer 1: explicit side-talk phrases
+  // Layer 1: explicit side-talk phrases (always active — even in conversation window)
   if (SIDE_TALK_RE.test(clean)) return true;
 
   // Layer 2: coherence gate — short fragment with no task verb → background noise
-  const words = clean.split(/\s+/).filter(Boolean);
-  if (words.length <= COHERENCE_MAX_WORDS && !TASK_VERB_RE.test(clean)) return true;
+  // Skip this gate when in conversation window: "what about Tuesday?" is a legitimate follow-up
+  if (!inConversationWindow) {
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length <= COHERENCE_MAX_WORDS && !TASK_VERB_RE.test(clean)) return true;
+  }
 
   return false;
 }

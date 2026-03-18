@@ -899,6 +899,13 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   if (joinedChannel && (!leftChannel || leftChannel !== joinedChannel)) {
     userDisconnected = false; // Reset disconnect flag on join
     logger.info(`👋 User joined voice channel ${joinedChannel}`);
+    // Apply implicit wake on join when owner is not muted — same as unmute flow.
+    // Allows Lance to start talking immediately after joining without wake word,
+    // as long as UNMUTE_IMPLICIT_WAKE is enabled. Voiceprint still required.
+    if (UNMUTE_IMPLICIT_WAKE && !newState.selfMute) {
+      applyImplicitWakeOnUnmute(newState.id, (val) => { authenticatedSession = val; });
+      logger.info(`🎙️ Implicit wake applied on join (owner joined unmuted)`);
+    }
     // Record channel: auto-start recording, skip greeting
     if (RECORD_CHANNEL_ID && joinedChannel === RECORD_CHANNEL_ID) {
       // Cancel pending stop timer if rejoining within grace period
@@ -2096,8 +2103,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     }
 
     // 3b. Side-talk — short non-directed speech in conversation window
-    if (isSideTalk(cleanedTranscript, wakeWordUsed)) {
-      logger.info(`💭 Side-talk dismissed (no wake word, short): "${cleanedTranscript}"`);
+    // Pass inConversationWindow so coherence gate doesn't drop short follow-up replies
+    const inConvWindow = hasRecentContext(userId);
+    if (isSideTalk(cleanedTranscript, wakeWordUsed, inConvWindow)) {
+      logger.info(`💭 Side-talk dismissed (no wake word, short, convWindow=${inConvWindow}): "${cleanedTranscript}"`);
       return;
     }
 
