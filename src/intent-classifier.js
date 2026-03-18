@@ -228,20 +228,39 @@ export function shouldDismiss(text) {
   return { dismiss: false };
 }
 
-const SIDE_TALK_RE = /^(yeah|no|uh huh|mm hmm|right|okay|sure|got it|yep|nope|exactly|totally|absolutely|definitely|seriously|honestly|literally|basically|i know|i mean|i think|i guess|you know|oh really|oh wow|oh no|oh my god|oh man|for real|same|true|facts|fair|word|bet|to me|for me|i said|i was|he was|she was|they were|we were|it was|that was|this is|thats|oh yeah|uh oh|hmm)\b/i;
+const SIDE_TALK_RE = /^(yeah|no|uh huh|mm hmm|right|okay|sure|got it|yep|nope|exactly|totally|absolutely|definitely|seriously|honestly|literally|basically|i know|i mean|i think|i guess|you know|oh really|oh wow|oh no|oh my god|oh man|for real|same|true|facts|fair|word|bet|to me|for me|i said|i was|he was|she was|they were|we were|it was|that was|this is|thats|oh yeah|uh oh|hmm|thank you|thanks|you too|good job|nice|cool|interesting|wow|huh|nah|yeah yeah|no no|alright|of course|of course not|sorry|my bad|no worries|no problem|sounds good|makes sense|got it|understood|noted|okay okay|mm|mhm|uh|um|ah|oh|yup|nope nope|right right)\b/i;
+
+// Task verbs — any utterance containing these is likely a real command, not side-talk
+const TASK_VERB_RE = /\b(check|search|find|look up|run|send|cancel|delete|remove|create|make|set|get|show|tell|read|write|update|fix|open|close|start|stop|play|pause|remind|schedule|call|move|list|pull|push|deploy|test|build|monitor|scan|add|help|explain|summarize|what is|whats|what are|how do|why did|when is|where is|who is|can you|could you|would you|do you|is there|any emails|any meetings|how many|how much|jarvis|hey)\b/i;
+
+// Max word count for coherence gate — fragments this short with no task verb are background chatter
+const COHERENCE_MAX_WORDS = 8;
 
 /**
  * Detect side-talk — short non-directed speech in conversation window bypass.
  * Only triggers when wake word was NOT used and utterance is short.
+ *
+ * Two layers:
+ * 1. SIDE_TALK_RE: explicit filler/social phrases
+ * 2. Coherence gate: short fragment (≤8 words) with no task verb = background noise, drop silently
+ *
  * @param {string} text - Cleaned transcript
  * @param {boolean} wakeWordUsed - Whether wake word was literally spoken
  * @returns {boolean} true if this is side-talk to be dropped
  */
 export function isSideTalk(text, wakeWordUsed) {
   if (wakeWordUsed) return false;
-  if (text.length >= 50) return false;
+  if (text.length >= 60) return false;
   const clean = text.toLowerCase().replace(/[.,!?']/g, '').trim();
-  return SIDE_TALK_RE.test(clean);
+
+  // Layer 1: explicit side-talk phrases
+  if (SIDE_TALK_RE.test(clean)) return true;
+
+  // Layer 2: coherence gate — short fragment with no task verb → background noise
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= COHERENCE_MAX_WORDS && !TASK_VERB_RE.test(clean)) return true;
+
+  return false;
 }
 
 // ── Task Content Detection ───────────────────────────────────────────────────
