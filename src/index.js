@@ -26,7 +26,7 @@ import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
-import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
+import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback } from './alert-webhook.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
@@ -2107,6 +2107,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const inConvWindow = hasRecentContext(userId);
     if (isSideTalk(cleanedTranscript, wakeWordUsed, inConvWindow)) {
       logger.info(`💭 Side-talk dismissed (no wake word, short, convWindow=${inConvWindow}): "${cleanedTranscript}"`);
+      return;
+    }
+
+    // 3c. Truncated fragment — VAD fired mid-sentence (pause > VAD_TIMEOUT).
+    // Silently drop rather than responding with "sounds like that got clipped."
+    // Only applies when no wake word was used (wake-word utterances proceed regardless).
+    if (!wakeWordUsed && isTruncatedFragment(rawTranscript)) {
+      logger.info(`✂️ Truncated fragment silently dropped: "${rawTranscript.substring(0, 60)}"`);
       return;
     }
 

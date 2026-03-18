@@ -103,6 +103,30 @@ export function isHallucination(rawTranscript) {
   return false;
 }
 
+// Trailing-fragment patterns — utterances that are clearly mid-sentence cut-offs.
+// These result from VAD firing during a pause (1.5s silence threshold).
+// Dropping silently is better than responding to "...so something is a"
+const TRAILING_FRAGMENT_RE = /(\.\.\.|…)$|(\s(a|an|the|to|of|in|at|on|and|but|or|so|is|are|was|were|be|been|being|do|did|have|had|my|your|our|their|this|that|these|those|with|for|from|by|as|if|then|than|because|when|where|while|which|who|how|what|why)\s*[.,!?]?\s*)$/i;
+
+/**
+ * Detect VAD-clipped mid-sentence fragments — utterances that ended because
+ * the speaker paused too long (VAD timeout) rather than finishing their thought.
+ *
+ * Silently drop these rather than responding with "sounds like that got clipped."
+ *
+ * @param {string} text - Cleaned or raw transcript
+ * @returns {boolean} true if this looks like a truncated fragment
+ */
+export function isTruncatedFragment(text) {
+  const trimmed = text.trim();
+  // Whisper ellipsis — explicit truncation signal
+  if (trimmed.endsWith('...') || trimmed.endsWith('…')) return true;
+  // Short utterance (< 10 words) ending with dangling article/preposition/conjunction
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length <= 12 && TRAILING_FRAGMENT_RE.test(trimmed)) return true;
+  return false;
+}
+
 // Superset of both pre-wake and post-wake sleep patterns
 const SLEEP_PATTERNS = [
   /^sleep$/i, /^stop$/i,

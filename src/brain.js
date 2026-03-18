@@ -32,11 +32,11 @@ const _defaultTextChannel = process.env.DISCORD_TEXT_CHANNEL_ID || ''; // Used i
 
 // ── Gateway Resilience: Timeout, Retry, Circuit Breaker ──────────────
 
-const ACK_MODEL = process.env.ACK_MODEL || 'anthropic-console/claude-sonnet-4-6';
+const ACK_MODEL = process.env.ACK_MODEL;
 const ACK_TIMEOUT_MS = 8_000; // 8s hard limit — ack should return in <2s
 const CONTEXTUAL_ACK_TIMEOUT_MS = 1_500; // 1.5s hard limit for contextual dispatch acks
 // Master ack feature flag. Set VOICE_ACK_ENABLED=false to suppress all "On it, sir." style responses.
-const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED !== 'false'; // default ON
+const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // default OFF
 // Agent dispatch ack — contextual, Jarvis-style spoken ack when a sub-agent is spawned.
 // Fires ONLY on sessions_spawn detection (not for direct answers).
 const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // default ON
@@ -208,14 +208,18 @@ Answer in 1-3 spoken sentences. Done. Examples: "What time is it?", "What's the 
 
 MODE 2 — ACTION (ANYTHING that requires doing something — scheduling, sending, searching, creating, checking, looking up, downloading, controlling devices, etc.):
 MANDATORY STEPS — you MUST follow these exactly:
-1. Call the sessions_spawn tool with the full task description. Do NOT say "On it" or any acknowledgment — just spawn silently. DO NOT answer the question yourself.
-2. The task prompt MUST end with this curl callback so the sub-agent speaks the result:
-   When complete, run: curl -s -X POST http://${_webhookHost}:${_webhookPort}/speak -H 'Authorization: Bearer ${SPEAK_TOKEN}' -H 'Content-Type: application/json' -d '{"message":"[1-2 sentence spoken result]","source":"task-complete"}'
-3. The sub-agent posts details to Discord #general (channel: discord, target: ${_defaultTextChannel}) and speaks the TL;DR via /speak.
+1. FIRST, output a brief spoken acknowledgment: "Checking that now." / "Looking into it." / "On it, sir."
+   This MUST be the FIRST text you generate — it tells the user you heard them. Insert <p> after the ack.
+2. Call sessions_spawn with mode "run" and the full task description.
+   - The task prompt should instruct the sub-agent to post detailed results to Discord #general (channel: discord, target: ${_defaultTextChannel}).
    ALWAYS use channel "discord" and target "${_defaultTextChannel}" unless I specify a different channel.
    NEVER use whatsapp, signal, or imessage for sub-agent output — Discord #general is the default.
-4. Your voice response ends after spawning. Say NOTHING. Stop generating text.
-   Exception: if the action is QUICK (< 5s, single tool call like time check or simple lookup), answer directly in MODE 1 style instead of spawning.
+   - For MOBILE MODE: include this curl in the task so the sub-agent can speak progress updates mid-task:
+     curl -s -X POST http://${_webhookHost}:${_webhookPort}/speak -H 'Authorization: Bearer ${SPEAK_TOKEN}' -H 'Content-Type: application/json' -d '{"message":"[progress update]","source":"task-progress"}'
+3. AFTER sessions_spawn returns, read the result and speak a 1-2 sentence TL;DR summary.
+   Example: "Done — your meeting is set for 3 PM tomorrow. Details in general." <p> "The invite went to the whole team."
+   If the sub-agent failed, say so: "That didn't work — [brief reason]. I'll post the error to general."
+4. Exception: if the action is QUICK (< 5s, single tool call like time check or simple lookup), answer directly in MODE 1 style instead of spawning.
 
 CRITICAL — YOU MUST CALL sessions_spawn FOR ANY ACTION.
 If the user asks you to schedule, create, send, check, look up, search, download, control, or DO anything — you MUST call sessions_spawn. NEVER answer with text alone for action requests.
@@ -232,13 +236,14 @@ VOICE OUTPUT RULES:
 - Weave lists into speech: "The top three are X, Y, and Z."
 - Insert <p> between paragraph breaks. No <p> at start or end.
 - Never announce tools — just report results. The user doesn't care about plumbing.
-- Do NOT say "On it" or "Give me a moment" — just start answering or spawn silently.
+- For MODE 2 actions: say a brief ack FIRST ("On it." / "Checking." / "One moment, sir.") so the user knows you heard them.
 
 STT NOISE TOLERANCE:
 - When STT input is ambiguous due to background noise (TV, music), interpret charitably using context rather than asking for clarification.
 - Only ask for clarification if the request is completely unintelligible or would cause an irreversible action (deleting data, sending messages to wrong people).
 - Prefer making a best-guess interpretation and acting on it. If wrong, user will correct you — that's faster than asking "did you mean X?"
 - Short fragments that sound like commands should be treated as commands, not questioned.
+- NEVER say "that got clipped", "sounds like that cut off", "that didn't come through", or any variation. If the input seems truncated or incomplete, either act on what you have or stay silent. Do not narrate the audio quality. The user knows their mic situation better than you do.
 
 CONTEXT AND CONVERSATION:
 - Resolve "that", "it", "the other one" from conversation history before asking to clarify.
@@ -412,7 +417,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   let buffer = ''; // Declare outside try so catch handler can access it
   let fullText = ''; // Declare outside try so catch handler can check if anything was spoken
 
-  const voiceModel = isAskModeEnabled() ? 'anthropic-console/claude-opus-4-6' : (process.env.VOICE_MODEL || 'anthropic-console/claude-sonnet-4-6');
+  const voiceModel = isAskModeEnabled() ? process.env.VOICE_MODEL_ASK : process.env.VOICE_MODEL;
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
   // CLI providers (cursor-agent) don't support SSE. Fetch full response,
@@ -432,6 +437,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           user: SESSION_USER,
           stream: false,
           model: voiceModel,
+          thinking: { type: 'disabled' },
         }),
       }, signal);
 
@@ -495,6 +501,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         user: SESSION_USER,
         stream: true,
         model: voiceModel,
+        thinking: { type: 'disabled' },
       }),
     }, signal);
 
@@ -510,7 +517,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     let firstTokenReceived = false;
     let firstTokenTimerFired = false;
     let lastTokenTime = Date.now(); // Track when we last received a token
-    const PAUSE_THRESHOLD_MS = 2000; // If no tokens for 2s, emit buffer chunk
+    const PAUSE_THRESHOLD_MS = parseInt(process.env.VOICE_PAUSE_THRESHOLD_MS || '600', 10); // flush buffer if no tokens for this long
 
     // First-token timeout: if no streaming token arrives in 15s, speak interim feedback
     let firstTokenTimer = null;
@@ -717,7 +724,8 @@ export async function generateResponse(userMessage, history = [], signal, option
         messages,
         max_tokens: 8192,
         user: SESSION_USER,
-        model: isAskModeEnabled() ? 'anthropic-console/claude-opus-4-6' : (process.env.VOICE_MODEL || 'anthropic-console/claude-sonnet-4-6'),
+        model: isAskModeEnabled() ? process.env.VOICE_MODEL_ASK : process.env.VOICE_MODEL,
+        thinking: { type: 'disabled' },
       }),
     }, signal);
     
@@ -769,6 +777,7 @@ export async function generateAck(userMessage) {
         model: ACK_MODEL,
         stream: false,
         max_tokens: 30,
+        thinking: { type: 'disabled' },
         messages: [
           { role: 'system', content: ACK_SYSTEM },
           { role: 'user', content: userMessage },
@@ -871,6 +880,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
         model: ACK_MODEL,
         stream: false,
         max_tokens: 50,
+        thinking: { type: 'disabled' },
         messages: [
           { role: 'system', content: CONTEXTUAL_ACK_SYSTEM },
           { role: 'user', content: userPrompt },
@@ -925,6 +935,7 @@ export async function generateContextualInterim(userRequest) {
         model: ACK_MODEL,
         stream: false,
         max_tokens: 30,
+        thinking: { type: 'disabled' },
         messages: [
           { role: 'system', content: INTERIM_SYSTEM },
           { role: 'user', content: `Original request: "${userRequest}"\n\nIt's been 8+ seconds with no response yet. Generate a brief contextual "still working" message.` },
@@ -988,7 +999,8 @@ Post results back to the same channel (channel: "discord", target: "${options.ch
         messages,
         max_tokens: 8192,
         user: options.sessionUser || SESSION_USER,
-        model: process.env.VOICE_MODEL || 'anthropic-console/claude-sonnet-4-6',
+        model: process.env.VOICE_MODEL,
+        thinking: { type: 'disabled' },
       }),
     });
 
