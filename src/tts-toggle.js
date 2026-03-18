@@ -15,10 +15,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = `${__dirname}/../.env`;
 
 // TTS toggle patterns — "switch to edge", "use piper", etc.
+// NOTE: bare "<name> voice" pattern removed — "Jarvis voice" is ambiguous (could be topic, not command)
 const TTS_TOGGLE_PATTERNS = [
   /\b(switch|change)\s+to\s+(edge|piper|ryan|jarvis)\b/i,
   /\buse\s+(edge|piper|ryan|jarvis)\s+(voice|tts)?\b/i,
-  /\b(edge|piper|ryan|jarvis)\s+voice\b/i,
 ];
 
 /**

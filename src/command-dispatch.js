@@ -110,6 +110,16 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
     return { type: 'bare_wake' };
   }
 
+  // ── Ambiguous single-word after wake strip — pass raw transcript to brain ──
+  // e.g. "Jarvis voice" → stripped to "voice" → would confuse AI as TTS command
+  // When stripped transcript is a single ambiguous word, restore context by using rawTranscript.
+  const AMBIGUOUS_SINGLE_WORDS = new Set(['voice', 'audio', 'mode', 'model', 'channel']);
+  const bareWords = bareCheck.split(/\s+/);
+  if (bareWords.length === 1 && AMBIGUOUS_SINGLE_WORDS.has(bareWords[0].toLowerCase())) {
+    logger.info(`[voice] ambiguous single word "${bareCheck}" — restoring full transcript context`);
+    return { type: 'brain', transcript: rawTranscript };
+  }
+
   // ── Stop word filter ──────────────────────────────────────────────
   const normalizedTranscript = cleanedTranscript.trim().toLowerCase().replace(/[.,!?]+$/, '');
   if (STOP_WORDS.includes(normalizedTranscript)) {
