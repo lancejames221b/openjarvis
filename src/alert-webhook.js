@@ -383,6 +383,9 @@ app.post('/alert', async (req, res) => {
 let _isDuplicateContentFn = null;
 export function setDedupCallback(fn) { _isDuplicateContentFn = fn; }
 
+let _didTaskSpeakInlineFn = null;
+export function setDidTaskSpeakInlineCallback(fn) { _didTaskSpeakInlineFn = fn; }
+
 app.post('/speak', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) {
@@ -428,6 +431,20 @@ app.post('/speak', async (req, res) => {
     postActivityCallback(`🔔 **${source || 'Cron'}**: ${message.substring(0, 200)}`);
   }
   
+  // ── Suppress redundant task-progress voice ──
+  // If the task already spoke its result inline (streaming TTS pipeline),
+  // don't speak the /speak callback — post to text only. Prevents double-speaking
+  // on quick commands like "open X on my Mac" where both paths fire.
+  const isTaskProgress = source === 'task-progress';
+  const taskAlreadySpoke = isTaskProgress && _didTaskSpeakInlineFn && _didTaskSpeakInlineFn(taskId);
+  if (taskAlreadySpoke) {
+    logger.info(`🔇 /speak task-progress suppressed — task #${taskId} already spoke inline`);
+    if (postToTextCallback) {
+      postToTextCallback(`📝 *(text-only, task spoke inline)* ${message.substring(0, 300)}`);
+    }
+    return res.json({ ok: true, delivered: 'text-only-task-spoke-inline' });
+  }
+
   if (userInVoice && speakCallback) {
     // Speak immediately via TTS — voice is primary delivery
     logger.info(`🗣️  Speaking (${source || 'cron'}): "${message.substring(0, 60)}..."`);

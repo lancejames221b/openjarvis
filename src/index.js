@@ -27,7 +27,7 @@ import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
-import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback } from './alert-webhook.js';
+import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback } from './alert-webhook.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
@@ -645,6 +645,9 @@ client.once('ready', async () => {
   // Wire up cross-path content deduplication (shared between messageCreate + /speak)
   setDedupCallback(_isDuplicateContent);
 
+  // Wire up task-spoke-inline check so /speak can suppress redundant task-progress voice
+  setDidTaskSpeakInlineCallback(didTaskSpeakInline);
+
   // Wire follow-up detection into the TV noise filter (intent-classifier.js)
   // When a follow-up is expected, short phrases like "yes please" bypass the TV filter
   setFollowUpExpectedCallback(() => isFollowUpExpected());
@@ -1060,6 +1063,24 @@ function _isDuplicateContent(text) {
 
 // Expose content dedup for /speak endpoint (alert-webhook.js)
 export function isDuplicateContent(text) { return _isDuplicateContent(text); }
+
+// ── Task Spoke Inline Tracker ─────────────────────────────────────────
+// Tracks tasks that have already emitted TTS via the streaming pipeline.
+// Used by /speak handler to suppress redundant task-progress voice output
+// when the task already spoke its own result inline.
+const _taskSpokeInline = new Map(); // taskId -> timestamp
+const TASK_SPOKE_TTL_MS = 60_000; // 60s window
+
+export function markTaskSpokeInline(taskId) {
+  _taskSpokeInline.set(taskId, Date.now());
+}
+
+export function didTaskSpeakInline(taskId) {
+  if (!taskId) return false;
+  const ts = _taskSpokeInline.get(taskId);
+  if (!ts) return false;
+  return (Date.now() - ts) < TASK_SPOKE_TTL_MS;
+}
 
 // Periodic cleanup of message ID cache
 setInterval(() => {
@@ -2424,6 +2445,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       batchNum++;
       logger.info(`🔊 Chunk #${batchNum}: ${text.length} chars → pipeline`);
+      // Mark this task as having spoken inline — suppresses redundant /speak task-progress voice
+      if (batchNum === 1) markTaskSpokeInline(taskId);
       ttsPipeline.add(text);
     };
     
