@@ -116,6 +116,13 @@ export const WAKE_UP_PATTERNS = [
   new RegExp(`^(hey[,.]?\\s+)?${_wwEsc}\\b`, 'i'),
   // Greeting + wake word: "Good morning, Sonia"
   new RegExp(`^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\\s+${_wwEsc}\\b`, 'i'),
+  // "Jarvis" is always a valid wake word — permanent fallback regardless of VOICE_WAKE_WORD
+  // (so the core identity is always reachable even in Sonia/other modes)
+  ...(_ww !== 'jarvis' ? [
+    /^(jarvis[,.]?\s*)?(wake up|i'm back|come back|resume|start listening|online)/i,
+    /^(hey[,.]?\s+)?jarvis\b/i,
+    /^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\s+jarvis\b/i,
+  ] : []),
   // Full phrase list (auto-variants + mishears from WAKE_WORD_PHRASES)
   ...(_phrasePattern ? [_phrasePattern] : []),
 ];

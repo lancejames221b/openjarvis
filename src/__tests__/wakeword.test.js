@@ -83,22 +83,15 @@ describe('Wake word detection — isWakeUpCommand()', () => {
       expect(isWakeUpCommand('   ')).toBe(false);
     });
 
-    // Cross-mode: the non-configured wake word should NOT trigger (modes are exclusive)
-    if (ww !== 'jarvis') {
-      it('"Hey Jarvis" does NOT wake bot in non-Jarvis mode', () => {
-        expect(isWakeUpCommand('Hey Jarvis')).toBe(false);
-      });
+    // "Jarvis" is always a valid wake word regardless of VOICE_WAKE_WORD config
+    // It is the permanent core identity — always reachable in any mode
+    it('"Jarvis" always wakes the bot (universal fallback)', () => {
+      expect(isWakeUpCommand('Jarvis')).toBe(true);
+    });
 
-      it('"jarvis" alone does NOT wake bot in non-Jarvis mode', () => {
-        expect(isWakeUpCommand('jarvis')).toBe(false);
-      });
-    }
-
-    if (ww !== 'sonia') {
-      it('"Hey Sonia" does NOT wake bot in non-Sonia mode', () => {
-        expect(isWakeUpCommand('Hey Sonia')).toBe(false);
-      });
-    }
+    it('"Hey Jarvis" always wakes the bot (universal fallback)', () => {
+      expect(isWakeUpCommand('Hey Jarvis')).toBe(true);
+    });
   });
 
   describe('fuzzy wake word detection (speaker verified)', () => {
