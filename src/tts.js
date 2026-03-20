@@ -29,7 +29,7 @@ const STREAMING_TTS_ENABLED = process.env.STREAMING_TTS_ENABLED !== 'false'; // 
 const EDGE_TTS_BIN = process.env.EDGE_TTS_PATH || `${process.env.HOME}/.local/bin/edge-tts`;
 
 // ── TTS Provider ─────────────────────────────────────────────────────
-// TTS_PROVIDER controls which engine is used: 'edge' | 'piper' | 'openai'
+// TTS_PROVIDER controls which engine is used: 'edge' | 'piper' | 'openai' | 'chatterbox'
 // Read dynamically so runtime .env changes take effect on restart.
 const getTTSProvider = () => (process.env.TTS_PROVIDER || 'piper').toLowerCase();
 
@@ -39,6 +39,11 @@ const getTTSProvider = () => (process.env.TTS_PROVIDER || 'piper').toLowerCase()
 const isPiperEnabled = () => getTTSProvider() === 'piper' && process.env.PIPER_ENABLED !== 'false';
 const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:3336';
 const PIPER_MODEL = process.env.PIPER_MODEL || 'medium'; // medium (~1.5s) or high (~3.5s)
+
+// ── Chatterbox TTS (Lance voice clone) ───────────────────────────────
+// Lance's cloned voice via Chatterbox TTS. Only used when TTS_PROVIDER=chatterbox.
+// Runs as a local FastAPI service at CHATTERBOX_URL.
+const CHATTERBOX_URL = process.env.CHATTERBOX_URL || 'http://127.0.0.1:3340';
 
 // ── TTS Circuit Breaker ──────────────────────────────────────────────
 // After 3 Edge TTS failures within 5 minutes, stop trying for 5 minutes.
@@ -103,6 +108,9 @@ const TTS_CIRCUIT_BREAKER = {
 export function getTTSHealth() {
   const provider = getTTSProvider();
   const edge = TTS_CIRCUIT_BREAKER.getStatus();
+  if (provider === 'chatterbox') {
+    return `chatterbox-lance (fallback: none — text-only on failure)`;
+  }
   if (provider === 'piper' && process.env.PIPER_ENABLED !== 'false') {
     return `piper-jarvis (fallback: ${edge})`;
   }
@@ -172,6 +180,18 @@ export async function synthesizeSpeech(text) {
   const provider = getTTSProvider();
   logger.info(`🔊 TTS provider: ${provider}`);
 
+  // Chatterbox (Lance voice clone) — only when TTS_PROVIDER=chatterbox
+  if (provider === 'chatterbox') {
+    const result = await synthesizeChatterbox(sanitized);
+    if (result) return result;
+    logger.warn('⚠️ Chatterbox TTS failed, retrying once in 500ms...');
+    await new Promise(r => setTimeout(r, 500));
+    const retryResult = await synthesizeChatterbox(sanitized);
+    if (retryResult) return retryResult;
+    logger.warn('⚠️ Chatterbox TTS unavailable after retry — text-only mode');
+    return null;
+  }
+
   // Piper (JARVIS voice clone) — only when TTS_PROVIDER=piper
   if (provider === 'piper' && process.env.PIPER_ENABLED !== 'false') {
     const piperResult = await synthesizePiper(sanitized);
@@ -184,8 +204,41 @@ export async function synthesizeSpeech(text) {
     return null;
   }
 
-  // Edge TTS — default when TTS_PROVIDER=edge (or anything other than piper)
+  // Edge TTS — default when TTS_PROVIDER=edge (or anything other than piper/chatterbox)
   return synthesizeEdge(sanitized);
+}
+
+/**
+ * Synthesize via Chatterbox TTS (Lance voice clone)
+ * @param {string} text - Sanitized text to speak
+ * @returns {Promise<string|null>} Path to WAV file, or null if unavailable
+ */
+async function synthesizeChatterbox(text) {
+  try {
+    const res = await fetch(`${CHATTERBOX_URL}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(60000), // 60s — model inference takes time
+    });
+
+    if (!res.ok) {
+      logger.warn(`⚠️ Chatterbox TTS returned ${res.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const outputPath = join(TMP_DIR, `chatterbox_${Date.now()}.wav`);
+    const { writeFile } = await import('fs/promises');
+    await writeFile(outputPath, buffer);
+
+    const latency = res.headers.get('X-Chatterbox-Latency-Ms') || '?';
+    logger.info(`🎭 Chatterbox Lance TTS: ${latency}ms`);
+    return outputPath;
+  } catch (err) {
+    logger.warn(`⚠️ Chatterbox TTS unavailable: ${err.message}`);
+    return null;
+  }
 }
 
 /**
