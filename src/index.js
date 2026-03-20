@@ -1980,7 +1980,6 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const currentState = getState();
     const spkrTag = spkr ? `${spkr.confidence_tier}(${spkr.confidence})` : 'null';
     logger.info(`[FSM-gate] state=${currentState} speaker=${spkrTag} transcript="${rawTranscript.substring(0, 40)}..."`);
-    postActivity(`🎤 \`${currentState}\` speaker=${spkrTag} → "${truncate(rawTranscript, 100)}"`);
 
     // SLEEP: only wake-up commands pass (including fuzzy wake word when speaker verified)
     const spkrIsOwner = isVerifiedOwner(spkr, 'high');
@@ -2684,16 +2683,9 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       }
     }
     
-    // ── Smart Output Length Enforcement (Phase 3) ──
-    // Streaming already spoke every sentence via TTS pipeline above.
-    // Only post full text to text channel if response was long (no re-speak).
-    const outputResult = enforceOutputLength(fullText, tldrModeEnabled);
-    if (outputResult.wasTruncated && !userDisconnected) {
-      logger.info(`📏 Response was long (${fullText.length} chars) — posting full text to channel (already spoken via streaming)`);
-      // Post full response to text channel for reference
-      await postToTextChannel(`📝 **Full Response (Task #${taskId}):**\n\n${outputResult.full}`);
-      // NOTE: Do NOT re-speak here — streaming pipeline already delivered audio
-    }
+    // enforceOutputLength retained for TL;DR mode only — no channel posting needed here
+    // Full response is already in the task thread; streaming pipeline spoke everything.
+    if (tldrModeEnabled) enforceOutputLength(fullText, true);
     
     // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
     const transcriptModeEnabled = isTranscriptModeEnabled();
