@@ -279,8 +279,20 @@ export function isSideTalk(text, wakeWordUsed, inConversationWindow = false) {
   if (text.length >= 60) return false;
   const clean = text.toLowerCase().replace(/[.,!?']/g, '').trim();
 
-  // Layer 1: explicit side-talk phrases (always active — even in conversation window)
-  if (SIDE_TALK_RE.test(clean)) return true;
+  // Layer 1: explicit side-talk phrases
+  // Inside a conversation window, only drop if the ENTIRE utterance is a filler phrase
+  // (no follow-up question or task content appended after the filler)
+  if (SIDE_TALK_RE.test(clean)) {
+    if (inConversationWindow) {
+      // Check if there's anything meaningful after the matched filler
+      const words = clean.split(/\s+/).filter(Boolean);
+      const hasFollowUp = words.length > 3 || clean.includes('?') || TASK_VERB_RE.test(clean);
+      if (hasFollowUp) return false; // Let it through — "sounds good, how are you doing?" is real
+    } else {
+      return true;
+    }
+    return true; // Pure filler even in conv window
+  }
 
   // Layer 2: coherence gate — short fragment with no task verb → background noise
   // Skip this gate when in conversation window: "what about Tuesday?" is a legitimate follow-up
