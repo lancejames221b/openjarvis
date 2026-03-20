@@ -2584,9 +2584,15 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
               batchText += parts[1].trim() + ' ';
             }
           } else {
+            // Flush BEFORE adding if this sentence would exceed max
+            // (prevents 500+ char chunks that cause Chatterbox repetition)
+            if (batchText.length > 0 && (batchText.length + sentence.length) > BATCH_FLUSH_MAX) {
+              flushToPipeline(batchText);
+              batchText = '';
+            }
             batchText += sentence + ' ';
-            // Flush when we have enough for a natural-sounding chunk
-            if (batchText.length >= BATCH_FLUSH_MAX) {
+            // Also flush if batch already hit min and sentence is a natural break
+            if (batchText.length >= BATCH_FLUSH_MIN && sentence.length < BATCH_FLUSH_MIN) {
               flushToPipeline(batchText);
               batchText = '';
             }
