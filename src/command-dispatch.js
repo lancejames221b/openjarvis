@@ -65,8 +65,8 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
   // ── TTS provider toggle ────────────────────────────────────────────
   const ttsToggle = isAdmin ? isTtsToggleCommand(rawTranscript) : null;
   if (ttsToggle) {
-    const success = setTtsProvider(ttsToggle);
-    return { type: 'mode_toggle', mode: 'tts', provider: ttsToggle, success };
+    const result = setTtsProvider(ttsToggle);
+    return { type: 'mode_toggle', mode: 'tts', provider: result.provider ?? ttsToggle, success: result.ok, needsRestart: result.needsRestart };
   }
 
   // ── Mobile mode toggle ─────────────────────────────────────────────
