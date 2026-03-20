@@ -171,12 +171,18 @@ async def text_to_speech(request: Request):
             ),
         )
 
+        # Append 250ms of trailing silence to prevent last-word clipping
+        # Discord's audio player cuts the tail — this pads every clip safely.
+        silence_samples = int(model.sr * 0.25)  # 250ms worth of zero-samples
+        silence = torch.zeros(wav_tensor.shape[0], silence_samples)
+        padded = torch.cat([wav_tensor.cpu(), silence], dim=1)
+
         buf = io.BytesIO()
-        torchaudio.save(buf, wav_tensor.cpu(), model.sr, format="wav")
+        torchaudio.save(buf, padded, model.sr, format="wav")
         audio_bytes = buf.getvalue()
 
         elapsed = int((time.time() - t0) * 1000)
-        logger.info(f"[{voice}] done in {elapsed}ms → {len(audio_bytes):,} bytes")
+        logger.info(f"[{voice}] done in {elapsed}ms → {len(audio_bytes):,} bytes (+250ms silence pad)")
 
         return Response(
             content=audio_bytes,

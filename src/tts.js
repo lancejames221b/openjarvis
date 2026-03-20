@@ -414,9 +414,12 @@ export function splitIntoSentences(text) {
     }
   }
   
-  // Batch sentences into chunks for Piper -- lower min for faster first-audio
-  const MIN_CHUNK = 60;
-  const MAX_CHUNK = 300;
+  // Batch sentences into chunks — Chatterbox benefits from larger chunks (full sentences/paragraphs)
+  // because each inference call loads the voice reference; more context = better prosody per call.
+  // Piper: smaller chunks → faster first-audio. Chatterbox: larger chunks → fewer GPU calls.
+  const _provider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
+  const MIN_CHUNK = _provider === 'chatterbox' ? 120 : 60;
+  const MAX_CHUNK = _provider === 'chatterbox' ? 450 : 300;
   const result = [];
   let current = '';
   

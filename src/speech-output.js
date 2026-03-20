@@ -108,8 +108,10 @@ export function playAudio(filePath) {
 
 // Maximum spoken seconds before auto-TL;DR kicks in (voice should be brief)
 const MAX_SPOKEN_SECONDS = parseInt(process.env.MAX_SPOKEN_SECONDS || '20');
-// Approximate chars per second of speech (Piper at 1.3x length_scale)
-const CHARS_PER_SECOND = 12;
+// Approximate chars per second of speech — Chatterbox speaks faster/denser than edge-tts/Piper.
+// Piper/edge: ~12 chars/sec. Chatterbox: ~14 chars/sec (natural cadence, no length_scale).
+const _ttsProvider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
+const CHARS_PER_SECOND = _ttsProvider === 'chatterbox' ? 14 : 12;
 const MAX_SPOKEN_CHARS = MAX_SPOKEN_SECONDS * CHARS_PER_SECOND;
 
 /**
