@@ -40,10 +40,11 @@ const isPiperEnabled = () => getTTSProvider() === 'piper' && process.env.PIPER_E
 const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:3336';
 const PIPER_MODEL = process.env.PIPER_MODEL || 'medium'; // medium (~1.5s) or high (~3.5s)
 
-// ── Chatterbox TTS (Lance voice clone) ───────────────────────────────
-// Lance's cloned voice via Chatterbox TTS. Only used when TTS_PROVIDER=chatterbox.
-// Runs as a local FastAPI service at CHATTERBOX_URL.
-const CHATTERBOX_URL = process.env.CHATTERBOX_URL || 'http://127.0.0.1:3340';
+// ── Chatterbox TTS ────────────────────────────────────────────────────
+// Multi-voice Chatterbox TTS service. Only used when TTS_PROVIDER=chatterbox.
+// CHATTERBOX_VOICE selects the active voice (jarvis | lance). Default: jarvis.
+const CHATTERBOX_URL   = process.env.CHATTERBOX_URL   || 'http://127.0.0.1:3340';
+const CHATTERBOX_VOICE = process.env.CHATTERBOX_VOICE || 'jarvis';
 
 // ── TTS Circuit Breaker ──────────────────────────────────────────────
 // After 3 Edge TTS failures within 5 minutes, stop trying for 5 minutes.
@@ -109,7 +110,8 @@ export function getTTSHealth() {
   const provider = getTTSProvider();
   const edge = TTS_CIRCUIT_BREAKER.getStatus();
   if (provider === 'chatterbox') {
-    return `chatterbox-lance (fallback: none — text-only on failure)`;
+    const voice = process.env.CHATTERBOX_VOICE || 'jarvis';
+    return `chatterbox-${voice} (fallback: none — text-only on failure)`;
   }
   if (provider === 'piper' && process.env.PIPER_ENABLED !== 'false') {
     return `piper-jarvis (fallback: ${edge})`;
@@ -218,7 +220,7 @@ async function synthesizeChatterbox(text) {
     const res = await fetch(`${CHATTERBOX_URL}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, voice: CHATTERBOX_VOICE }),
       signal: AbortSignal.timeout(60000), // 60s — model inference takes time
     });
 
