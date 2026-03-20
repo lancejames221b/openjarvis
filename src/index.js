@@ -2162,9 +2162,9 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         logger.info(`🔇 Active session: non-owner audio rejected (confidence=${speakerInfo.confidence} tier=${speakerInfo.confidence_tier})`);
         return;
       }
-      // Tighten medium-tier floor: medium confidence below 0.45 is marginal (TV, Contact1, background)
-      // Require at least 0.45 to process in ACTIVE state — prevents 9-min background chatter window
-      if (speakerInfo && speakerInfo.confidence_tier === 'medium' && speakerInfo.confidence < 0.45) {
+      // Medium-tier floor: 0.35 raw minimum in active sessions
+      // (was 0.45 but that rejected Lance through Discord voice codec too aggressively)
+      if (speakerInfo && speakerInfo.confidence_tier === 'medium' && speakerInfo.confidence < 0.35) {
         logger.info(`🔇 Active session: medium-tier below floor rejected (confidence=${speakerInfo.confidence})`);
         return;
       }
