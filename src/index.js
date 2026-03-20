@@ -33,8 +33,8 @@ import { getSTTHealth, checkSttHealth } from './stt.js';
 import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getCurrentTtsProvider } from './tts-toggle.js';
-import { isVerifiedOwner, enrollmentState } from './auth.js';
-import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks } from './fsm.js';
+import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
+import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
@@ -685,6 +685,7 @@ client.once('ready', async () => {
         return;
       }
 
+      const wasAsleep = getState() === 'SLEEP';
       const sentences = splitIntoSentences(message);
       for (const sentence of sentences) {
         if (sentence.trim().length < 2) continue;
@@ -695,6 +696,12 @@ client.once('ready', async () => {
           // TTS failed -- fall back to text
           postToTextChannel(`🔇 ${sentence}`);
         }
+      }
+
+      // If Jarvis just spoke a result while muted/sleeping, open a brief attention
+      // window so the user can reply without needing to say "Jarvis" again.
+      if (wasAsleep) {
+        openAttentionWindow();
       }
     } catch (err) {
       logger.error('Speak callback TTS failed:', err.message);
@@ -2004,6 +2011,22 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           markBotResponse(userId);
           return;
         }
+      } else if (isAttentionWindowActive()) {
+        // Post-speak attention window: Jarvis just reported a task result while in SLEEP.
+        // Routes through the central auth gate (context='attention') — same strictness as
+        // a wake word. Any future auth changes in passesAuthGate apply here automatically.
+        const { authorized: attentionAuth } = passesAuthGate(spkr, { context: 'attention' });
+        if (!attentionAuth) {
+          logger.info(`👂 Post-speak attention window: auth gate rejected speaker (${spkrTag}) — keeping window open`);
+          return; // not the owner — drop silently, keep window open for the real user
+        }
+        logger.info(`👂 Post-speak attention window: auth gate passed (${spkrTag}) — "${rawTranscript.substring(0, 60)}"`);
+        transition('ACTIVE', 'post-speak-attention');
+        authCtx.isOwner = true;
+        authenticatedSession = true;
+        closeAttentionWindow();
+        resetIdleSleepTimer();
+        // fall through to process
       } else {
         return; // drop in SLEEP
       }

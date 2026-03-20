@@ -36,6 +36,47 @@ export function isVerifiedOwner(spkr, requiredTier = 'high') {
 }
 
 /**
+ * Central auth gate — the single source of truth for whether a speaker is
+ * authorized to interact. All FSM paths (wake, attention window, follow-up,
+ * active dispatch) MUST route through here so future auth changes (e.g.
+ * multi-factor voice, PIN challenge, allowlist expansion) are applied uniformly.
+ *
+ * @param {object} spkr   - Speaker verification result ({ is_owner, confidence_tier, ... })
+ * @param {object} opts
+ * @param {'wake'|'active'|'attention'|'followup'|'passive'} [opts.context='active']
+ *   - wake:      First utterance after wake word / SLEEP->ACTIVE transition (strictest)
+ *   - attention: Post-speak attention window (still strict — same as wake)
+ *   - active:    Already in an authenticated session (slightly relaxed)
+ *   - followup:  Continuation of a bot-prompted exchange (relaxed)
+ *   - passive:   Background activity gating (most relaxed)
+ * @param {boolean} [opts.sessionAuthenticated=false] - Session was already authenticated
+ * @returns {{ authorized: boolean, tier: string }}
+ */
+export function passesAuthGate(spkr, { context = 'active', sessionAuthenticated = false } = {}) {
+  const CONTEXT_TIERS = {
+    wake:      'high',
+    attention: 'high',
+    active:    'medium',
+    followup:  'medium',
+    passive:   'low',
+  };
+
+  const requiredTier = CONTEXT_TIERS[context] ?? 'high';
+  const authorized = isVerifiedOwner(spkr, requiredTier);
+  const tier = spkr?.confidence_tier ?? 'none';
+
+  if (!authorized && sessionAuthenticated && context === 'active') {
+    // Session was authenticated by a prior high-confidence check.
+    // Permit medium-confidence speakers within a running session — they were
+    // already verified on the wake word. This allows natural conversation flow.
+    const mediumOk = isVerifiedOwner(spkr, 'medium');
+    return { authorized: mediumOk, tier, sessionCarryover: true };
+  }
+
+  return { authorized, tier, sessionCarryover: false };
+}
+
+/**
  * Verify a speaker against the enrolled voiceprint.
  * Called by stt.js; exposed here for manual/test use.
  * @param {string} wavPath - Path to WAV audio file

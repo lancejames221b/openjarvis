@@ -16,6 +16,41 @@ const IDLE_TO_SLEEP_MS  = 2 * 60 * 1000;        // 2 more min IDLE -> SLEEP
 let _activeTimer = null;
 let _idleTimer = null;
 
+// ── Post-Speak Attention Window ───────────────────────────────────────
+// When Jarvis speaks a task result while in SLEEP state, open a brief window
+// where the next utterance is accepted without a wake word. The user just
+// heard Jarvis — they're clearly in conversation. After the window expires,
+// revert to SLEEP.
+const ATTENTION_WINDOW_MS = parseInt(process.env.POST_SPEAK_ATTENTION_MS || String(60 * 1000));
+
+let _attentionWindowActive = false;
+let _attentionTimer = null;
+
+export function openAttentionWindow() {
+  if (_attentionWindowActive) {
+    // Extend if already open
+    if (_attentionTimer) clearTimeout(_attentionTimer);
+  } else {
+    _attentionWindowActive = true;
+    logger.info(`👂 Post-speak attention window opened (${ATTENTION_WINDOW_MS / 1000}s)`);
+  }
+  _attentionTimer = setTimeout(() => {
+    _attentionWindowActive = false;
+    _attentionTimer = null;
+    logger.info('👂 Post-speak attention window closed — returning to SLEEP');
+  }, ATTENTION_WINDOW_MS);
+}
+
+export function closeAttentionWindow() {
+  if (_attentionTimer) clearTimeout(_attentionTimer);
+  _attentionWindowActive = false;
+  _attentionTimer = null;
+}
+
+export function isAttentionWindowActive() {
+  return _attentionWindowActive;
+}
+
 // Callbacks wired in by index.js to avoid circular deps
 let _getEnrollmentActive = () => false;
 let _getAuthenticatedSession = () => false;
