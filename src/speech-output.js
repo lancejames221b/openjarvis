@@ -106,18 +106,20 @@ export function playAudio(filePath) {
 
 // ── Output Length Enforcement (Phase 3) ──────────────────────────────
 
-// Maximum spoken seconds before auto-TL;DR kicks in (voice should be brief)
+// No automatic length-based truncation — speak everything unless TL;DR mode is explicitly on.
+// MAX_SPOKEN_SECONDS is kept for monitoring/logging only; it does NOT cut speech.
 const MAX_SPOKEN_SECONDS = parseInt(process.env.MAX_SPOKEN_SECONDS || '20');
-// Approximate chars per second of speech — Chatterbox speaks faster/denser than edge-tts/Piper.
-// Piper/edge: ~12 chars/sec. Chatterbox: ~14 chars/sec (natural cadence, no length_scale).
 const _ttsProvider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
 const CHARS_PER_SECOND = _ttsProvider === 'chatterbox' ? 14 : 12;
-const MAX_SPOKEN_CHARS = MAX_SPOKEN_SECONDS * CHARS_PER_SECOND;
+const MAX_SPOKEN_CHARS = MAX_SPOKEN_SECONDS * CHARS_PER_SECOND; // reference only
 
 /**
  * Enforce output length on a full response text.
  * Returns { spoken, full, wasTruncated }
- * 
+ *
+ * Length-based truncation is DISABLED — Jarvis speaks the full response.
+ * Only TL;DR mode (explicit user toggle) produces a summary instead.
+ *
  * @param {string} fullText - Full response from gateway
  * @param {boolean} tldrModeEnabled - Whether TL;DR mode is on
  * @returns {{ spoken: string, full: string, wasTruncated: boolean }}
@@ -126,13 +128,8 @@ export function enforceOutputLength(fullText, tldrModeEnabled = false) {
   if (!fullText) return { spoken: '', full: '', wasTruncated: false };
   
   const clean = fullText.replace(/<p>/g, ' ').trim();
-  
-  // Under limit — speak everything
-  if (clean.length <= MAX_SPOKEN_CHARS && !tldrModeEnabled) {
-    return { spoken: clean, full: clean, wasTruncated: false };
-  }
-  
-  // Over limit or TL;DR mode — generate summary for voice
+
+  // TL;DR mode only — explicit user toggle, not auto-triggered by length
   if (tldrModeEnabled) {
     return {
       spoken: generateTldr(clean),
@@ -140,26 +137,13 @@ export function enforceOutputLength(fullText, tldrModeEnabled = false) {
       wasTruncated: true,
     };
   }
-  
-  // Smart truncation: take complete sentences up to limit
-  const sentences = clean.split(/(?<=[.!?])\s+/);
-  let spoken = '';
-  for (const sentence of sentences) {
-    if ((spoken + sentence).length > MAX_SPOKEN_CHARS) break;
-    spoken += sentence + ' ';
+
+  // Always speak everything
+  if (clean.length > MAX_SPOKEN_CHARS) {
+    logger.info(`📏 Long response (${clean.length} chars) — speaking in full, posting to text channel`);
   }
-  spoken = spoken.trim();
-  
-  // Add continuation hint if we truncated
-  if (spoken.length < clean.length) {
-    spoken += ' Full details posted to text.';
-  }
-  
-  return {
-    spoken,
-    full: clean,
-    wasTruncated: spoken.length < clean.length,
-  };
+
+  return { spoken: clean, full: clean, wasTruncated: false };
 }
 
 /**
