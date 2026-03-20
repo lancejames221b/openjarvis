@@ -32,7 +32,7 @@ import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
-import { getCurrentTtsProvider, getCurrentWakeWord, setTtsProvider, setWakeWord, TTS_PROVIDERS } from './tts-toggle.js';
+import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
@@ -1290,71 +1290,6 @@ client.on('messageCreate', async (message) => {
     try {
       await message.reply("Having trouble processing that right now, sir.");
     } catch (_) {}
-  }
-});
-
-// ── /jvoice Command Handler ──────────────────────────────────────────
-// Text command: /jvoice [edge|piper|chatterbox|lance|status]
-// Allowed in the voice text channel from authorized users.
-// TTS switches are hot-applied (no restart). Wake word changes need restart.
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
-
-  const content = message.content.trim();
-  if (!content.toLowerCase().startsWith('/jvoice')) return;
-
-  const args = content.split(/\s+/);
-  const sub  = (args[1] || 'status').toLowerCase();
-
-  const validProviders = ['edge', 'piper', 'chatterbox', 'lance'];
-
-  // ── /jvoice status ──────────────────────────────────────────────
-  if (sub === 'status' || sub === 'help' || sub === '') {
-    const provider = getCurrentTtsProvider();
-    const wakeWord = getCurrentWakeWord();
-    const label = TTS_PROVIDERS[provider]?.label ?? provider;
-    await message.reply(
-      `🎤 **Voice status**\n` +
-      `TTS: \`${provider}\` — ${label}\n` +
-      `Wake word: \`${wakeWord}\`\n\n` +
-      `Available: \`/jvoice edge\` | \`/jvoice piper\` | \`/jvoice chatterbox\` | \`/jvoice lance\`\n` +
-      `\`lance\` = chatterbox (your voice clone) + wake word set to **lance**`
-    );
-    return;
-  }
-
-  // ── /jvoice [provider] ──────────────────────────────────────────
-  if (!validProviders.includes(sub)) {
-    await message.reply(`❌ Unknown provider \`${sub}\`. Options: \`edge\` | \`piper\` | \`chatterbox\` | \`lance\``);
-    return;
-  }
-
-  const result = setTtsProvider(sub);
-  if (!result.ok) {
-    await message.reply(`❌ Failed to switch TTS provider.`);
-    return;
-  }
-
-  const label = TTS_PROVIDERS[result.provider]?.label ?? result.provider;
-
-  if (result.needsRestart) {
-    // Wake word changed — need restart for it to take effect
-    const ww = getCurrentWakeWord();
-    await message.reply(
-      `✅ Switching to **${label}** (wake word → \`${ww}\`)\n` +
-      `Restarting voice service now…`
-    );
-    logger.info(`/jvoice ${sub}: restarting jarvis-voice to apply wake word change`);
-    // Short delay so reply is delivered before restart
-    setTimeout(async () => {
-      const { execSync } = await import('child_process');
-      try { execSync('systemctl --user restart jarvis-voice'); }
-      catch (e) { logger.error('/jvoice restart failed:', e.message); }
-    }, 1500);
-  } else {
-    await message.reply(`✅ TTS → **${label}** (hot-switched, no restart needed)`);
-    logger.info(`/jvoice ${sub}: TTS provider hot-switched to ${result.provider}`);
   }
 });
 

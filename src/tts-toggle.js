@@ -26,12 +26,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = `${__dirname}/../.env`;
 
 // ── Provider display metadata ─────────────────────────────────────────────────
+// Wake words are read from .env at call time (JVOICE_WAKE_<PROVIDER>=<word>).
+// "lance" is a named alias for chatterbox that also sets the wake word.
 export const TTS_PROVIDERS = {
-  edge:        { label: 'Edge TTS (Sonia)',         wakeWord: null },
-  piper:       { label: 'Piper TTS (JARVIS)',        wakeWord: null },
-  chatterbox:  { label: 'Chatterbox (Lance clone)',  wakeWord: null },
-  lance:       { label: 'Chatterbox (Lance clone)',  wakeWord: 'lance', actualProvider: 'chatterbox' },
+  edge:        { label: 'Edge TTS (Sonia)',         actualProvider: 'edge' },
+  piper:       { label: 'Piper TTS (JARVIS)',        actualProvider: 'piper' },
+  chatterbox:  { label: 'Chatterbox (Lance clone)',  actualProvider: 'chatterbox' },
+  lance:       { label: 'Chatterbox (Lance clone)',  actualProvider: 'chatterbox' },
 };
+
+/**
+ * Get the configured wake word for a provider from env (JVOICE_WAKE_<PROVIDER>).
+ * Returns null if not set (meaning: don't change the wake word).
+ */
+export function getProviderWakeWord(provider) {
+  const key = `JVOICE_WAKE_${provider.toUpperCase()}`;
+  const val = (process.env[key] || '').trim();
+  return val || null;
+}
 
 // ── Voice toggle patterns ─────────────────────────────────────────────────────
 // "switch to edge/piper/chatterbox/lance", "use lance voice", etc.
@@ -122,9 +134,9 @@ export function setTtsProvider(provider) {
     return { ok: false };
   }
 
-  // "lance" = chatterbox + wake word change
+  // Resolve alias (e.g. "lance" → "chatterbox") and look up configured wake word
   const actualProvider = TTS_PROVIDERS[canonical]?.actualProvider ?? canonical;
-  const newWakeWord    = TTS_PROVIDERS[canonical]?.wakeWord ?? null;
+  const newWakeWord    = getProviderWakeWord(canonical);
 
   try {
     let env = readEnv();
