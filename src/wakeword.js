@@ -18,18 +18,33 @@ import logger from './logger.js';
 // WAKE_WORD_AUTO: auto-require wake word when others are in the channel (default: true)
 // ─────────────────────────────────────────────────────────────────────────────
 const VOICE_WAKE_WORD_ENABLED_RAW = process.env.VOICE_WAKE_WORD_ENABLED;
-const VOICE_WAKE_WORD = (process.env.VOICE_WAKE_WORD || 'hey jarvis').toLowerCase().trim();
+const VOICE_WAKE_WORD = (process.env.VOICE_WAKE_WORD || 'jarvis').toLowerCase().trim();
 
+// VOICE_NAME: human-readable name used in greetings and system prompts.
+// Derived from VOICE_WAKE_WORD with first letter capitalized (e.g. "jarvis" → "Jarvis", "jenny" → "Jenny").
+// Override with VOICE_NAME env var if the display name should differ from the wake word.
+export const VOICE_NAME = process.env.VOICE_NAME
+  ? process.env.VOICE_NAME.trim()
+  : VOICE_WAKE_WORD.charAt(0).toUpperCase() + VOICE_WAKE_WORD.slice(1);
+
+// Auto-build standard prefix variants from the wake word name.
+// "jenny" → ["jenny", "hey jenny", "yo jenny", "ok jenny", "okay jenny"]
+// These are always active — no need to list them in WAKE_WORD_PHRASES.
+function buildAutoVariants(name) {
+  return [name, `hey ${name}`, `yo ${name}`, `ok ${name}`, `okay ${name}`];
+}
+const autoVariants = buildAutoVariants(VOICE_WAKE_WORD);
+
+// WAKE_WORD_PHRASES: optional extra phrases (mishears, aliases, legacy phrases).
+// Auto-variants are merged in automatically — no need to repeat "hey jarvis" etc. here.
 const WAKE_WORD_PHRASES_RAW = process.env.WAKE_WORD_PHRASES || '';
 const phrasesFromEnv = WAKE_WORD_PHRASES_RAW
   .split(',')
   .map(p => p.trim().toLowerCase())
   .filter(p => p.length > 0);
 
-// Merge VOICE_WAKE_WORD into phrase list (dedup)
-const WAKE_WORD_PHRASES = phrasesFromEnv.includes(VOICE_WAKE_WORD)
-  ? phrasesFromEnv
-  : [VOICE_WAKE_WORD, ...phrasesFromEnv];
+// Merge auto-variants + env overrides, dedup
+const WAKE_WORD_PHRASES = [...new Set([...autoVariants, ...phrasesFromEnv])];
 
 // VOICE_WAKE_WORD_ENABLED is the explicit toggle:
 //   'false' → disabled (always listen — default, existing behavior)

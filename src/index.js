@@ -24,7 +24,7 @@ import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
 import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
-import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY } from './wakeword.js';
+import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, VOICE_NAME } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback } from './alert-webhook.js';
@@ -626,7 +626,7 @@ async function generateDynamicGreeting() {
   const hour = now.getHours();
   const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
   
-  const prompt = `You are Jarvis, a British AI butler. Generate ONE short greeting (under 15 words) for ${timeOfDay}. Dry wit welcome. No quotes, just the text.`;
+  const prompt = `You are ${VOICE_NAME}, a British AI butler. Generate ONE short greeting (under 15 words) for ${timeOfDay}. Dry wit welcome. No quotes, just the text.`;
   
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {

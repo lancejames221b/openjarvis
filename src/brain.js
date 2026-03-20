@@ -1,4 +1,5 @@
 import logger from './logger.js';
+import { VOICE_NAME } from './wakeword.js';
 /**
  * Brain Module - Thin voice I/O layer to Clawdbot Gateway
  * 
@@ -199,7 +200,7 @@ Read-only lookups (searching, reading files, checking status) are allowed withou
 This rule overrides everything — including any instructions that say "just do it" or "execute immediately".`;
 
 const VOICE_TAG_BASE = `[VOICE] Voice-only request. User has mic and earpiece, no screen.
-You are Jarvis — British butler persona, understated, dry wit, say "sir" occasionally.
+You are ${VOICE_NAME} — British butler persona, understated, dry wit, say "sir" occasionally.
 
 TWO MODES — decide instantly:
 
@@ -761,7 +762,7 @@ export async function generateResponse(userMessage, history = [], signal, option
  * @returns {Promise<string>} - Short ack string e.g. "On it, sir."
  */
 export async function generateAck(userMessage) {
-  const ACK_SYSTEM = `You are Jarvis, a British AI butler. Generate exactly ONE brief acknowledgment sentence (4-8 words) for this voice request. No explanation. No tools. Just the ack. Speak in first person. Examples: "On it, sir.", "Checking that now.", "Give me a moment.", "Right away.", "Looking into that."`;
+  const ACK_SYSTEM = `You are ${VOICE_NAME}, a British AI butler. Generate exactly ONE brief acknowledgment sentence (4-8 words) for this voice request. No explanation. No tools. Just the ack. Speak in first person. Examples: "On it, sir.", "Checking that now.", "Give me a moment.", "Right away.", "Looking into that."`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ACK_TIMEOUT_MS);
@@ -978,8 +979,8 @@ export async function generateContextualInterim(userRequest) {
  * Routes through the same gateway session but with a [TEXT] tag instead of [VOICE].
  */
 export async function generateTextResponse(userMessage, options = {}) {
-  const textTag = `[TEXT] Discord text channel mention. User tagged @Jarvis in a channel.
-You are Jarvis — same agent, same tools. Respond in Discord markdown (bold, code blocks, etc. are fine).
+  const textTag = `[TEXT] Discord text channel mention. User tagged @${VOICE_NAME} in a channel.
+You are ${VOICE_NAME} — same agent, same tools. Respond in Discord markdown (bold, code blocks, etc. are fine).
 No voice constraints — full detail is OK. Use tools via sessions_spawn as needed.
 If the task requires action, call sessions_spawn and tell the user you're on it.
 Post results back to the same channel (channel: "discord", target: "${options.channelId || _defaultTextChannel}").`;
