@@ -1,45 +1,52 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // isWakeUpCommand lives in fsm.js (re-exported from wakeword detection logic)
 // We import directly from fsm.js which exports isWakeUpCommand
 import { isWakeUpCommand } from '../fsm.js';
+import { VOICE_WAKE_WORD } from '../wakeword.js';
+
+// Tests use the configured wake word (VOICE_WAKE_WORD env) — not hardcoded "jarvis".
+// Run with VOICE_WAKE_WORD=sonia (current default) or VOICE_WAKE_WORD=jarvis (Jarvis mode).
+// "Jarvis" only wakes the bot when VOICE_WAKE_WORD=jarvis (/jvoice Jarvis mode).
+const ww = VOICE_WAKE_WORD; // e.g. "sonia" or "jarvis"
+const WW = ww.charAt(0).toUpperCase() + ww.slice(1); // "Sonia" / "Jarvis"
 
 describe('Wake word detection — isWakeUpCommand()', () => {
   describe('positive detection', () => {
-    it('"Hey Jarvis" is detected', () => {
-      expect(isWakeUpCommand('Hey Jarvis')).toBe(true);
+    it(`"Hey ${WW}" is detected`, () => {
+      expect(isWakeUpCommand(`Hey ${WW}`)).toBe(true);
     });
 
-    it('"hey jarvis" (lowercase) is detected', () => {
-      expect(isWakeUpCommand('hey jarvis')).toBe(true);
+    it(`"hey ${ww}" (lowercase) is detected`, () => {
+      expect(isWakeUpCommand(`hey ${ww}`)).toBe(true);
     });
 
-    it('"Jarvis" alone is detected', () => {
-      expect(isWakeUpCommand('Jarvis')).toBe(true);
+    it(`"${WW}" alone is detected`, () => {
+      expect(isWakeUpCommand(WW)).toBe(true);
     });
 
-    it('"jarvis" (lowercase) alone is detected', () => {
-      expect(isWakeUpCommand('jarvis')).toBe(true);
+    it(`"${ww}" (lowercase) alone is detected`, () => {
+      expect(isWakeUpCommand(ww)).toBe(true);
     });
 
-    it('"Hey Jarvis, what time is it" is detected', () => {
-      expect(isWakeUpCommand('Hey Jarvis, what time is it')).toBe(true);
+    it(`"Hey ${WW}, what time is it" is detected`, () => {
+      expect(isWakeUpCommand(`Hey ${WW}, what time is it`)).toBe(true);
     });
 
-    it('"Jarvis wake up" is detected', () => {
-      expect(isWakeUpCommand('Jarvis wake up')).toBe(true);
+    it(`"${WW} wake up" is detected`, () => {
+      expect(isWakeUpCommand(`${WW} wake up`)).toBe(true);
     });
 
-    it('"hello jarvis" is detected', () => {
-      expect(isWakeUpCommand('hello jarvis')).toBe(true);
+    it(`"hello ${ww}" is detected`, () => {
+      expect(isWakeUpCommand(`hello ${ww}`)).toBe(true);
     });
 
-    it('"good morning jarvis" is detected', () => {
-      expect(isWakeUpCommand('good morning jarvis')).toBe(true);
+    it(`"good morning ${ww}" is detected`, () => {
+      expect(isWakeUpCommand(`good morning ${ww}`)).toBe(true);
     });
 
-    it('"hi jarvis" is detected', () => {
-      expect(isWakeUpCommand('hi jarvis')).toBe(true);
+    it(`"hi ${ww}" is detected`, () => {
+      expect(isWakeUpCommand(`hi ${ww}`)).toBe(true);
     });
   });
 
@@ -75,6 +82,23 @@ describe('Wake word detection — isWakeUpCommand()', () => {
     it('whitespace-only string returns false', () => {
       expect(isWakeUpCommand('   ')).toBe(false);
     });
+
+    // Cross-mode: the non-configured wake word should NOT trigger (modes are exclusive)
+    if (ww !== 'jarvis') {
+      it('"Hey Jarvis" does NOT wake bot in non-Jarvis mode', () => {
+        expect(isWakeUpCommand('Hey Jarvis')).toBe(false);
+      });
+
+      it('"jarvis" alone does NOT wake bot in non-Jarvis mode', () => {
+        expect(isWakeUpCommand('jarvis')).toBe(false);
+      });
+    }
+
+    if (ww !== 'sonia') {
+      it('"Hey Sonia" does NOT wake bot in non-Sonia mode', () => {
+        expect(isWakeUpCommand('Hey Sonia')).toBe(false);
+      });
+    }
   });
 
   describe('fuzzy wake word detection (speaker verified)', () => {
@@ -115,13 +139,13 @@ describe('Wake word detection — isWakeUpCommand()', () => {
 
   describe('edge cases', () => {
     it('trailing punctuation is stripped before matching', () => {
-      expect(isWakeUpCommand('Jarvis!')).toBe(true);
-      expect(isWakeUpCommand('Hey Jarvis.')).toBe(true);
+      expect(isWakeUpCommand(`${WW}!`)).toBe(true);
+      expect(isWakeUpCommand(`Hey ${WW}.`)).toBe(true);
     });
 
-    it('"Jarvis" embedded mid-sentence is NOT a pattern match start', () => {
-      // "hey jarvis" pattern requires it to be at start
-      expect(isWakeUpCommand('I think Jarvis is cool')).toBe(false);
+    it(`"${WW}" embedded mid-sentence is NOT a pattern match start`, () => {
+      // wake word pattern requires it to be at start
+      expect(isWakeUpCommand(`I think ${WW} is cool`)).toBe(false);
     });
   });
 });
