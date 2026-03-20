@@ -1,4 +1,27 @@
 import logger from './logger.js';
+import 'dotenv/config';
+
+// ── Wake word config (read from env, never hardcoded) ────────────────────────
+const _wakeWord = (process.env.VOICE_WAKE_WORD || 'jarvis').toLowerCase().trim();
+const _wakeVariants = [_wakeWord, `hey ${_wakeWord}`, `yo ${_wakeWord}`, `ok ${_wakeWord}`];
+
+// ── Extra env-configurable stop/dismiss words ─────────────────────────────────
+// STOP_WORDS_EXTRA: comma-separated exact phrases added to STOP_WORDS_EXACT
+// STOP_PREFIXES_EXTRA: comma-separated prefixes added to STOP_PREFIXES
+let _extraStopWords = null;
+let _extraStopPrefixes = null;
+function getExtraStopWords() {
+  if (_extraStopWords !== null) return _extraStopWords;
+  _extraStopWords = (process.env.STOP_WORDS_EXTRA || '')
+    .split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
+  return _extraStopWords;
+}
+function getExtraStopPrefixes() {
+  if (_extraStopPrefixes !== null) return _extraStopPrefixes;
+  _extraStopPrefixes = (process.env.STOP_PREFIXES_EXTRA || '')
+    .split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
+  return _extraStopPrefixes;
+}
 /**
  * Intent Classifier - Dynamic Response Intelligence
  *
@@ -47,8 +70,9 @@ const WHISPER_HALL_PREFIX = [
 
 // Known short commands that should NOT be filtered as TV noise
 // (these are valid 1-2 word voice commands)
+// Wake word variants are injected dynamically from VOICE_WAKE_WORD — no hardcoding
 const SHORT_COMMAND_WHITELIST = new Set([
-  'jarvis', 'hey jarvis', 'stop', 'sleep', 'mute', 'pause', 'play',
+  ..._wakeVariants, 'stop', 'sleep', 'mute', 'pause', 'play',
   'cancel', 'quiet', 'silence', 'resume', 'next', 'back', 'louder',
   'softer', 'volume up', 'volume down', 'lights on', 'lights off',
   'good morning', 'good night', 'wake up', 'stand down', 'dismissed',
@@ -155,7 +179,9 @@ const SLEEP_PATTERNS = [
 // These are too short to be sleep patterns alone, but combined they signal end of conversation.
 // e.g., "sounds good jarvis", "thanks jarvis talk to you later", "sounds good thank you"
 const SIGNOFF_COMPOUND = /\b(sounds?\s*good|thanks?(\s*you)?|cheers|appreciate\s*it|perfect)\b/i;
-const SIGNOFF_CLOSER = /\b(jarvis|talk\s*to\s*you|later|bye|good\s*night|see\s*you|take\s*care|thats?\s*(all|it)|peace|im\s*(done|out|good)|have\s*a\s*good)/i;
+// SIGNOFF_CLOSER built dynamically — includes current wake word from env
+const _signoffWakePattern = _wakeVariants.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+const SIGNOFF_CLOSER = new RegExp(`\\b(${_signoffWakePattern}|talk\\s*to\\s*you|later|bye|good\\s*night|see\\s*you|take\\s*care|thats?\\s*(all|it)|peace|im\\s*(done|out|good)|have\\s*a\\s*good)`, 'i');
 
 // ── Env-configurable extra sleep/wake words ──────────────────────────────────
 // SLEEP_WORDS: comma-separated phrases appended to SLEEP_PATTERNS at first call
@@ -246,8 +272,12 @@ export function shouldDismiss(text) {
   const clean = text.toLowerCase().replace(/[.,!?']/g, '').trim();
   const words = clean.split(/\s+/);
   if (STOP_WORDS_EXACT.has(clean)) return { dismiss: true, reason: 'stop-word' };
+  if (getExtraStopWords().includes(clean)) return { dismiss: true, reason: 'stop-word-extra' };
   if (words.length <= 5 && STOP_PREFIXES.some(p => clean.startsWith(p))) {
     return { dismiss: true, reason: 'stop-prefix' };
+  }
+  if (words.length <= 5 && getExtraStopPrefixes().some(p => clean.startsWith(p))) {
+    return { dismiss: true, reason: 'stop-prefix-extra' };
   }
   return { dismiss: false };
 }
@@ -255,7 +285,9 @@ export function shouldDismiss(text) {
 const SIDE_TALK_RE = /^(yeah|no|uh huh|mm hmm|right|okay|sure|got it|yep|nope|exactly|totally|absolutely|definitely|seriously|honestly|literally|basically|i know|i mean|i think|i guess|you know|oh really|oh wow|oh no|oh my god|oh man|for real|same|true|facts|fair|word|bet|to me|for me|i said|i was|he was|she was|they were|we were|it was|that was|this is|thats|oh yeah|uh oh|hmm|thank you|thanks|you too|good job|nice|cool|interesting|wow|huh|nah|yeah yeah|no no|alright|of course|of course not|sorry|my bad|no worries|no problem|sounds good|makes sense|got it|understood|noted|okay okay|mm|mhm|uh|um|ah|oh|yup|nope nope|right right)\b/i;
 
 // Task verbs — any utterance containing these is likely a real command, not side-talk
-const TASK_VERB_RE = /\b(check|search|find|look up|run|send|cancel|delete|remove|create|make|set|get|show|tell|read|write|update|fix|open|close|start|stop|play|pause|remind|schedule|call|move|list|pull|push|deploy|test|build|monitor|scan|add|help|explain|summarize|what is|whats|what are|how do|why did|when is|where is|who is|can you|could you|would you|do you|is there|any emails|any meetings|how many|how much|jarvis|hey)\b/i;
+// TASK_VERB_RE: wake word variants injected dynamically, no hardcoded names
+const _taskWakePattern = _wakeVariants.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+const TASK_VERB_RE = new RegExp(`\\b(check|search|find|look up|run|send|cancel|delete|remove|create|make|set|get|show|tell|read|write|update|fix|open|close|start|stop|play|pause|remind|schedule|call|move|list|pull|push|deploy|test|build|monitor|scan|add|help|explain|summarize|what is|whats|what are|how do|why did|when is|where is|who is|can you|could you|would you|do you|is there|any emails|any meetings|how many|how much|${_taskWakePattern}|hey)\\b`, 'i');
 
 // Max word count for coherence gate — fragments this short with no task verb are background chatter
 const COHERENCE_MAX_WORDS = 8;
