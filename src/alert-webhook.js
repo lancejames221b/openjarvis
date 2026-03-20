@@ -386,6 +386,47 @@ export function setDedupCallback(fn) { _isDuplicateContentFn = fn; }
 let _didTaskSpeakInlineFn = null;
 export function setDidTaskSpeakInlineCallback(fn) { _didTaskSpeakInlineFn = fn; }
 
+// ── Semantic /speak dedup ─────────────────────────────────────────────
+// Tracks recently spoken texts to suppress near-duplicate /speak callbacks
+// even when phrased differently. "Signal is open, sir." vs "I've opened Signal, sir."
+// are different hashes but same intent — word-overlap catches them.
+const _recentSpokenTexts = []; // [{text, ts, source}]
+const SEMANTIC_DEDUP_WINDOW_MS = 90_000; // 90s
+const SEMANTIC_DEDUP_OVERLAP_THRESHOLD = 0.65; // 65% word overlap
+
+function _wordSet(text) {
+  return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2));
+}
+
+function _wordOverlap(a, b) {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const w of a) { if (b.has(w)) shared++; }
+  return shared / Math.max(a.size, b.size);
+}
+
+function _isSemanticDuplicate(message) {
+  const now = Date.now();
+  const incoming = _wordSet(message);
+  // Prune old entries
+  while (_recentSpokenTexts.length > 0 && now - _recentSpokenTexts[0].ts > SEMANTIC_DEDUP_WINDOW_MS) {
+    _recentSpokenTexts.shift();
+  }
+  for (const entry of _recentSpokenTexts) {
+    const overlap = _wordOverlap(incoming, entry.words);
+    if (overlap >= SEMANTIC_DEDUP_OVERLAP_THRESHOLD) {
+      logger.info(`🔇 Semantic /speak dedup: ${(overlap*100).toFixed(0)}% overlap with recent "${entry.text.substring(0,40)}"`);
+      return true;
+    }
+  }
+  return false;
+}
+
+function _recordSpoken(message, source) {
+  _recentSpokenTexts.push({ text: message, words: _wordSet(message), ts: Date.now(), source });
+  if (_recentSpokenTexts.length > 10) _recentSpokenTexts.shift(); // cap at 10
+}
+
 app.post('/speak', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) {
@@ -398,10 +439,21 @@ app.post('/speak', async (req, res) => {
     return res.status(400).json({ error: 'message required' });
   }
   
-  // ── Cross-path content deduplication ──
+  // ── Cross-path content deduplication (exact hash) ──
   if (_isDuplicateContentFn && _isDuplicateContentFn(message)) {
     logger.info(`⏭️  /speak dedup: skipping duplicate content (${message.substring(0, 40)}...)`);
     return res.json({ ok: true, delivered: 'dedup-skip' });
+  }
+
+  // ── Semantic near-duplicate dedup ──
+  // Catches "Signal is open, sir." vs "I've opened Signal on your Mac, sir." as duplicates.
+  // Only applies to task-result sources, not reminders/alerts (those are always intentional).
+  const isSemDedup = ['task-progress', 'task-complete', 'background-agent'].includes(source);
+  if (isSemDedup && _isSemanticDuplicate(message)) {
+    if (postActivityCallback) {
+      postActivityCallback(`⏭️ **Semantic dedup** (${source}): ${message.substring(0, 200)}`);
+    }
+    return res.json({ ok: true, delivered: 'semantic-dedup-skip' });
   }
 
   // ── Alert context injection — store so next voice turn knows what this was about ──
@@ -449,6 +501,8 @@ app.post('/speak', async (req, res) => {
     // Speak immediately via TTS — voice is primary delivery
     logger.info(`🗣️  Speaking (${source || 'cron'}): "${message.substring(0, 60)}..."`);
     speakCallback(message);
+    // Record in semantic dedup window so near-duplicate /speak callbacks are suppressed
+    _recordSpoken(message, source || 'cron');
     // Refresh conversation window so follow-ups don't need wake word
     if (markBotResponseCallback) {
       markBotResponseCallback(ALLOWED_USERS[0], { followUpLikely: true });

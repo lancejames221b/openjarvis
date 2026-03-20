@@ -261,6 +261,7 @@ setInterval(pruneConversations, 10 * 60 * 1000);
 // ── Tunable Constants (env var overrides) ────────────────────────────
 const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '60000');
 const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
+const INFLIGHT_SIMILARITY_THRESHOLD = parseFloat(process.env.INFLIGHT_SIMILARITY_THRESHOLD ?? '0.75'); // Jaccard bigram overlap to absorb in-flight duplicate
 const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '40');
 const TTS_PIPELINE_CONCURRENCY = parseInt(process.env.TTS_PIPELINE_CONCURRENCY ?? '3');
 const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? '40');
@@ -334,6 +335,22 @@ function flushPendingUtterance() {
 
   if (parts.length > 1) {
     logger.info(`🔗 Merged ${parts.length} utterances: "${merged.substring(0, 80)}..."`);
+  }
+
+  // ── In-flight similarity check ───────────────────────────────────────
+  // If an active task is already answering a semantically similar question,
+  // absorb this utterance rather than dispatching a duplicate.
+  // Handles "ask twice in different words" without requiring exact match.
+  if (activeTasks.size > 0) {
+    for (const [inflightId, inflightTask] of activeTasks) {
+      if (inflightTask.userId !== userId) continue; // Only dedup per-user
+      const sim = transcriptSimilarity(merged, inflightTask.transcript);
+      if (sim >= INFLIGHT_SIMILARITY_THRESHOLD) {
+        logger.info(`⏭️  In-flight task #${inflightId} covers this (similarity=${sim.toFixed(2)}) — absorbing duplicate: "${merged.substring(0, 60)}"`);
+        postActivity(`⏭️ Absorbed duplicate (${(sim * 100).toFixed(0)}% similar to Task #${inflightId})\n> ${truncate(merged, 80)}`);
+        return;
+      }
+    }
   }
 
   const taskId = ++taskIdCounter;
@@ -1037,11 +1054,13 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 const _processedMsgIds = new Set();
 const _recentContentHashes = new Map(); // hash -> timestamp
 const DEDUP_MSG_ID_MAX = 500;
-const DEDUP_CONTENT_TTL_MS = 30_000; // 30s window for content dedup
+const DEDUP_CONTENT_TTL_MS = 90_000; // 90s window for content dedup (extended from 30s)
 
 function _contentHash(text) {
-  // First 120 chars + length = cheap but effective fingerprint
-  return `${text.substring(0, 120).trim()}__${text.length}`;
+  // Normalize before hashing: lowercase, strip punctuation, collapse whitespace
+  // This catches "Signal is open, sir." vs "Signal is open sir" as the same hash
+  const normalized = text.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  return `${normalized.substring(0, 100)}__${normalized.split(/\s+/).length}`;
 }
 
 function _isDuplicateContent(text) {
@@ -1063,6 +1082,35 @@ function _isDuplicateContent(text) {
 
 // Expose content dedup for /speak endpoint (alert-webhook.js)
 export function isDuplicateContent(text) { return _isDuplicateContent(text); }
+
+// ── Transcript Bigram Similarity ──────────────────────────────────────
+// Used to detect semantically similar utterances even when phrased differently.
+// e.g. "what's the weather" vs "how's the weather looking" → high overlap
+// e.g. "what's the weather" vs "set a timer for 5 minutes" → low overlap
+function _normTokens(text) {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+}
+
+function _bigrams(tokens) {
+  const bg = new Set();
+  for (let i = 0; i < tokens.length - 1; i++) bg.add(`${tokens[i]}_${tokens[i+1]}`);
+  // Also include unigrams for short phrases (< 4 words)
+  if (tokens.length < 4) tokens.forEach(t => bg.add(t));
+  return bg;
+}
+
+function _jaccardSimilarity(a, b) {
+  if (!a.size || !b.size) return 0;
+  let intersection = 0;
+  for (const item of a) { if (b.has(item)) intersection++; }
+  return intersection / (a.size + b.size - intersection);
+}
+
+export function transcriptSimilarity(t1, t2) {
+  const bg1 = _bigrams(_normTokens(t1));
+  const bg2 = _bigrams(_normTokens(t2));
+  return _jaccardSimilarity(bg1, bg2);
+}
 
 // ── Task Spoke Inline Tracker ─────────────────────────────────────────
 // Tracks tasks that have already emitted TTS via the streaming pipeline.
