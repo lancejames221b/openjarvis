@@ -5,7 +5,7 @@
  */
 
 import { getState, transition } from './bot-state.js';
-import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from './wakeword.js';
+import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from './wakeword.js';
 import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from './intent-classifier.js';
 import logger from './logger.js';
 
@@ -96,16 +96,33 @@ export function resetIdleSleepTimer() {
 }
 
 // ── Wake-Up Pattern Matching ──────────────────────────────────────────
+// Build patterns from VOICE_WAKE_WORD (primary) + WAKE_WORD_PHRASES (mishears/aliases).
+// WAKE_WORD_PHRASES (imported from wakeword.js) already includes auto-variants like
+// "hey sonia", "yo sonia" — no need to rebuild from env.
 
-const _envPhrases = (process.env.WAKE_WORD_PHRASES || '').split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 0);
-const _phrasePattern = _envPhrases.length > 0
-  ? new RegExp(`^(hey[,.]?\\s+)?(${_envPhrases.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i')
+const _ww = VOICE_WAKE_WORD; // e.g. "sonia"
+const _wwEsc = _ww.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Full phrase list (VOICE_WAKE_WORD auto-variants + WAKE_WORD_PHRASES mishears)
+const _allPhrases = [...new Set([...WAKE_WORD_PHRASES])];
+const _phrasePattern = _allPhrases.length > 0
+  ? new RegExp(`^(hey[,.]?\\s+)?(${_allPhrases.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i')
   : null;
 
 export const WAKE_UP_PATTERNS = [
-  /^(jarvis[,.]?\s*)?(wake up|i'm back|come back|resume|start listening|online)/i,
-  /^(hey[,.]?\s+)?jarvis\b/i,
-  /^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\s+jarvis\b/i,
+  // Wake-from-sleep commands using the configured wake word
+  new RegExp(`^(${_wwEsc}[,.]?\\s*)?(wake up|i'm back|come back|resume|start listening|online)`, 'i'),
+  // Direct wake word invocation: "Sonia" / "Hey Sonia"
+  new RegExp(`^(hey[,.]?\\s+)?${_wwEsc}\\b`, 'i'),
+  // Greeting + wake word: "Good morning, Sonia"
+  new RegExp(`^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\\s+${_wwEsc}\\b`, 'i'),
+  // Legacy "jarvis" patterns — keep for backward compat when VOICE_WAKE_WORD != jarvis
+  ...(_ww !== 'jarvis' ? [
+    /^(jarvis[,.]?\s*)?(wake up|i'm back|come back|resume|start listening|online)/i,
+    /^(hey[,.]?\s+)?jarvis\b/i,
+    /^(hi( there)?|hello|good (morning|evening|afternoon)|yo|sup|hey there)[,.]?\s+jarvis\b/i,
+  ] : []),
+  // Full phrase list (auto-variants + mishears from WAKE_WORD_PHRASES)
   ...(_phrasePattern ? [_phrasePattern] : []),
 ];
 

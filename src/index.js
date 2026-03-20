@@ -24,7 +24,7 @@ import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
 import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
-import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, VOICE_NAME } from './wakeword.js';
+import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback } from './alert-webhook.js';
@@ -1927,7 +1927,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const spkr = sttResult?.speakerInfo;
     if (spkr && !isVerifiedOwner(spkr, 'medium')) {
       const trimmed = rawTranscript.trim();
-      const startsWithWakeWord = /^(hey[,.]?\s+)?jarvis\b/i.test(trimmed);
+      const _wwEscIdx = VOICE_WAKE_WORD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const _wakeWordRe = new RegExp(`^(hey[,.]?\\s+)?(${_wwEscIdx}|jarvis)\\b`, 'i');
+      const startsWithWakeWord = _wakeWordRe.test(trimmed)
+        || WAKE_WORD_PHRASES.some(p => trimmed.toLowerCase().startsWith(p));
       if (startsWithWakeWord) {
         logger.info(`🎯 Wake word from non-owner embedding (confidence=${spkr.confidence} norm=${spkr.norm_score}) — passing to FSM gate`);
         // Let it through — FSM gate will handle wake-up with unauthenticated session
@@ -1945,9 +1948,11 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // Instead of dropping the whole thing, extract just the Jarvis command.
     // e.g. "...blah TV noise... Jarvis, check my messages. ...more TV noise..." → "Jarvis, check my messages."
     if (rawTranscript.length > 60 && getState() === 'SLEEP') {
-      const jarvisIdx = rawTranscript.search(/\b(jarvis|gargis|service)\b/i);
+      const _wakeTerms = [...new Set(['jarvis', 'gargis', 'service', VOICE_WAKE_WORD, ...WAKE_WORD_PHRASES])];
+      const _wakeTermsRe = new RegExp(`\\b(${_wakeTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i');
+      const jarvisIdx = rawTranscript.search(_wakeTermsRe);
       if (jarvisIdx > 20) {
-        // "Jarvis" is buried deep -- TV dialogue before it. Extract from Jarvis onward.
+        // Wake word is buried deep -- TV dialogue before it. Extract from wake word onward.
         const fromJarvis = rawTranscript.substring(jarvisIdx);
         const sentenceEnd = fromJarvis.match(/[.!?]\s/g);
         const extracted = sentenceEnd && sentenceEnd.length >= 2
@@ -1996,10 +2001,19 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         authenticatedSession = authCtx.isOwner;
         resetIdleSleepTimer();
         // Strip wake word prefix: try standard patterns first, fall back to fuzzy vocative
-        let stripped = rawTranscript.replace(/^(hey\s+)?jarvis[,.]?\s*/i, '').trim();
+        // Strip wake word prefix: try configured wake word first, then "jarvis" (legacy), then fuzzy vocative
+        const _wwStripEsc = VOICE_WAKE_WORD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const _wakeStripRe = new RegExp(`^(hey\\s+)?(${_wwStripEsc}|jarvis)[,.]?\\s*`, 'i');
+        let stripped = rawTranscript.replace(_wakeStripRe, '').trim();
         if (stripped === rawTranscript.trim()) {
-          // Standard strip didn't match — try fuzzy vocative prefix ([word], sentence)
-          stripped = rawTranscript.replace(/^[a-zA-Z]{1,12}[,.]?\s+/i, '').trim();
+          // Standard strip didn't match — try WAKE_WORD_PHRASES prefixes
+          const _matchedPhrase = WAKE_WORD_PHRASES.find(p => rawTranscript.toLowerCase().startsWith(p));
+          if (_matchedPhrase) {
+            stripped = rawTranscript.substring(_matchedPhrase.length).replace(/^[,.\s]+/, '').trim();
+          } else {
+            // Last resort: fuzzy vocative prefix ([word], sentence)
+            stripped = rawTranscript.replace(/^[a-zA-Z]{1,12}[,.]?\s+/i, '').trim();
+          }
         }
         if (stripped.length > 2) {
           logger.info(`SLEEP -> ACTIVE with command (authenticated=${authCtx.isOwner}): "${stripped}"`);
@@ -2075,7 +2089,9 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // ── Pre-wake-word sleep check (two-tier) ──
     // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
     // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
-    const preSleepCheck = rawTranscript.toLowerCase().replace(/[.,!?]/g, '').replace(/\bjarvis\b/gi, '').trim();
+    const _wwPreSleepEsc = VOICE_WAKE_WORD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const _preSleepWakeRe = new RegExp(`\\b(jarvis|${_wwPreSleepEsc})\\b`, 'gi');
+    const preSleepCheck = rawTranscript.toLowerCase().replace(/[.,!?]/g, '').replace(_preSleepWakeRe, '').trim();
     if (await fsmHandleSleepCheck(preSleepCheck, 'voice-command-pre-wake', userId, _pendingUtterance, synthesizeSpeech, audioQueue)) return;
     // If fsmHandleSleepCheck returned false with autoSleepAfterTask set, fall through to dispatch
 
