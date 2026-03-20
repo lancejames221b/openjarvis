@@ -28,10 +28,15 @@ const STREAMING_TTS_ENABLED = process.env.STREAMING_TTS_ENABLED !== 'false'; // 
 // Find edge-tts binary
 const EDGE_TTS_BIN = process.env.EDGE_TTS_PATH || `${process.env.HOME}/.local/bin/edge-tts`;
 
+// ── TTS Provider ─────────────────────────────────────────────────────
+// TTS_PROVIDER controls which engine is used: 'edge' | 'piper' | 'openai'
+// Read dynamically so runtime .env changes take effect on restart.
+const getTTSProvider = () => (process.env.TTS_PROVIDER || 'piper').toLowerCase();
+
 // ── Piper TTS (JARVIS voice) ─────────────────────────────────────────
-// Local JARVIS voice via Piper. Primary when available, Edge TTS as fallback.
-// Read dynamically from process.env so runtime toggles work
-const isPiperEnabled = () => process.env.PIPER_ENABLED !== 'false'; // Default true
+// Local JARVIS voice via Piper. Only used when TTS_PROVIDER=piper.
+// PIPER_ENABLED is kept for backward compat but TTS_PROVIDER takes precedence.
+const isPiperEnabled = () => getTTSProvider() === 'piper' && process.env.PIPER_ENABLED !== 'false';
 const PIPER_URL = process.env.PIPER_URL || 'http://127.0.0.1:3336';
 const PIPER_MODEL = process.env.PIPER_MODEL || 'medium'; // medium (~1.5s) or high (~3.5s)
 
@@ -96,8 +101,12 @@ const TTS_CIRCUIT_BREAKER = {
  * Get current TTS health status for monitoring
  */
 export function getTTSHealth() {
+  const provider = getTTSProvider();
   const edge = TTS_CIRCUIT_BREAKER.getStatus();
-  return isPiperEnabled() ? `piper-jarvis (fallback: ${edge})` : edge;
+  if (provider === 'piper' && process.env.PIPER_ENABLED !== 'false') {
+    return `piper-jarvis (fallback: ${edge})`;
+  }
+  return `edge:${process.env.EDGE_TTS_VOICE || 'en-AU-WilliamNeural'} (${edge})`;
 }
 
 /**
@@ -160,22 +169,22 @@ export async function synthesizeSpeech(text) {
     return null;
   }
   
-  // Try Piper (JARVIS voice) first
-  if (isPiperEnabled()) {
+  const provider = getTTSProvider();
+  logger.info(`🔊 TTS provider: ${provider}`);
+
+  // Piper (JARVIS voice clone) — only when TTS_PROVIDER=piper
+  if (provider === 'piper' && process.env.PIPER_ENABLED !== 'false') {
     const piperResult = await synthesizePiper(sanitized);
     if (piperResult) return piperResult;
-    // Piper failed — retry once with backoff before giving up
     logger.warn('⚠️ Piper TTS failed, retrying once in 500ms...');
     await new Promise(r => setTimeout(r, 500));
     const retryResult = await synthesizePiper(sanitized);
     if (retryResult) return retryResult;
-    // Both attempts failed — degrade to text-only (NO voice switch)
-    // Switching to Edge mid-conversation changes the voice identity
     logger.warn('⚠️ Piper TTS unavailable after retry — text-only mode (no voice switch)');
     return null;
   }
-  
-  // Edge TTS only used when Piper is explicitly disabled
+
+  // Edge TTS — default when TTS_PROVIDER=edge (or anything other than piper)
   return synthesizeEdge(sanitized);
 }
 
