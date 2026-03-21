@@ -30,6 +30,7 @@ import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFra
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback } from './alert-webhook.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
+import { StreamingSTTSession } from './stt-streaming.js';
 import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
@@ -1660,29 +1661,30 @@ async function joinChannel(voiceChannelId, options = {}) {
 
       decoder.on('data', (chunk) => chunks.push(chunk));
 
-      // Rolling partial STT — fire every 500ms while audio is being collected
-      const partialTimer = setInterval(async () => {
-        if (chunks.length === 0 || partialInFlight.get(userId)) return;
-        partialInFlight.set(userId, true);
-        try {
-          const partialBuf = Buffer.concat(chunks);
-          const partialDurationMs = (partialBuf.length / (48000 * 2)) * 1000;
-          if (partialDurationMs < 800) return; // too short to transcribe usefully
-          const partialWavPath = join(TMP_DIR, `partial_${userId}_${Date.now()}.wav`);
-          await savePcmAsWav(partialBuf, partialWavPath);
-          const result = await transcribeAudio(partialWavPath);
-          try { unlinkSync(partialWavPath); } catch {}
-          if (result && result.text && !result.rejected) {
-            partialTranscripts.set(userId, { text: result.text, ts: Date.now() });
-          }
-        } catch { /* partial STT failure is non-fatal */ } finally {
-          partialInFlight.delete(userId);
-        }
-      }, 500);
+      // SimulStreaming STT — stream chunks to WhisperLiveKit WS as they arrive
+      const streamingEnabled = process.env.STT_STREAMING_ENABLED !== 'false';
+      let streamSession = null;
+      if (streamingEnabled) {
+        streamSession = new StreamingSTTSession(userId, {
+          onPartial: (text) => {
+            partialTranscripts.set(userId, { text, ts: Date.now() });
+          },
+          onConfirmed: (text) => {
+            partialTranscripts.set(userId, { text, ts: Date.now() });
+            logger.debug(`[SimulStream] confirmed for ${userId}: "${text.substring(0, 60)}"`);
+          },
+        });
+        logger.debug(`[SimulStream] session started for ${userId}`);
+      }
+
+      // Second listener — stream chunks to WK (chunks[] push above is unchanged)
+      decoder.on('data', (chunk) => {
+        streamSession?.sendChunk(chunk);
+      });
 
       // Clean up userSpeaking on error so future audio isn't blocked
       audioStream.once('error', (err) => {
-        clearInterval(partialTimer);
+        streamSession?.destroy();
         logger.error(`Audio stream error for ${userId}:`, err.message);
         userSpeaking.delete(userId);
         decoder.destroy();
@@ -1691,24 +1693,40 @@ async function joinChannel(voiceChannelId, options = {}) {
       decoder.once('error', () => {}); // Suppress unhandled error on destroy
 
       audioStream.once('end', async () => {
-        clearInterval(partialTimer);
         userSpeaking.delete(userId);
         const totalBuffer = Buffer.concat(chunks);
         const durationMs = (totalBuffer.length / (48000 * 2)) * 1000;
 
-        if (durationMs < MIN_AUDIO_DURATION_MS) return;
+        if (durationMs < MIN_AUDIO_DURATION_MS) {
+          streamSession?.destroy();
+          return;
+        }
 
-        // Check for a recent partial transcript (<500ms old) — skip final STT if fresh
-        const partial = partialTranscripts.get(userId);
-        if (partial && Date.now() - partial.ts < 500) {
+        // Finalize streaming session — sends EOF, waits up to 3s for last words
+        let streamTranscript = null;
+        if (streamSession) {
+          try {
+            streamTranscript = await streamSession.finish();
+          } catch {
+            streamSession.destroy();
+          }
+        }
+
+        if (streamTranscript) {
+          logger.info(`[SimulStream] final transcript for ${userId}: "${streamTranscript.substring(0, 80)}"`);
           partialTranscripts.delete(userId);
-          logger.info(`⚡ Using partial transcript for ${userId}: "${partial.text.substring(0, 60)}"`);
-          await handleSpeech(userId, totalBuffer, partial.text);
+          await handleSpeech(userId, totalBuffer, streamTranscript);
         } else {
-          partialTranscripts.delete(userId);
-          // Fully async — every utterance goes straight to handleSpeech
-          // No blocking, no queueing. Multiple brain calls run concurrently.
-          await handleSpeech(userId, totalBuffer);
+          // Fallback: check cached partial, then let handleSpeech transcribe via HTTP
+          const partial = partialTranscripts.get(userId);
+          if (partial && Date.now() - partial.ts < 500) {
+            partialTranscripts.delete(userId);
+            logger.info(`[SimulStream] using cached partial for ${userId}: "${partial.text.substring(0, 60)}"`);
+            await handleSpeech(userId, totalBuffer, partial.text);
+          } else {
+            partialTranscripts.delete(userId);
+            await handleSpeech(userId, totalBuffer);
+          }
         }
       });
 
