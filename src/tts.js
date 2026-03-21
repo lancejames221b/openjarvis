@@ -211,6 +211,83 @@ export async function synthesizeSpeech(text) {
 }
 
 /**
+ * Synthesize via Chatterbox streaming TTS endpoint.
+ * Returns an async generator that yields WAV file paths as each sentence completes.
+ * The server splits text into sentences, generates sequentially, and streams NDJSON.
+ *
+ * @param {string} text - Sanitized full text to speak
+ * @param {function(string): void} onFile - Callback invoked with each WAV path as it arrives
+ * @returns {Promise<void>}
+ */
+export async function synthesizeChatterboxStream(text, onFile) {
+  try {
+    const res = await fetch(`${CHATTERBOX_URL}/tts/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: CHATTERBOX_VOICE }),
+      signal: AbortSignal.timeout(120000), // 2 min total for long responses
+    });
+
+    if (!res.ok) {
+      logger.warn(`⚠️ Chatterbox stream returned ${res.status}`);
+      return;
+    }
+
+    const { writeFile } = await import('fs/promises');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete NDJSON lines
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // Keep incomplete last line
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.error) {
+            logger.warn(`⚠️ Chatterbox stream error on sentence ${parsed.index}: ${parsed.error}`);
+            continue;
+          }
+          if (!parsed.audio_b64) continue;
+
+          const audioBuffer = Buffer.from(parsed.audio_b64, 'base64');
+          const outputPath = join(TMP_DIR, `chatterbox_stream_${Date.now()}_${parsed.index}.wav`);
+          await writeFile(outputPath, audioBuffer);
+          logger.info(`🎭 Chatterbox stream sentence ${parsed.index}: ${parsed.latency_ms}ms`);
+          onFile(outputPath);
+        } catch (parseErr) {
+          logger.warn(`⚠️ Chatterbox stream parse error: ${parseErr.message}`);
+        }
+      }
+    }
+
+    // Process any remaining buffer content
+    if (buffer.trim()) {
+      try {
+        const parsed = JSON.parse(buffer.trim());
+        if (parsed.audio_b64) {
+          const { writeFile } = await import('fs/promises');
+          const audioBuffer = Buffer.from(parsed.audio_b64, 'base64');
+          const outputPath = join(TMP_DIR, `chatterbox_stream_${Date.now()}_${parsed.index}.wav`);
+          await writeFile(outputPath, audioBuffer);
+          onFile(outputPath);
+        }
+      } catch {}
+    }
+  } catch (err) {
+    logger.warn(`⚠️ Chatterbox stream unavailable: ${err.message}`);
+  }
+}
+
+/**
  * Synthesize via Chatterbox TTS (Lance voice clone)
  * @param {string} text - Sanitized text to speak
  * @returns {Promise<string|null>} Path to WAV file, or null if unavailable

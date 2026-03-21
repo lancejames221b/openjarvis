@@ -7,7 +7,7 @@
 
 import { createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior, VoiceConnectionStatus } from '@discordjs/voice';
 import { unlinkSync } from 'fs';
-import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
+import { synthesizeSpeech, synthesizeChatterboxStream, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { generateTldr } from './tldr-mode.js';
 import logger from './logger.js';
 
@@ -148,8 +148,10 @@ export function enforceOutputLength(fullText, tldrModeEnabled = false) {
 
 /**
  * Synthesize and queue text for playback.
- * Handles splitting into sentences, TTS synthesis, and queuing.
- * 
+ * For Chatterbox: uses the streaming /tts/stream endpoint — server splits sentences,
+ * generates sequentially, and we queue each WAV as it arrives (fast first-audio).
+ * For other providers: splits client-side and calls synthesizeSpeech() per chunk.
+ *
  * @param {string} text - Text to speak
  * @param {Function} [fallbackPost] - Function to post text if TTS unavailable
  */
@@ -166,6 +168,27 @@ export async function speakText(text, fallbackPost = null) {
     return;
   }
 
+  const provider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
+
+  // Chatterbox: use server-side streaming — bypasses client sentence splitting
+  // Server handles splitting, caches voice conditionals, streams NDJSON as sentences complete
+  if (provider === 'chatterbox') {
+    let anyAudio = false;
+    try {
+      await synthesizeChatterboxStream(text.trim(), (audioPath) => {
+        audioQueue.add(audioPath);
+        anyAudio = true;
+      });
+    } catch (err) {
+      logger.error('Chatterbox stream failed:', err.message);
+    }
+    if (!anyAudio && fallbackPost) {
+      fallbackPost(`🔇 ${text}`);
+    }
+    return;
+  }
+
+  // Non-chatterbox: client-side sentence splitting + per-sentence synthesis
   const sentences = splitIntoSentences(text);
   for (const sentence of sentences) {
     if (sentence.trim().length < 2) continue;
