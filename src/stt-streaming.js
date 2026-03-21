@@ -3,7 +3,7 @@
 // Protocol: connect → receive config → send raw PCM → receive partial/confirmed lines → send EOF → done.
 
 import WebSocket from 'ws';
-import { logger } from './logger.js';
+import logger from './logger.js';
 
 const STT_STREAMING_URL = process.env.STT_STREAMING_URL || 'ws://127.0.0.1:8769/asr';
 
