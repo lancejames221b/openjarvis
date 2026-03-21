@@ -371,10 +371,16 @@ function flushPendingUtterance() {
 
   postActivity(`🚀 **Task #${taskId}**${speakerTag}${sleepTag} started${activeTasks.size > 1 ? ` (${activeTasks.size} active)` : ''}\n> ${truncate(merged, 120)}`);
 
-  const brainOptions = {};
+  const brainOptions = { taskId };
   if (speakerName) brainOptions.speaker = speakerName;
   if (sentiment) brainOptions.sentiment = sentiment;
   if (autoSleepAfterTask) brainOptions.autoSleepAfterTask = true;
+
+  // Classify intent for model routing (haiku vs sonnet)
+  try {
+    const classification = classifyIntent({ transcript: merged, speechDurationMs: 0, conversationDepth: conv ? conv.history.length : 0, isFollowUp: false, previousResponseType: null });
+    if (classification?.type) brainOptions.intentType = classification.type;
+  } catch (_) {}
 
   processBrainTask(taskId, userId, merged, conv ? [...conv.history] : [], controller.signal, brainOptions)
     .catch(err => logger.error(`Task #${taskId} error:`, err.message));

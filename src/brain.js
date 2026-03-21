@@ -418,7 +418,18 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   let buffer = ''; // Declare outside try so catch handler can access it
   let fullText = ''; // Declare outside try so catch handler can check if anything was spoken
 
-  const voiceModel = isAskModeEnabled() ? process.env.VOICE_MODEL_ASK : process.env.VOICE_MODEL;
+  // ── Intent-based model routing ───────────────────────────────────────
+  // Simple intents (casual chat, greetings, lookups) → haiku for speed/cost
+  // Tool-bearing or complex intents → full sonnet model
+  const SIMPLE_INTENT_TYPES = new Set(['CASUAL', 'CONVERSATIONAL', 'SIMPLE_LOOKUP', 'GREETING', 'CONTINUATION']);
+  const TOOL_TRIGGER_RE = /\b(email|calendar|remind|schedule|create|send|check my|look up|search|find)\b/i;
+  const intentType = options.intentType || null;
+  const simpleModelCandidate = process.env.VOICE_MODEL_SIMPLE || process.env.VOICE_MODEL;
+  const useSimple = intentType && SIMPLE_INTENT_TYPES.has(intentType) && !TOOL_TRIGGER_RE.test(userMessage);
+  const voiceModel = isAskModeEnabled()
+    ? process.env.VOICE_MODEL_ASK
+    : (useSimple ? simpleModelCandidate : process.env.VOICE_MODEL);
+  logger.info({ taskId: options.taskId, intentType, model: voiceModel }, '🧠 Model selected');
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
   // CLI providers (cursor-agent) don't support SSE. Fetch full response,
@@ -725,11 +736,11 @@ export async function generateResponse(userMessage, history = [], signal, option
         messages,
         max_tokens: 8192,
         user: SESSION_USER,
-        model: isAskModeEnabled() ? process.env.VOICE_MODEL_ASK : process.env.VOICE_MODEL,
+        model: voiceModel,
         thinking: { type: 'disabled' },
       }),
     }, signal);
-    
+
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Gateway ${res.status}: ${body}`);
