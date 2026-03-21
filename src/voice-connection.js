@@ -137,7 +137,7 @@ export async function joinChannel(options) {
 /**
  * Set up audio receiver on a voice connection
  */
-function setupAudioReceiver(connection, { onUserSpeech, onBargeIn, isSpeaking, allowedUsers, multiUser }) {
+function setupAudioReceiver(connection, { onUserSpeech, onPartialAudio, onBargeIn, isSpeaking, allowedUsers, multiUser }) {
   const receiver = connection.receiver;
   const userSpeaking = new Map();
   const bargeInTimers = new Map();
@@ -184,22 +184,29 @@ function setupAudioReceiver(connection, { onUserSpeech, onBargeIn, isSpeaking, a
       audioStream.pipe(decoder);
       
       decoder.on('data', (chunk) => chunks.push(chunk));
-      
+
+      // Rolling partial STT — fire callback every 500ms while audio is collected
+      const partialTimer = onPartialAudio ? setInterval(() => {
+        if (chunks.length > 0) onPartialAudio(userId, Buffer.concat(chunks));
+      }, 500) : null;
+
       audioStream.once('error', (err) => {
+        if (partialTimer) clearInterval(partialTimer);
         logger.error(`Audio stream error for ${userId}:`, err.message);
         userSpeaking.delete(userId);
         decoder.destroy();
       });
-      
+
       decoder.once('error', () => {});
-      
+
       audioStream.once('end', async () => {
+        if (partialTimer) clearInterval(partialTimer);
         userSpeaking.delete(userId);
         const totalBuffer = Buffer.concat(chunks);
         const durationMs = (totalBuffer.length / (48000 * 2)) * 1000;
-        
+
         if (durationMs < MIN_AUDIO_DURATION_MS) return;
-        
+
         onUserSpeech(userId, totalBuffer);
       });
       

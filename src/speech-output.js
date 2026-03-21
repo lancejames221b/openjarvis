@@ -6,7 +6,9 @@
  */
 
 import { createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior, VoiceConnectionStatus } from '@discordjs/voice';
-import { unlinkSync } from 'fs';
+import { unlinkSync, copyFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { synthesizeSpeech, synthesizeChatterboxStream, splitIntoSentences, isTTSAvailable } from './tts.js';
 import { generateTldr } from './tldr-mode.js';
 import logger from './logger.js';
@@ -233,4 +235,56 @@ export async function speakAndWait(text) {
     }
   } catch {}
   return false;
+}
+
+// ── Pre-cached Ack Phrases ───────────────────────────────────────────
+// WAV files synthesized at startup for instant playback (zero TTS latency on ack).
+
+const ACK_PHRASES = [
+  'On it, sir.',
+  'Give me a moment.',
+  'Checking that now.',
+  'Looking into it.',
+  'Right away, sir.',
+  'One moment.',
+  'Let me check.',
+  'Of course.',
+];
+
+const ACK_CACHE = []; // array of file paths (persistent for process lifetime)
+
+/**
+ * Pre-synthesize all ack phrases and store paths in ACK_CACHE.
+ * @param {Function} synthesizeFn - synthesizeSpeech function
+ */
+export async function preloadAckPhrases(synthesizeFn) {
+  let loaded = 0;
+  for (const phrase of ACK_PHRASES) {
+    try {
+      const filePath = await synthesizeFn(phrase);
+      if (filePath) {
+        ACK_CACHE.push(filePath);
+        loaded++;
+      }
+    } catch (err) {
+      logger.warn(`Ack preload failed for "${phrase}": ${err.message}`);
+    }
+  }
+  logger.info(`⚡ Pre-cached ${loaded} ack phrases`);
+}
+
+/**
+ * Returns a copy of a random cached ack WAV path, or null if not ready.
+ * Returns a copy so the original is preserved after queue playback deletes it.
+ */
+export function getRandomCachedAck() {
+  if (ACK_CACHE.length === 0) return null;
+  const src = ACK_CACHE[Math.floor(Math.random() * ACK_CACHE.length)];
+  const dest = join(tmpdir(), `ack_play_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+  try {
+    copyFileSync(src, dest);
+    return dest;
+  } catch {
+    return null;
+  }
 }

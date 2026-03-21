@@ -39,7 +39,7 @@ import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped — voice bot is a thin pipe, no ack tracking needed
-import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection } from './speech-output.js';
+import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
 import logger from './logger.js';
 
@@ -268,13 +268,17 @@ const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?
 // Concurrency 2 (vs 3) avoids VRAM contention on single-GPU inference.
 const _isChatterbox = (process.env.TTS_PROVIDER || 'piper').toLowerCase() === 'chatterbox';
 const TTS_PIPELINE_CONCURRENCY = parseInt(process.env.TTS_PIPELINE_CONCURRENCY ?? (_isChatterbox ? '2' : '3'));
-const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? (_isChatterbox ? '120' : '40'));
+const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? (_isChatterbox ? '40' : '40'));
 const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? (_isChatterbox ? '400' : '150'));
 
 // Voice activity tracking
 const userSpeaking = new Map();
 const SILENCE_THRESHOLD_MS = process.env.VAD_TIMEOUT ? parseInt(process.env.VAD_TIMEOUT) : 1500;
 const MIN_AUDIO_DURATION_MS = 300;
+
+// Rolling partial STT state — keyed by userId
+const partialTranscripts = new Map(); // userId -> { text, ts }
+const partialInFlight = new Map();    // userId -> true (debounce: one partial STT per user at a time)
 
 // Audio player — single player shared with speech-output.js
 const player = createAudioPlayer({
@@ -735,7 +739,10 @@ client.once('ready', async () => {
   
   startAlertWebhook();
   startHealthMonitor();
-  
+
+  // Pre-cache ack phrases for instant zero-latency playback
+  preloadAckPhrases(synthesizeSpeech).catch(err => logger.warn('Ack preload failed:', err.message));
+
   // Task ledger removed — voice bot is a thin pipe
   
   try {
@@ -1644,30 +1651,61 @@ async function joinChannel(voiceChannelId, options = {}) {
       const chunks = [];
       const decoder = new OpusDecoder();
       audioStream.pipe(decoder);
-      
+
       decoder.on('data', (chunk) => chunks.push(chunk));
-      
+
+      // Rolling partial STT — fire every 500ms while audio is being collected
+      const partialTimer = setInterval(async () => {
+        if (chunks.length === 0 || partialInFlight.get(userId)) return;
+        partialInFlight.set(userId, true);
+        try {
+          const partialBuf = Buffer.concat(chunks);
+          const partialDurationMs = (partialBuf.length / (48000 * 2)) * 1000;
+          if (partialDurationMs < 800) return; // too short to transcribe usefully
+          const partialWavPath = join(TMP_DIR, `partial_${userId}_${Date.now()}.wav`);
+          await savePcmAsWav(partialBuf, partialWavPath);
+          const result = await transcribeAudio(partialWavPath);
+          try { unlinkSync(partialWavPath); } catch {}
+          if (result && result.text && !result.rejected) {
+            partialTranscripts.set(userId, { text: result.text, ts: Date.now() });
+          }
+        } catch { /* partial STT failure is non-fatal */ } finally {
+          partialInFlight.delete(userId);
+        }
+      }, 500);
+
       // Clean up userSpeaking on error so future audio isn't blocked
       audioStream.once('error', (err) => {
+        clearInterval(partialTimer);
         logger.error(`Audio stream error for ${userId}:`, err.message);
         userSpeaking.delete(userId);
         decoder.destroy();
       });
-      
+
       decoder.once('error', () => {}); // Suppress unhandled error on destroy
-      
+
       audioStream.once('end', async () => {
+        clearInterval(partialTimer);
         userSpeaking.delete(userId);
         const totalBuffer = Buffer.concat(chunks);
         const durationMs = (totalBuffer.length / (48000 * 2)) * 1000;
-        
+
         if (durationMs < MIN_AUDIO_DURATION_MS) return;
-        
-        // Fully async — every utterance goes straight to handleSpeech
-        // No blocking, no queueing. Multiple brain calls run concurrently.
-        await handleSpeech(userId, totalBuffer);
+
+        // Check for a recent partial transcript (<500ms old) — skip final STT if fresh
+        const partial = partialTranscripts.get(userId);
+        if (partial && Date.now() - partial.ts < 500) {
+          partialTranscripts.delete(userId);
+          logger.info(`⚡ Using partial transcript for ${userId}: "${partial.text.substring(0, 60)}"`);
+          await handleSpeech(userId, totalBuffer, partial.text);
+        } else {
+          partialTranscripts.delete(userId);
+          // Fully async — every utterance goes straight to handleSpeech
+          // No blocking, no queueing. Multiple brain calls run concurrently.
+          await handleSpeech(userId, totalBuffer);
+        }
       });
-      
+
       userSpeaking.set(userId, { startTime: Date.now() });
     }
   });
@@ -2467,15 +2505,10 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Set VOICE_ACK_ENABLED=false to suppress all acks (master flag).
     // Set IMMEDIATE_ACKS_ENABLED=false to suppress only the fast pre-emptive Haiku ack.
     if (IMMEDIATE_ACKS_ENABLED && VOICE_ACK_ENABLED) {
-      try {
-        const ackText = await generateAck(transcript);
-        if (ackText) {
-          logger.info(`⚡ Ack: "${ackText}"`);
-          const ackAudio = await synthesizeSpeech(ackText);
-          if (ackAudio) audioQueue.add(ackAudio);
-        }
-      } catch (e) {
-        logger.warn(`⚠️ Ack failed: ${e.message}`);
+      const cachedAck = getRandomCachedAck();
+      if (cachedAck) {
+        audioQueue.add(cachedAck);
+        logger.info('⚡ Playing cached ack');
       }
     }
 
