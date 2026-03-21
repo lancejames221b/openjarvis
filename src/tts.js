@@ -46,6 +46,12 @@ const PIPER_MODEL = process.env.PIPER_MODEL || 'medium'; // medium (~1.5s) or hi
 const CHATTERBOX_URL   = process.env.CHATTERBOX_URL   || 'http://127.0.0.1:3340';
 const CHATTERBOX_VOICE = process.env.CHATTERBOX_VOICE || 'jarvis';
 
+// ── Kokoro TTS ────────────────────────────────────────────────────────
+// OpenAI-compatible TTS service — 114-155ms/sentence. Only used when TTS_PROVIDER=kokoro.
+// British male voices: bm_lewis (default), bm_daniel, bm_george.
+const KOKORO_URL   = process.env.KOKORO_URL   || 'http://localhost:8880';
+const KOKORO_VOICE = process.env.KOKORO_VOICE || 'bm_lewis';
+
 // ── TTS Circuit Breaker ──────────────────────────────────────────────
 // After 3 Edge TTS failures within 5 minutes, stop trying for 5 minutes.
 // Returns null so callers degrade to text-only delivery.
@@ -109,6 +115,10 @@ const TTS_CIRCUIT_BREAKER = {
 export function getTTSHealth() {
   const provider = getTTSProvider();
   const edge = TTS_CIRCUIT_BREAKER.getStatus();
+  if (provider === 'kokoro') {
+    const voice = process.env.KOKORO_VOICE || 'bm_lewis';
+    return `kokoro-${voice} @ ${KOKORO_URL} (fallback: none — text-only on failure)`;
+  }
   if (provider === 'chatterbox') {
     const voice = process.env.CHATTERBOX_VOICE || 'jarvis';
     return `chatterbox-${voice} (fallback: none — text-only on failure)`;
@@ -182,6 +192,18 @@ export async function synthesizeSpeech(text) {
   const provider = getTTSProvider();
   logger.info(`🔊 TTS provider: ${provider}`);
 
+  // Kokoro (British male voice) — only when TTS_PROVIDER=kokoro
+  if (provider === 'kokoro') {
+    const result = await synthesizeKokoro(sanitized);
+    if (result) return result;
+    logger.warn('Kokoro TTS failed, retrying once in 500ms...');
+    await new Promise(r => setTimeout(r, 500));
+    const retryResult = await synthesizeKokoro(sanitized);
+    if (retryResult) return retryResult;
+    logger.warn('Kokoro TTS unavailable after retry — text-only mode');
+    return null;
+  }
+
   // Chatterbox (Lance voice clone) — only when TTS_PROVIDER=chatterbox
   if (provider === 'chatterbox') {
     const result = await synthesizeChatterbox(sanitized);
@@ -208,6 +230,86 @@ export async function synthesizeSpeech(text) {
 
   // Edge TTS — default when TTS_PROVIDER=edge (or anything other than piper/chatterbox)
   return synthesizeEdge(sanitized);
+}
+
+/**
+ * Synthesize via Kokoro TTS (OpenAI-compatible, British male voice).
+ * ~114-155ms per sentence — effectively real-time.
+ *
+ * @param {string} text - Sanitized text to speak
+ * @returns {Promise<string|null>} Path to WAV file, or null if unavailable
+ */
+async function synthesizeKokoro(text) {
+  try {
+    const start = Date.now();
+    const res = await fetch(`${KOKORO_URL}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'kokoro', voice: KOKORO_VOICE, input: text, response_format: 'wav' }),
+      signal: AbortSignal.timeout(10000), // 10s — should be <200ms in practice
+    });
+
+    if (!res.ok) {
+      logger.warn(`Kokoro TTS returned ${res.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const outputPath = join(TMP_DIR, `kokoro_${Date.now()}.wav`);
+    const { writeFile } = await import('fs/promises');
+    await writeFile(outputPath, buffer);
+
+    logger.info(`Kokoro TTS: ${Date.now() - start}ms (${KOKORO_VOICE})`);
+    return outputPath;
+  } catch (err) {
+    logger.warn(`Kokoro TTS unavailable: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Synthesize via Kokoro TTS with streaming response.
+ * Collects the full WAV in chunks and calls onFile once complete.
+ * Kokoro is fast enough that chunked playback adds latency rather than reducing it,
+ * so this just streams the HTTP body and writes a single file per call.
+ *
+ * @param {string} text - Sanitized text to speak
+ * @param {function(string): void} onFile - Callback invoked with WAV path when ready
+ * @returns {Promise<void>}
+ */
+export async function synthesizeKokoroStream(text, onFile) {
+  try {
+    const start = Date.now();
+    const res = await fetch(`${KOKORO_URL}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'kokoro', voice: KOKORO_VOICE, input: text, response_format: 'wav', stream: true }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) {
+      logger.warn(`Kokoro stream returned ${res.status}`);
+      return;
+    }
+
+    const chunks = [];
+    const reader = res.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    const buffer = Buffer.concat(chunks.map(c => Buffer.from(c)));
+    const outputPath = join(TMP_DIR, `kokoro_stream_${Date.now()}.wav`);
+    const { writeFile } = await import('fs/promises');
+    await writeFile(outputPath, buffer);
+
+    logger.info(`Kokoro stream: ${Date.now() - start}ms`);
+    onFile(outputPath);
+  } catch (err) {
+    logger.warn(`Kokoro stream unavailable: ${err.message}`);
+  }
 }
 
 /**
@@ -495,8 +597,9 @@ export function splitIntoSentences(text) {
   // because each inference call loads the voice reference; more context = better prosody per call.
   // Piper: smaller chunks → faster first-audio. Chatterbox: larger chunks → fewer GPU calls.
   const _provider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
+  // Kokoro is fast enough to handle full sentences individually — use medium chunk sizes
   const MIN_CHUNK = _provider === 'chatterbox' ? 120 : 60;
-  const MAX_CHUNK = _provider === 'chatterbox' ? 450 : 300;
+  const MAX_CHUNK = _provider === 'chatterbox' ? 450 : _provider === 'kokoro' ? 300 : 300;
   const result = [];
   let current = '';
   
