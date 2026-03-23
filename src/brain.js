@@ -1,5 +1,6 @@
 import logger from './logger.js';
 import { VOICE_NAME } from './wakeword.js';
+import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag } from './session-manager.js';
 /**
  * Brain Module - Thin voice I/O layer to Clawdbot Gateway
  * 
@@ -179,7 +180,7 @@ export function isGatewayCircuitOpen() {
 }
 
 // Use the main Discord text channel session — same brain as chat
-const SESSION_USER = process.env.SESSION_USER || 'jarvis-voice-user';
+// SESSION_USER managed by session-manager.js
 
 // Model selection delegated to gateway — voice bot doesn't pick the model.
 // Gateway agent uses session_status to switch models as needed.
@@ -251,6 +252,7 @@ CONTEXT AND CONVERSATION:
 - Calendar: only upcoming events from NOW forward, skip what already happened.
 - Reminders: delegate to sub-agent with cron + /speak webhook callback. Cron payload MUST use model: "google/gemini-3-flash-preview" and delivery: { mode: "none" }.
 - Voice handoff: summarize conversation thoroughly, post to target Discord channel, confirm by speech.
+- Memory: Your persistent memory is haivemind. For anything the user references from prior sessions, it can be retrieved via sessions_spawn haivemind search. Session history is short by design — facts live in haivemind.
 
 CRON / REMINDER PAYLOAD RULES (MANDATORY):
 When creating any cron job (reminder, scheduled task, alert):
@@ -382,6 +384,9 @@ export function trimForVoice(text) {
  * @returns {{ text: string, aborted?: boolean }} Full response text
  */
 export async function generateResponseStreaming(userMessage, history = [], signal, onSentence, options = {}) {
+  touchActivity();
+  await maybeRotateSession(history);
+
   const _now = new Date();
   let contextTags = `[DATETIME: ${_now.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}] `;
   if (options.speaker) {
@@ -397,7 +402,17 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     contextTags += `[ALERT CONTEXT: You just spoke this alert: "${alertCtx}". User's next message responds to THIS — not prior conversation. Address the alert first.] `;
     clearActiveAlert();
   }
-  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${userMessage}`;
+
+  let priorCtxTag = '';
+  if (consumeNewSessionFlag()) {
+    const hCtx = await getHaivemindContext();
+    if (hCtx) {
+      priorCtxTag = `[PRIOR CONTEXT from memory: ${hCtx}] `;
+      logger.info('Injected haivemind context into new session');
+    }
+  }
+
+  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${priorCtxTag}${userMessage}`;
   
   const messages = [
     ...history.slice(-6).map(m => ({ role: m.role, content: m.content })),
@@ -446,7 +461,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         body: JSON.stringify({
           messages,
           max_tokens: 8192,
-          user: SESSION_USER,
+          user: getActiveSessionUser(),
           stream: false,
           model: voiceModel,
           thinking: { type: 'disabled' },
@@ -510,7 +525,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
-        user: SESSION_USER,
+        user: getActiveSessionUser(),
         stream: true,
         model: voiceModel,
         thinking: { type: 'disabled' },
@@ -672,8 +687,11 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       return { text: '', empty: true };
     }
 
+    if (cleanedFull && userMessage && options.taskId) {
+      storeTaskToHaivemind(options.taskId, userMessage, cleanedFull).catch(() => {});
+    }
     return { text: cleanedFull };
-    
+
   } catch (err) {
     if (err.name === 'AbortError') {
       return { text: '', aborted: true };
@@ -735,7 +753,7 @@ export async function generateResponse(userMessage, history = [], signal, option
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
-        user: SESSION_USER,
+        user: getActiveSessionUser(),
         model: voiceModel,
         thinking: { type: 'disabled' },
       }),
@@ -1010,7 +1028,7 @@ Post results back to the same channel (channel: "discord", target: "${options.ch
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
-        user: options.sessionUser || SESSION_USER,
+        user: options.sessionUser || getActiveSessionUser(),
         model: process.env.VOICE_MODEL,
         thinking: { type: 'disabled' },
       }),
@@ -1060,7 +1078,7 @@ Replace YOUR_RESPONSE_HERE with your actual spoken response (escaped for JSON). 
       },
       body: JSON.stringify({
         message: hookMessage,
-        sessionKey: SESSION_USER,
+        sessionKey: getActiveSessionUser(),
         wakeMode: 'now',
       }),
     });

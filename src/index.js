@@ -263,7 +263,7 @@ setInterval(pruneConversations, 10 * 60 * 1000);
 const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '60000');
 const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
 const INFLIGHT_SIMILARITY_THRESHOLD = parseFloat(process.env.INFLIGHT_SIMILARITY_THRESHOLD ?? '0.75'); // Jaccard bigram overlap to absorb in-flight duplicate
-const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '40');
+const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '6');
 // Chatterbox needs fewer, larger chunks — GPU inference per call is expensive (~2-5s each).
 // Larger batches = fewer calls = lower total latency + better prosody (more context per chunk).
 // Concurrency 2 (vs 3) avoids VRAM contention on single-GPU inference.
