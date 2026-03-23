@@ -317,6 +317,46 @@ const recordMode = {
 const activeTasks = new Map(); // taskId -> { controller, transcript, startTime }
 let taskIdCounter = 0;
 
+// ── /speak queue: hold incoming speaks while a task response is delivering ──
+// Prevents cron results / sub-agent callbacks from interleaving mid-sentence.
+let _ttsDeliveryActive = false;       // true while ttsPipeline is streaming to audioQueue
+const _pendingSpeaks = [];            // { message, speakOpts } buffered during delivery
+
+function setTTSDeliveryActive(val) { _ttsDeliveryActive = val; }
+function isTTSDeliveryActive() { return _ttsDeliveryActive; }
+
+async function flushPendingSpeaks() {
+  while (_pendingSpeaks.length > 0) {
+    const { message, speakOpts } = _pendingSpeaks.shift();
+    logger.info(`🔔 Flushing queued /speak (${_pendingSpeaks.length} remaining): "${message.substring(0, 60)}"`);
+    await _deliverSpeak(message, speakOpts);
+  }
+}
+
+// The actual speak delivery — extracted so both immediate and deferred paths use it.
+async function _deliverSpeak(message, speakOpts = {}) {
+  if (!message || message.trim().length < 2) return;
+  if (MUTE_QUEUE_ENABLED && isMuteQueueActive()) {
+    const source = speakOpts.source || 'speak';
+    const priority = speakOpts.priority || 3;
+    muteQueueAdd(message.trim(), source, priority);
+    logger.info(`🔇 /speak intercepted — queued for mute debrief (${source})`);
+    return;
+  }
+  const wasAsleep = getState() === 'SLEEP';
+  const sentences = splitIntoSentences(message);
+  for (const sentence of sentences) {
+    if (sentence.trim().length < 2) continue;
+    const audio = await synthesizeSpeech(sentence.trim());
+    if (audio) {
+      audioQueue.add(audio);
+    } else {
+      postToTextChannel(`🔇 ${sentence}`);
+    }
+  }
+  if (wasAsleep) openAttentionWindow();
+}
+
 // ── Utterance Grouping (debounce rapid speech segments) ──────────────
 // When user speaks in fragments ("check the weather" ... "in New York"), Whisper
 // may emit them as separate transcripts. Buffer briefly and merge before dispatching.
@@ -687,39 +727,17 @@ client.once('ready', async () => {
   setFollowUpExpectedCallback(() => isFollowUpExpected());
   
   // Wire up immediate TTS delivery for /speak endpoint
-  // Uses the main audioQueue (subscribed to voice connection) directly.
-  // speech-output.js speakText has its own audioQueue that wasn't connected.
+  // If a task response is actively streaming to audioQueue, buffer the speak
+  // and flush it after the task finishes — no more mid-sentence interruptions.
   setSpeakCallback(async (message, speakOpts = {}) => {
     try {
       if (!message || message.trim().length < 2) return;
-
-      // Self-mute queue intercept — capture text instead of synthesizing
-      if (MUTE_QUEUE_ENABLED && isMuteQueueActive()) {
-        const source = speakOpts.source || 'speak';
-        const priority = speakOpts.priority || 3;
-        muteQueueAdd(message.trim(), source, priority);
-        logger.info(`🔇 /speak intercepted — queued for mute debrief (${source})`);
+      if (isTTSDeliveryActive()) {
+        logger.info(`🔔 /speak buffered (task delivery active): "${message.substring(0, 60)}"`);
+        _pendingSpeaks.push({ message, speakOpts });
         return;
       }
-
-      const wasAsleep = getState() === 'SLEEP';
-      const sentences = splitIntoSentences(message);
-      for (const sentence of sentences) {
-        if (sentence.trim().length < 2) continue;
-        const audio = await synthesizeSpeech(sentence.trim());
-        if (audio) {
-          audioQueue.add(audio);
-        } else {
-          // TTS failed -- fall back to text
-          postToTextChannel(`🔇 ${sentence}`);
-        }
-      }
-
-      // If Jarvis just spoke a result while muted/sleeping, open a brief attention
-      // window so the user can reply without needing to say "Jarvis" again.
-      if (wasAsleep) {
-        openAttentionWindow();
-      }
+      await _deliverSpeak(message, speakOpts);
     } catch (err) {
       logger.error('Speak callback TTS failed:', err.message);
     }
@@ -2558,6 +2576,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       maxConcurrent: TTS_PIPELINE_CONCURRENCY,
       onError: (err) => logger.error(`TTS pipeline error for task #${taskId}:`, err.message),
     });
+    setTTSDeliveryActive(true);
     
     // ── Streaming TTS with pipelined delivery ──────────────────────────
     // Strategy: accumulate text into moderate chunks (~80-200 chars) and
@@ -2665,6 +2684,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
       audioQueue.clear();
+      setTTSDeliveryActive(false);
+      flushPendingSpeaks().catch(() => {});
       postActivity(`**Task #${taskId}** cancelled after ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
       return;
     }
@@ -2715,6 +2736,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         batchText = '';
       }
       await ttsPipeline.drain();
+      setTTSDeliveryActive(false);
+      await flushPendingSpeaks();
       return;
     }
     
@@ -2726,6 +2749,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     }
     // Wait for all queued TTS to finish generating and playing
     await ttsPipeline.drain();
+    setTTSDeliveryActive(false);
+    await flushPendingSpeaks();
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     // Strip any leaked signal fragments from the final text
