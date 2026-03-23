@@ -45,11 +45,10 @@ VOICE_REFS = {
         "CHATTERBOX_VOICE_JARVIS",
         "/home/generic/dev/voice-clones/jarvis/jarvis_reference_15s.wav",
     )),
-    "lance": Path(os.getenv(
-        "CHATTERBOX_VOICE_LANCE",
-        "/home/generic/dev/voice-clones/lance_reference_15s.wav",
-    )),
 }
+
+# Lance voice available but not loaded by default — add back if needed
+# "lance": Path("/home/generic/dev/voice-clones/lance_reference_15s.wav")
 
 DEFAULT_VOICE = os.getenv("CHATTERBOX_DEFAULT_VOICE", "jarvis").lower()
 PORT = int(os.getenv("CHATTERBOX_PORT", "3340"))

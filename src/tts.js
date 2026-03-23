@@ -52,6 +52,13 @@ const CHATTERBOX_VOICE = process.env.CHATTERBOX_VOICE || 'jarvis';
 const KOKORO_URL   = process.env.KOKORO_URL   || 'http://localhost:8880';
 const KOKORO_VOICE = process.env.KOKORO_VOICE || 'bm_lewis';
 
+// ── Qwen3 TTS ─────────────────────────────────────────────────────────
+// Qwen3-TTS VoiceDesign — describe the voice you want via instruct text.
+// Only used when TTS_PROVIDER=qwen3.
+const QWEN3_URL      = process.env.QWEN3_TTS_URL      || 'http://127.0.0.1:3341';
+const QWEN3_INSTRUCT = process.env.QWEN3_TTS_VOICE    || '';  // empty = use server default
+const QWEN3_LANG     = process.env.QWEN3_TTS_LANG     || 'english';
+
 // ── TTS Circuit Breaker ──────────────────────────────────────────────
 // After 3 Edge TTS failures within 5 minutes, stop trying for 5 minutes.
 // Returns null so callers degrade to text-only delivery.
@@ -115,6 +122,9 @@ const TTS_CIRCUIT_BREAKER = {
 export function getTTSHealth() {
   const provider = getTTSProvider();
   const edge = TTS_CIRCUIT_BREAKER.getStatus();
+  if (provider === 'qwen3') {
+    return `qwen3-tts @ ${QWEN3_URL} (fallback: none — text-only on failure)`;
+  }
   if (provider === 'kokoro') {
     const voice = process.env.KOKORO_VOICE || 'bm_lewis';
     return `kokoro-${voice} @ ${KOKORO_URL} (fallback: none — text-only on failure)`;
@@ -192,6 +202,18 @@ export async function synthesizeSpeech(text) {
   const provider = getTTSProvider();
   logger.info(`🔊 TTS provider: ${provider}`);
 
+  // Qwen3-TTS (voice design) — only when TTS_PROVIDER=qwen3
+  if (provider === 'qwen3') {
+    const result = await synthesizeQwen3(sanitized);
+    if (result) return result;
+    logger.warn('Qwen3 TTS failed, retrying once in 500ms...');
+    await new Promise(r => setTimeout(r, 500));
+    const retryResult = await synthesizeQwen3(sanitized);
+    if (retryResult) return retryResult;
+    logger.warn('Qwen3 TTS unavailable after retry — text-only mode');
+    return null;
+  }
+
   // Kokoro (British male voice) — only when TTS_PROVIDER=kokoro
   if (provider === 'kokoro') {
     const result = await synthesizeKokoro(sanitized);
@@ -230,6 +252,46 @@ export async function synthesizeSpeech(text) {
 
   // Edge TTS — default when TTS_PROVIDER=edge (or anything other than piper/chatterbox)
   return synthesizeEdge(sanitized);
+}
+
+/**
+ * Synthesize via Qwen3-TTS VoiceDesign.
+ * ~20s per sentence on 4090 — slower than Kokoro but much richer voice quality.
+ *
+ * @param {string} text - Sanitized text to speak
+ * @returns {Promise<string|null>} Path to WAV file, or null if unavailable
+ */
+async function synthesizeQwen3(text) {
+  try {
+    const start = Date.now();
+    const body = { text, language: QWEN3_LANG };
+    if (QWEN3_INSTRUCT) body.instruct = QWEN3_INSTRUCT;
+
+    const res = await fetch(`${QWEN3_URL}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000), // 2 min — model inference is slow
+    });
+
+    if (!res.ok) {
+      logger.warn(`Qwen3 TTS returned ${res.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const outputPath = join(TMP_DIR, `qwen3_${Date.now()}.wav`);
+    const { writeFile } = await import('fs/promises');
+    await writeFile(outputPath, buffer);
+
+    const latency = res.headers.get('X-Qwen3-Latency-Ms') || '?';
+    const duration = res.headers.get('X-Qwen3-Duration-S') || '?';
+    logger.info(`🐉 Qwen3 TTS: ${latency}ms → ${duration}s audio`);
+    return outputPath;
+  } catch (err) {
+    logger.warn(`Qwen3 TTS unavailable: ${err.message}`);
+    return null;
+  }
 }
 
 /**
