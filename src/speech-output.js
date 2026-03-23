@@ -112,7 +112,8 @@ export function playAudio(filePath) {
 // MAX_SPOKEN_SECONDS is kept for monitoring/logging only; it does NOT cut speech.
 const MAX_SPOKEN_SECONDS = parseInt(process.env.MAX_SPOKEN_SECONDS || '20');
 const _ttsProvider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
-const CHARS_PER_SECOND = _ttsProvider === 'chatterbox' ? 14 : 12;
+// Kokoro and Chatterbox speak at natural cadence (~14 chars/sec); slower providers ~12.
+const CHARS_PER_SECOND = (_ttsProvider === 'chatterbox' || _ttsProvider === 'kokoro') ? 14 : 12;
 const MAX_SPOKEN_CHARS = MAX_SPOKEN_SECONDS * CHARS_PER_SECOND; // reference only
 
 /**

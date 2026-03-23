@@ -268,9 +268,11 @@ const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?
 // Larger batches = fewer calls = lower total latency + better prosody (more context per chunk).
 // Concurrency 2 (vs 3) avoids VRAM contention on single-GPU inference.
 const _isChatterbox = (process.env.TTS_PROVIDER || 'piper').toLowerCase() === 'chatterbox';
+const _isKokoro = (process.env.TTS_PROVIDER || 'piper').toLowerCase() === 'kokoro';
+const _isFastTTS = _isChatterbox || _isKokoro; // both are fast enough for large batches
 const TTS_PIPELINE_CONCURRENCY = parseInt(process.env.TTS_PIPELINE_CONCURRENCY ?? (_isChatterbox ? '2' : '3'));
-const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? (_isChatterbox ? '40' : '40'));
-const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? (_isChatterbox ? '400' : '150'));
+const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? '40');
+const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? (_isFastTTS ? '400' : '150'));
 
 // Voice activity tracking
 const userSpeaking = new Map();

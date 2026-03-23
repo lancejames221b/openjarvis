@@ -655,13 +655,12 @@ export function splitIntoSentences(text) {
     }
   }
   
-  // Batch sentences into chunks — Chatterbox benefits from larger chunks (full sentences/paragraphs)
-  // because each inference call loads the voice reference; more context = better prosody per call.
-  // Piper: smaller chunks → faster first-audio. Chatterbox: larger chunks → fewer GPU calls.
+  // Batch sentences into chunks — fast providers (Chatterbox, Kokoro) benefit from larger chunks
+  // for better prosody. Piper/edge: smaller chunks → faster first-audio.
   const _provider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
-  // Kokoro is fast enough to handle full sentences individually — use medium chunk sizes
-  const MIN_CHUNK = _provider === 'chatterbox' ? 120 : 60;
-  const MAX_CHUNK = _provider === 'chatterbox' ? 450 : _provider === 'kokoro' ? 300 : 300;
+  const _isFastProvider = _provider === 'chatterbox' || _provider === 'kokoro';
+  const MIN_CHUNK = _isFastProvider ? 120 : 60;
+  const MAX_CHUNK = _isFastProvider ? 450 : 300;
   const result = [];
   let current = '';
   
