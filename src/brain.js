@@ -46,6 +46,8 @@ const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
 const _defaultTextChannel = process.env.DISCORD_TEXT_CHANNEL_ID || ''; // Used in prompt templates for sub-agent output routing
+// Voice report channel — #hud (smart thread target). Falls back to text channel.
+const _voiceReportChannel = process.env.VOICE_REPORT_CHANNEL_ID || _defaultTextChannel;
 
 // ── Prompt Loader — substitutes {{VAR}} tokens at load time ──────────
 function resolvePrompt(filename, vars = {}) {
@@ -223,6 +225,7 @@ function getVoicePromptVars() {
   return {
     VOICE_NAME,
     DEFAULT_TEXT_CHANNEL: _defaultTextChannel,
+    VOICE_REPORT_CHANNEL: _voiceReportChannel, // #hud — smart thread target
     WEBHOOK_HOST: _webhookHost,
     WEBHOOK_PORT: String(_webhookPort),
     SPEAK_TOKEN,

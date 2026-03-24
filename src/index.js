@@ -32,6 +32,7 @@ import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
 import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
+import { postTaskToThread } from './thread-router.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
@@ -138,6 +139,9 @@ const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const VOICE_CHANNEL_ID = process.env.DISCORD_VOICE_CHANNEL_ID;
 const TEXT_CHANNEL_ID = process.env.DISCORD_TEXT_CHANNEL_ID;
 const CC_CHANNEL_ID = process.env.DISCORD_CC_CHANNEL_ID; // Closed captions channel
+// Voice report channel: where task output lands as smart threads (e.g. #hud)
+// Falls back to TEXT_CHANNEL_ID if not set.
+const VOICE_REPORT_CHANNEL_ID = process.env.VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
 const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || TEXT_CHANNEL_ID; // Task activity feed
 const ACTIVITY_FEED_ENABLED = process.env.ACTIVITY_FEED_ENABLED !== 'false'; // Feature flag — default ON
 const ALLOWED_USERS = (process.env.ALLOWED_USERS || '').split(',').map(s => s.trim());
@@ -419,11 +423,20 @@ function flushPendingUtterance() {
   if (sentiment) brainOptions.sentiment = sentiment;
   if (autoSleepAfterTask) brainOptions.autoSleepAfterTask = true;
 
-  // Classify intent for model routing (haiku vs sonnet)
+  // Classify intent for model routing (haiku vs sonnet) + thread routing
+  let _intentType = null;
   try {
     const classification = classifyIntent({ transcript: merged, speechDurationMs: 0, conversationDepth: conv ? conv.history.length : 0, isFollowUp: false, previousResponseType: null });
-    if (classification?.type) brainOptions.intentType = classification.type;
+    if (classification?.type) {
+      brainOptions.intentType = classification.type;
+      _intentType = classification.type;
+    }
   } catch (_) {}
+  // Store intentType in activeTasks for thread routing at completion time
+  if (_intentType) {
+    const taskEntry = activeTasks.get(taskId);
+    if (taskEntry) taskEntry.intentType = _intentType;
+  }
 
   processBrainTask(taskId, userId, merged, conv ? [...conv.history] : [], controller.signal, brainOptions)
     .catch(err => logger.error(`Task #${taskId} error:`, err.message));
@@ -2776,7 +2789,17 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // enforceOutputLength retained for TL;DR mode only — no channel posting needed here
     // Full response is already in the task thread; streaming pipeline spoke everything.
     if (tldrModeEnabled) enforceOutputLength(fullText, true);
-    
+
+    // ── Smart Thread Routing: Always post to #hud as a thread when configured ──
+    // Groups results by intent category — same category within TTL continues the thread.
+    if (VOICE_REPORT_CHANNEL_ID && fullText) {
+      const taskMeta = activeTasks.get(taskId);
+      const intentCategory = taskMeta?.intentType || brainOptions.intentType || 'ACTION';
+      logger.info(`📤 Posting task #${taskId} (${intentCategory}) to thread in channel ${VOICE_REPORT_CHANNEL_ID}`);
+      postTaskToThread(client, VOICE_REPORT_CHANNEL_ID, intentCategory, taskId, transcript, fullText, duration)
+        .catch(err => logger.error(`[ThreadRouter] postTaskToThread failed for task #${taskId}: ${err.message}`));
+    }
+
     // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
     const transcriptModeEnabled = isTranscriptModeEnabled();
     if (transcriptModeEnabled && !userDisconnected) {
