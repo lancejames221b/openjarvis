@@ -563,8 +563,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
               onSentence('One moment.');
             }
           } else {
-            logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- speaking interim`);
-            onSentence('One moment.');
+            logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- ack disabled, skipping interim`);
           }
         }
       }, GATEWAY_FIRST_TOKEN_TIMEOUT_MS);
