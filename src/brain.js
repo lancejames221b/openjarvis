@@ -504,6 +504,13 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           if (!firstSentenceEmitted && /^_?NO_?$/i.test(phrase)) {
             return; // Wait for more tokens
           }
+          // If interim was already spoken, skip the first sentence to avoid duplicate ack
+          if (firstTokenTimerFired && !firstSentenceEmitted) {
+            buffer = '';
+            firstSentenceEmitted = true; // Mark as emitted so subsequent sentences play
+            lastTokenTime = Date.now();
+            return;
+          }
           onSentence(phrase);
           buffer = '';
           lastTokenTime = Date.now(); // Reset timer
@@ -566,6 +573,12 @@ export async function generateResponseStreaming(userMessage, history = [], signa
             paragraph = trimForVoice(paragraph);
             if (!paragraph || paragraph.length < 2 || AGENT_SIGNAL_PATTERN.test(paragraph)) continue;
 
+            // If interim was already spoken, skip the first sentence to avoid duplicate ack
+            if (firstTokenTimerFired && !firstSentenceEmitted) {
+              firstSentenceEmitted = true;
+              continue;
+            }
+
             firstSentenceEmitted = true;
             onSentence(paragraph);
           }
@@ -581,7 +594,12 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     if (buffer.trim()) {
       const final = trimForVoice(buffer.trim());
       if (final && final.length > 1 && !AGENT_SIGNAL_PATTERN.test(final)) {
-        onSentence(final);
+        // If interim was already spoken and nothing else was emitted yet, skip — it's the dup ack
+        if (firstTokenTimerFired && !firstSentenceEmitted) {
+          // suppress — interim already covered it
+        } else {
+          onSentence(final);
+        }
       }
     }
     
