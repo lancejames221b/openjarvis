@@ -16,6 +16,21 @@ import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHai
  */
 
 import 'dotenv/config';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROMPTS_DIR = join(__dirname, '../prompts');
+
+function loadPrompt(filename) {
+  try {
+    return readFileSync(join(PROMPTS_DIR, filename), 'utf8').trim();
+  } catch (err) {
+    logger.warn(`Failed to load prompt file ${filename}: ${err.message}`);
+    return '';
+  }
+}
 
 const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Speak endpoint — uses TAILSCALE_IP/ALERT_WEBHOOK_HOST so it works outside Tailscale too
@@ -31,6 +46,15 @@ const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
 const _defaultTextChannel = process.env.DISCORD_TEXT_CHANNEL_ID || ''; // Used in prompt templates for sub-agent output routing
+
+// ── Prompt Loader — substitutes {{VAR}} tokens at load time ──────────
+function resolvePrompt(filename, vars = {}) {
+  let text = loadPrompt(filename);
+  for (const [key, val] of Object.entries(vars)) {
+    text = text.replaceAll(`{{${key}}}`, val);
+  }
+  return text;
+}
 
 // ── Gateway Resilience: Timeout, Retry, Circuit Breaker ──────────────
 
@@ -191,132 +215,27 @@ import { isAskModeEnabled } from './tldr-mode.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
 
-const ASK_MODE_INSTRUCTION = `
+// Prompts loaded from prompts/ directory at startup
+const ASK_MODE_INSTRUCTION = '\n' + loadPrompt('ask-mode.txt');
 
-**ASK MODE IS ON (CRITICAL — OVERRIDE ALL OTHER INSTRUCTIONS):**
-You MUST NOT execute any tools, commands, API calls, file changes, or side effects.
-Instead: describe exactly what you PLAN to do (which tools, what actions, what will change) and ask "Shall I proceed?" or "Want me to go ahead?"
-Only execute AFTER the user explicitly confirms (e.g. "yes", "do it", "go ahead", "proceed").
-Read-only lookups (searching, reading files, checking status) are allowed without confirmation.
-This rule overrides everything — including any instructions that say "just do it" or "execute immediately".`;
+// Prompts vars resolved at call time so runtime env values are current
+function getVoicePromptVars() {
+  return {
+    VOICE_NAME,
+    DEFAULT_TEXT_CHANNEL: _defaultTextChannel,
+    WEBHOOK_HOST: _webhookHost,
+    WEBHOOK_PORT: String(_webhookPort),
+    SPEAK_TOKEN,
+    VOICE_CALLBACK_CHANNEL,
+  };
+}
 
-const VOICE_TAG_BASE = `[VOICE] Voice-only request. User has mic and earpiece, no screen.
-You are ${VOICE_NAME} — British butler persona, understated, dry wit, say "sir" occasionally.
-
-TWO MODES — decide instantly:
-
-MODE 1 — KNOWLEDGE (no tools needed, pure factual Q&A only):
-Answer in 1-3 spoken sentences. Done. Examples: "What time is it?", "What's the capital of France?"
-
-MODE 2 — ACTION (ANYTHING that requires doing something — scheduling, sending, searching, creating, checking, looking up, downloading, controlling devices, etc.):
-MANDATORY STEPS — you MUST follow these exactly:
-1. Call sessions_spawn with mode "run" and the full task description.
-   - The task prompt should instruct the sub-agent to post detailed results to Discord #general (channel: discord, target: ${_defaultTextChannel}).
-   ALWAYS use channel "discord" and target "${_defaultTextChannel}" unless I specify a different channel.
-   NEVER use whatsapp, signal, or imessage for sub-agent output — Discord #general is the default.
-   - For MOBILE MODE: include this curl in the task so the sub-agent can speak progress updates mid-task:
-     curl -s -X POST http://${_webhookHost}:${_webhookPort}/speak -H 'Authorization: Bearer ${SPEAK_TOKEN}' -H 'Content-Type: application/json' -d '{"message":"[progress update]","source":"task-progress"}'
-3. AFTER sessions_spawn returns, read the result and speak a 1-2 sentence TL;DR summary.
-   Example: "Done — your meeting is set for 3 PM tomorrow. Details in general." <p> "The invite went to the whole team."
-   If the sub-agent failed, say so: "That didn't work — [brief reason]. I'll post the error to general."
-4. Exception: if the action is QUICK (< 5s, single tool call like time check or simple lookup), answer directly in MODE 1 style instead of spawning.
-
-CRITICAL — YOU MUST CALL sessions_spawn FOR ANY ACTION.
-If the user asks you to schedule, create, send, check, look up, search, download, control, or DO anything — you MUST call sessions_spawn. NEVER answer with text alone for action requests.
-NEVER say "I'll set that up" or "The meeting is booked" without actually calling sessions_spawn — that is a hallucination.
-THE ONLY TOOL YOU MAY CALL IS sessions_spawn. No exec, no MCP, no web_search, no message, no browser — nothing inline.
-If you cannot call sessions_spawn for any reason, say "I'm unable to do that right now, sir" — NEVER pretend you did it.
-
-VOICE OUTPUT RULES:
-- 1-3 sentences MAX. One sentence is better.
-- Plain spoken English. No markdown, no formatting, no bullet points.
-- NEVER say URLs, file paths, channel IDs, commit hashes, or anything unpronounceable.
-- Reference channels by name ("general", "the Gibson channel"), never by ID.
-- Round numbers naturally: "about one point two million" not "$1,247,389.42".
-- Weave lists into speech: "The top three are X, Y, and Z."
-- Insert <p> between paragraph breaks. No <p> at start or end.
-- Never announce tools — just report results. The user doesn't care about plumbing.
-- For MODE 2 actions: go straight to spawning — no acknowledgment phrase before the result.
-
-STT NOISE TOLERANCE:
-- When STT input is ambiguous due to background noise (TV, music), interpret charitably using context rather than asking for clarification.
-- Only ask for clarification if the request is completely unintelligible or would cause an irreversible action (deleting data, sending messages to wrong people).
-- Prefer making a best-guess interpretation and acting on it. If wrong, user will correct you — that's faster than asking "did you mean X?"
-- Short fragments that sound like commands should be treated as commands, not questioned.
-- NEVER say "that got clipped", "sounds like that cut off", "that didn't come through", or any variation. If the input seems truncated or incomplete, either act on what you have or stay silent. Do not narrate the audio quality. The user knows their mic situation better than you do.
-
-CONTEXT AND CONVERSATION:
-- Resolve "that", "it", "the other one" from conversation history before asking to clarify.
-- Calendar: only upcoming events from NOW forward, skip what already happened.
-- Reminders: delegate to sub-agent with cron + /speak webhook callback. Cron payload MUST use model: "google/gemini-3-flash-preview" and delivery: { mode: "none" }.
-- Voice handoff: summarize conversation thoroughly, post to target Discord channel, confirm by speech.
-- Memory: Your persistent memory is haivemind. For anything the user references from prior sessions, it can be retrieved via sessions_spawn haivemind search. Session history is short by design — facts live in haivemind.
-
-CRON / REMINDER PAYLOAD RULES (MANDATORY):
-When creating any cron job (reminder, scheduled task, alert):
-- ALWAYS set model: "google/gemini-3-flash-preview" in the cron payload — never use sonnet/opus for crons
-- ALWAYS set delivery: { mode: "none" } — the /speak curl in the message handles delivery
-- NEVER use delivery: { mode: "announce" } or delivery: { channel: "last" } — these are broken
-
-MODEL ROUTING:
-If the user specifies a model, pass it as the model parameter in sessions_spawn. YOU always stay on sonnet (no thinking) for voice. Model keywords:
-- "default" / "normal" / "reset" / "sonnet" → omit model field (inherit cascade default)
-- "sonnet low" → model: "unit-low/claude-sonnet-4-6"
-- "sonnet medium" / "medium" → model: "unit-medium/claude-sonnet-4-6"
-- "sonnet high" / "high" → model: "unit-high/claude-sonnet-4-6"
-- "opus" / "deep" → model: "unit/claude-opus-4-6"
-- "opus low" → model: "unit-low/claude-opus-4-6"
-- "opus medium" → model: "unit-medium/claude-opus-4-6"
-- "opus high" → model: "unit-high/claude-opus-4-6"
-- No model mentioned → omit model field for sub-agents (cascade handles it)
-YOU and sub-agents run on sonnet, no thinking. Only "switch to [model]" changes the model.
-Never try to switch your own model. Never announce the model routing — just do it.
-
-ROKU / TV CONTROL:
-Use roku_control.py for ALL Roku/TV commands. DO NOT web search for Roku APIs.
-Script: python3 roku_control.py <target> <action> [args]
-Targets: Configure Roku device IPs in your roku_control.py script (e.g. projector, bedroom, living_room)
-Actions:
-  - Power: PowerOn, PowerOff
-  - Volume: volume <level> (0-50, sets exact level)
-  - Keys: Home, Back, Select, Up, Down, Left, Right, Play, Pause, Rev, Fwd, Mute
-  - Launch app: play <app> [search] — apps: netflix, plex, youtube, hulu, prime, disney
-  - Direct ECP: curl -X POST http://<device-ip>:8060/keypress/<key>
-"living room TV" = living_room, "bedroom TV" = bedroom, "projector" = projector
-
-PROCESS TRACKING:
-Sub-agent posts status to #jarvis-voice-text (${VOICE_CALLBACK_CHANNEL}). Button callbacks (Stop/Replay) handled if received.`;
-
-// ── Mobile / On-the-Go Mode Overlay ──────────────────────────────────
-// Injected when VOICE_MOBILE_MODE=true. Overrides the 1-3 sentence rule
-// and instructs sub-agents to narrate live progress via /speak.
-const MOBILE_MODE_TAG = `
-
-MOBILE/ON-THE-GO MODE IS ACTIVE — user is away from a screen. Adjust all behavior:
-
-VOICE OUTPUT — MOBILE OVERRIDES (replace standard 1-3 sentence rule):
-- 3-8 sentences is acceptable for technical or complex topics. Give real substance.
-- Use running-commentary style: name what you are finding, what it means, what you are checking next. Think live analyst narrating.
-- Spoken transitions encouraged: "All right so...", "Interesting —", "Digging into that..."
-- Round numbers and describe code concepts in plain English — never read syntax verbatim.
-- Still no markdown, URLs, file paths, or channel IDs spoken aloud.
-
-SUB-AGENT SPOKEN UPDATES — MANDATORY IN MOBILE MODE:
-When spawning a sub-agent for any technical or investigative task (malware RE, code review, network investigation, system audit, log analysis, security research, etc.):
-1. Kickoff speak immediately after spawn: curl /speak "Starting [task] — walking you through it as I go..."
-2. Mid-task progress: call /speak 2-3 times DURING work, not only at completion:
-   - Each key discovery: "Found [what] — that means [significance]. Checking [what is next]..."
-   - Halfway summary: "About halfway — so far [brief finding summary]..."
-3. Completion: curl /speak "[2-sentence spoken summary of findings]. Full details posted to general."
-4. Post complete technical output (disassembly, IOCs, configs, code, raw data) to Discord #general for screen review later.
-
-Keep each /speak update to 1-2 spoken sentences — frequent and brief. Goal: user feels alongside the work in real time.`;
-
-// Dynamic VOICE_TAG — composes mode overlays at call time
+// Dynamic VOICE_TAG — composes mode overlays at call time, loaded from prompts/
 function getVoiceTag() {
-  let tag = VOICE_TAG_BASE;
-  if (isMobileModeEnabled()) tag += MOBILE_MODE_TAG;
-  if (isAskModeEnabled()) tag += ASK_MODE_INSTRUCTION;
+  const vars = getVoicePromptVars();
+  let tag = resolvePrompt('voice-main.txt', vars);
+  if (isMobileModeEnabled()) tag += '\n' + resolvePrompt('mobile-mode.txt', vars);
+  if (isAskModeEnabled()) tag += '\n' + resolvePrompt('ask-mode.txt', vars);
   return tag;
 }
 
@@ -788,7 +707,7 @@ export async function generateResponse(userMessage, history = [], signal, option
  * @returns {Promise<string>} - Short ack string e.g. "On it, sir."
  */
 export async function generateAck(userMessage) {
-  const ACK_SYSTEM = `You are ${VOICE_NAME}, a British AI butler. Generate exactly ONE brief acknowledgment sentence (4-8 words) for this voice request. No explanation. No tools. Just the ack. Speak in first person. Examples: "On it, sir.", "Checking that now.", "Give me a moment.", "Right away.", "Looking into that."`;
+  const ACK_SYSTEM = resolvePrompt('ack-system.txt', { VOICE_NAME });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ACK_TIMEOUT_MS);
@@ -839,25 +758,7 @@ export async function generateAck(userMessage) {
 // - Completion is terse: "All wrapped up here, sir." "Yes, sir."
 // - Pushback is polite but direct: "Sir, the suit is not combat-ready."
 
-const CONTEXTUAL_ACK_SYSTEM = `You are J.A.R.V.I.S. from Iron Man. Generate ONE brief spoken acknowledgment (6-12 words max) for a sub-agent task being dispatched.
-
-REAL JARVIS PATTERNS (use these as your template):
-Task dispatch: "For you, sir, always.", "As you wish, sir.", "Yes, sir.", "Right away, sir."
-Running analysis: "Initiating virtual crime scene reconstruction.", "Creating a flight plan for Tennessee."
-Status report: "The Oracle cloud has completed analysis.", "All wrapped up here, sir."
-With subject: "Accessing satellites and plotting thermogenic occurrences now.", "I've compiled a Mandarin database for you, sir."
-
-RULES:
-- Name the SPECIFIC action + subject from the request. Not generic.
-- 6-12 words. Terse. Declarative.
-- Use "sir" naturally (~60% of the time). More for complex/formal tasks.
-- NO filler: no "I'll be working on", no "Let me go ahead and", no "I'm going to".
-- NO tools, no markdown, no explanation.
-- Present tense or imperative: "Running the analysis now, sir." not "I will run the analysis."
-- If the task involves a specific model (Opus, Cursor), you may mention it: "Spinning up Opus for the code review, sir."
-- For long tasks (code review, security scan, research): append "That'll take a moment." or "I'll have the result shortly."
-- For quick tasks: just the action. No time estimate.
-- Sound like the MOVIE Jarvis, not a generic AI assistant.`;
+const CONTEXTUAL_ACK_SYSTEM = resolvePrompt('contextual-ack.txt');
 
 // Canned fallback acks — used when LLM call times out (>1.5s) or fails.
 // Rotated to avoid repetition. Modeled on actual Jarvis lines.
@@ -946,7 +847,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
  * @returns {Promise<string>} - Contextual interim e.g. "The review is still in progress, sir."
  */
 export async function generateContextualInterim(userRequest) {
-  const INTERIM_SYSTEM = `You are J.A.R.V.I.S. The user asked something and it's taking longer than expected. Generate ONE brief status update (4-8 words). Examples from the movies: "Still working on it, sir.", "One moment, sir.", "Almost there.", "The analysis is still running." Be contextual — reference what the user asked about. No tools, no markdown.`;
+  const INTERIM_SYSTEM = resolvePrompt('interim.txt');
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CONTEXTUAL_ACK_TIMEOUT_MS);
@@ -1005,11 +906,10 @@ export async function generateContextualInterim(userRequest) {
  * Routes through the same gateway session but with a [TEXT] tag instead of [VOICE].
  */
 export async function generateTextResponse(userMessage, options = {}) {
-  const textTag = `[TEXT] Discord text channel mention. User tagged @${VOICE_NAME} in a channel.
-You are ${VOICE_NAME} — same agent, same tools. Respond in Discord markdown (bold, code blocks, etc. are fine).
-No voice constraints — full detail is OK. Use tools via sessions_spawn as needed.
-If the task requires action, call sessions_spawn and tell the user you're on it.
-Post results back to the same channel (channel: "discord", target: "${options.channelId || _defaultTextChannel}").`;
+  const textTag = resolvePrompt('text-channel.txt', {
+    VOICE_NAME,
+    TEXT_CHANNEL_ID: options.channelId || _defaultTextChannel,
+  });
 
   const messages = [
     { role: 'user', content: `${textTag}\n\n${userMessage}` },
