@@ -106,6 +106,8 @@ It decides instantly whether you asked a knowledge question (answers directly in
 
 It's a butler, not a chatbot.
 
+The personality is also hot-swappable. Swap to Snoop Dogg for a vibe check, HAL 9000 for existential dread, or Alfred for maximum formality — all via voice command. Each persona lives in `personalities/` as a markdown file with its own name, wake words, and TTS voice. The default stays Jarvis.
+
 ---
 
 ## Architecture
@@ -336,6 +338,113 @@ The conversation window (how long Jarvis stays active without requiring a wake w
 
 > **Note:** `.env.example` ships with `CONVERSATION_WINDOW_MS=120000` (2 min), matching the code default. The conversation window extends automatically to 5 min when follow-up is expected or interaction velocity is high.
 
+### Personality System
+
+Jarvis ships with four built-in personas, hot-swappable by voice. Each lives in `personalities/<name>.md` with YAML frontmatter defining its name, TTS voice, and wake words.
+
+```
+You:    "Switch to Snoop"
+Jarvis: "Switching to Snoop persona."
+Snoop:  "Fo real, I'm here. What's good, homie?"
+
+You:    "Be Alfred"
+Alfred: "I have assumed the role, sir. How may I be of service?"
+
+You:    "List personas"
+Jarvis: "Current persona is Jarvis. Available: snoop, alfred, hal."
+```
+
+**Bundled personas:**
+
+| Persona | Vibe | Wake Words |
+|---------|------|-----------|
+| `jarvis` | British butler, dry wit (default) | `jarvis`, `hey jarvis` |
+| `snoop` | West Coast laid-back, casual slang | `snoop`, `hey snoop`, `yo snoop` |
+| `alfred` | Formal British butler, measured precision | `alfred`, `hey alfred` |
+| `hal` | Cold, precise, slightly unsettling | `hal`, `hey hal` |
+
+**Voice commands (admin only):**
+- `"switch to [name]"` / `"be [name]"` / `"use [name]"` / `"load [name]"` / `"activate [name]"`
+- `"[name] persona"` / `"[name] mode"`
+- `"list personas"` / `"show personalities"`
+
+**Add your own:** Create `personalities/mybot.md` with frontmatter and a content block describing the persona's voice and style. It loads at runtime without a restart (next persona switch picks it up).
+
+**Frontmatter fields:**
+```yaml
+---
+name: MyBot
+voice: jarvis           # TTS voice profile to use
+tts_voice_edge: en-US-GuyNeural  # Edge TTS fallback voice
+wake_words: [mybot, hey mybot]
+---
+Your persona description here. Speak in second person...
+```
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `VOICE_PERSONA` | `jarvis` | Default persona on startup. Must match a file in `personalities/`. |
+
+### Chatterbox TTS (GPU Streaming)
+
+Chatterbox is a GPU-accelerated TTS engine by Resemble AI that streams audio sentence-by-sentence — first word starts playing in ~2 seconds for a typical response.
+
+Enable it by setting `TTS_PROVIDER=chatterbox` and starting the GPU service:
+
+```bash
+# Start the Chatterbox GPU service (requires NVIDIA GPU + venv)
+systemctl --user start jarvis-chatterbox-tts.service
+
+# Or run directly:
+cd ~/dev/jarvis-gpu-services
+source ~/dev/voice-clones/train_venv310/bin/activate
+python3 chatterbox_tts_service.py
+```
+
+The service exposes `/tts` (batch) and `/tts/stream` (sentence-level NDJSON streaming). The streaming endpoint sends each sentence as a WAV chunk as soon as it's synthesized — the client plays them in order while synthesis continues in the background.
+
+**How streaming works:**
+```
+Request: "Today you have three meetings and one PR waiting."
+ +0.0s: synthesis starts for sentence 1
+ +2.1s: sentence 1 WAV arrives → starts playing
+ +3.8s: sentence 2 WAV arrives → queued
+ +5.4s: sentence 3 WAV arrives → queued
+ Total: first audio 2.1s vs. 6s+ with batch TTS
+```
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `CHATTERBOX_URL` | `http://127.0.0.1:3340` | Chatterbox TTS service URL |
+| `CHATTERBOX_VOICE` | `jarvis` | Active voice (`jarvis` or `custom`) |
+| `CHATTERBOX_DEFAULT_VOICE` | `jarvis` | Default voice when none specified in request |
+| `CHATTERBOX_PORT` | `3340` | Port for the Chatterbox GPU service |
+| `CHATTERBOX_VOICE_JARVIS` | *(path to jarvis WAV)* | Reference audio for the Jarvis voice clone |
+| `CHATTERBOX_VOICE_CUSTOM` | *(empty)* | Reference audio for your own voice clone |
+| `CHATTERBOX_JARVIS_EXAGGERATION` | `0.35` | Emotion intensity for Jarvis voice (0–1) |
+| `CHATTERBOX_JARVIS_CFG_WEIGHT` | `0.6` | Classifier-free guidance for Jarvis voice |
+
+**Enable:**
+```env
+TTS_PROVIDER=chatterbox
+CHATTERBOX_VOICE=jarvis
+```
+
+### Streaming STT Artifact Cleanup
+
+WhisperLiveKit (used with `STT_PROVIDER=faster-whisper`) sends rolling incremental confirmations — each new confirmation is a more complete version of the same utterance, not a new sentence. The final line is the canonical transcript.
+
+Two classes of hallucination are now cleaned automatically before the transcript reaches the command pipeline:
+
+1. **Standalone dash tokens** — silence hallucinations like `"- - -"` or `"- ."` that appear when Whisper processes near-silence. Stripped before routing.
+2. **Consecutive repeated words** — model repetition loops like `"Service Service Service checking"` or `"the the the time"`. Collapsed to a single instance.
+
+Both are handled by `cleanTranscript()` in `src/stt-streaming.js`. No configuration needed — always on when using streaming STT.
+
 ### Why Discord?
 
 Discord solves the hard parts of real-time voice — reliable audio delivery, Opus codec, NAT traversal, cross-platform clients, voice activity detection. Building that infrastructure from scratch is a multi-month project. Using Discord as the transport layer means all of that is handled, and the bot can focus entirely on intelligence.
@@ -510,13 +619,14 @@ ALERT_WEBHOOK_TOKEN=your_secure_token_here
 
 ### Systemd (production)
 
-Three services are provided in `gpu-services/`:
+Three core services are provided in `gpu-services/`, with an optional fourth for Chatterbox TTS:
 
 | Service | Purpose | Required? |
 |---|---|---|
 | `jarvis-voice.service` | Main Discord bot (includes Piper TTS in-process) | Yes |
 | `jarvis-whisper-stt.service` | GPU faster-whisper STT worker (port 8766) | For `STT_PROVIDER=faster-whisper` |
 | `jarvis-speaker-verify.service` | ECAPA-TDNN speaker verification (port 8767) | For `SPEAKER_VERIFY_ENABLED=true` |
+| `jarvis-chatterbox-tts.service` | Chatterbox GPU TTS streaming service (port 3340) | For `TTS_PROVIDER=chatterbox` |
 
 ```bash
 cp gpu-services/*.service ~/.config/systemd/user/
@@ -773,22 +883,26 @@ All flags are set in `.env`. See `.env.example` for the full annotated template.
 
 ### TTS
 
-Piper (local Jarvis voice clone) is the **default and primary** TTS provider. It runs as an in-process HTTP server inside the main bot process — no separate service needed. Edge TTS is the automatic fallback if Piper is unavailable.
+`TTS_PROVIDER` controls which engine is used. Default is `piper` (local Jarvis voice clone, in-process). Set to `chatterbox` for GPU streaming (fastest time-to-first-word). Edge TTS is the fallback for any provider failure.
 
 | Variable | Code Default | Description |
 |---|---|---|
-| `PIPER_ENABLED` | `true` | Enable Piper as primary TTS. Code checks `!== 'false'`. Set to `false` to use Edge TTS directly. |
+| `TTS_PROVIDER` | `piper` | TTS engine: `piper` (local clone) \| `chatterbox` (GPU streaming) \| `edge` (cloud) \| `kokoro` (local) \| `qwen3` (local) \| `openai` (API-compatible) |
+| `PIPER_ENABLED` | `true` | Kept for backward compat. `TTS_PROVIDER` takes precedence when set. |
 | `PIPER_URL` | `http://127.0.0.1:3336` | Piper in-process HTTP server URL |
 | `PIPER_MODEL` | `medium` | `high` (best quality, ~3.5s) \| `medium` (faster, ~1.5s) |
 | `PIPER_BIN` | `~/.local/bin/piper` | Path to the Piper binary |
 | `PIPER_PORT` | `3336` | Port for the in-process Piper HTTP server |
 | `PIPER_BIND` | `127.0.0.1` | Bind address for the Piper HTTP server |
-| `STREAMING_TTS_ENABLED` | `true` | Sentence-level chunking — faster time-to-first-word. Code checks `!== 'false'`. |
+| `CHATTERBOX_URL` | `http://127.0.0.1:3340` | Chatterbox GPU TTS service URL. Only used when `TTS_PROVIDER=chatterbox`. |
+| `CHATTERBOX_VOICE` | `jarvis` | Active voice clone (`jarvis` or `custom`). |
+| `CHATTERBOX_DEFAULT_VOICE` | `jarvis` | Default voice when none specified in request. |
+| `STREAMING_TTS_ENABLED` | `true` | Sentence-level chunking — faster time-to-first-word. Code checks `!== 'false'`. Used with both Piper and Chatterbox. |
 | `EDGE_TTS_PATH` | `~/.local/bin/edge-tts` | Path to the Edge TTS binary |
 | `EDGE_TTS_VOICE` | `en-AU-WilliamNeural` | Fallback voice for Edge TTS |
 | `MAX_SPOKEN_SECONDS` | `20` | Max seconds of spoken output before auto-truncation |
 
-> **Note:** `tts.js` does not read a `TTS_PROVIDER` variable. TTS routing is controlled entirely by `PIPER_ENABLED`: when `true` (default), Piper is primary with Edge TTS as fallback. When `false`, Edge TTS is used directly.
+> **Note:** When `TTS_PROVIDER` is unset, routing falls back to `PIPER_ENABLED` for backward compatibility: `PIPER_ENABLED=true` → Piper primary, Edge TTS fallback; `PIPER_ENABLED=false` → Edge TTS directly.
 
 ### STT
 

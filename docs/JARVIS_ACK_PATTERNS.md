@@ -121,7 +121,7 @@ These patterns emerge from the movie dialogue and form the basis of the ack syst
 | "Run a code review on ENG-695" | "Running the code review on ENG-695 now, sir." |
 | "Do an Opus High security scan" | "Spinning up Opus for the security scan, sir." |
 | "Check my calendar for tomorrow" | "Pulling up tomorrow's calendar." |
-| "What's the weather in Newark?" | *(direct answer — no ack needed)* |
+| "What's the weather in Seattle?" | *(direct answer — no ack needed)* |
 | "Research the latest on that CVE" | "Starting the research now. That'll take a moment." |
 | "Send a status update to the team" | "Drafting the status update, sir." |
 | "Deploy the new build to staging" | "Deploying to staging now, sir." |

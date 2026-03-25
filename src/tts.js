@@ -42,7 +42,7 @@ const PIPER_MODEL = process.env.PIPER_MODEL || 'medium'; // medium (~1.5s) or hi
 
 // ── Chatterbox TTS ────────────────────────────────────────────────────
 // Multi-voice Chatterbox TTS service. Only used when TTS_PROVIDER=chatterbox.
-// CHATTERBOX_VOICE selects the active voice (jarvis | lance). Default: jarvis.
+// CHATTERBOX_VOICE selects the active voice (jarvis | custom). Default: jarvis.
 const CHATTERBOX_URL   = process.env.CHATTERBOX_URL   || 'http://127.0.0.1:3340';
 const CHATTERBOX_VOICE = process.env.CHATTERBOX_VOICE || 'jarvis';
 
@@ -226,7 +226,7 @@ export async function synthesizeSpeech(text) {
     return null;
   }
 
-  // Chatterbox (Lance voice clone) — only when TTS_PROVIDER=chatterbox
+  // Chatterbox TTS (voice clone) — only when TTS_PROVIDER=chatterbox
   if (provider === 'chatterbox') {
     const result = await synthesizeChatterbox(sanitized);
     if (result) return result;
@@ -452,7 +452,7 @@ export async function synthesizeChatterboxStream(text, onFile) {
 }
 
 /**
- * Synthesize via Chatterbox TTS (Lance voice clone)
+ * Synthesize via Chatterbox TTS (voice clone)
  * @param {string} text - Sanitized text to speak
  * @returns {Promise<string|null>} Path to WAV file, or null if unavailable
  */
@@ -476,7 +476,7 @@ async function synthesizeChatterbox(text) {
     await writeFile(outputPath, buffer);
 
     const latency = res.headers.get('X-Chatterbox-Latency-Ms') || '?';
-    logger.info(`🎭 Chatterbox Lance TTS: ${latency}ms`);
+    logger.info(`🎭 Chatterbox TTS: ${latency}ms`);
     return outputPath;
   } catch (err) {
     logger.warn(`⚠️ Chatterbox TTS unavailable: ${err.message}`);
