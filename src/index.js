@@ -1041,7 +1041,8 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           .replace('claude-opus-4-6', 'Claude Opus')
           .replace('claude-haiku-4-5', 'Claude Haiku')
           .replace('gpt-5.3-codex', 'Codex');
-        const audio = await synthesizeSpeech(`Jarvis online. Using ${modelLabel}.`);
+        const persona = getActivePersona();
+        const audio = await synthesizeSpeech(`${persona.name} online. Using ${modelLabel}.`);
         if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
       } catch {}
       
@@ -1811,7 +1812,8 @@ async function joinChannel(voiceChannelId, options = {}) {
 
 async function playGreeting() {
   try {
-    const audio = await synthesizeSpeech('Jarvis online. Voice channel is live.');
+    const persona = getActivePersona();
+    const audio = await synthesizeSpeech(`${persona.name} online. Voice channel is live.`);
     if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   } catch (err) {
     logger.error('Greeting failed:', err.message);
