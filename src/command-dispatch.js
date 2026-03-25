@@ -80,8 +80,9 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
   // ── Persona switch ────────────────────────────────────────────────
   if (isAdmin) {
     // "switch to snoop" / "be snoop" / "use jarvis" / "jarvis persona" / "switch persona to alfred"
-    const personaMatch = cleanedTranscript.match(/(?:switch\s+(?:to|persona\s+to)|be|use|load|activate)\s+([a-zA-Z0-9_-]+)(?:\s+(?:persona|mode|personality))?$/i)
-      || cleanedTranscript.match(/([a-zA-Z0-9_-]+)\s+(?:persona|mode|personality)$/i);
+    // "switch to snoop voice" / "snoop voice" / "snoop mode" are also valid triggers
+    const personaMatch = cleanedTranscript.match(/(?:switch\s+(?:to|persona\s+to)|be|use|load|activate)\s+([a-zA-Z0-9_-]+)(?:\s+(?:persona|mode|personality|voice))?$/i)
+      || cleanedTranscript.match(/([a-zA-Z0-9_-]+)\s+(?:persona|mode|personality|voice)$/i);
     if (personaMatch) {
       const requested = personaMatch[1].toLowerCase();
       const available = listPersonalities();
