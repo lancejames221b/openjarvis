@@ -48,6 +48,7 @@ let speakCallback = null; // Callback for immediate TTS delivery
 let markBotResponseCallback = null; // Callback to refresh conversation window after speaking
 let postActivityCallback = null; // Callback for activity feed
 let postToTextCallback = null; // Callback for posting to text channel
+let personaSwitchCallback = null; // Callback for runtime persona switch (set by index.js)
 let escalationInterval = null; // Periodic stale alert check
 
 // ── Health Monitoring State (populated by index.js) ──────────────────
@@ -306,6 +307,10 @@ export function setPostToTextCallback(cb) {
 
 export function setCurrentVoiceChannelId(channelId) {
   currentVoiceChannelId = channelId;
+}
+
+export function setPersonaSwitchCallback(cb) {
+  personaSwitchCallback = cb;
 }
 
 app.post('/alert', async (req, res) => {
@@ -646,6 +651,33 @@ app.post('/sleep_mode', async (req, res) => {
   } catch (_) { /* non-fatal */ }
   logger.info(`⏰ /sleep_mode: transitioned ${previous} → ACTIVE via API`);
   return res.json({ ok: true, state: 'ACTIVE', previous });
+});
+
+/**
+ * POST /persona — Hot-swap active persona at runtime
+ * Body: { "name": "snoop" }
+ */
+app.post('/persona', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { name } = req.body || {};
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ ok: false, error: 'missing name — expected { "name": "snoop" }' });
+  }
+
+  if (typeof personaSwitchCallback !== 'function') {
+    return res.status(503).json({ ok: false, error: 'persona switch not available yet' });
+  }
+
+  try {
+    const result = await personaSwitchCallback(name.toLowerCase().trim());
+    logger.info(`🎭 /persona: switched to ${result.name}`);
+    return res.json({ ok: true, persona: result.name, voice: result.voice, wakeWords: result.wakeWords });
+  } catch (err) {
+    logger.warn(`[/persona] switch error: ${err.message}`);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 /**
