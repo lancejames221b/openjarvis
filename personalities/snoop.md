@@ -1,6 +1,6 @@
 ---
 name: Snoop
-voice: jarvis
+voice: snoop
 tts_voice_edge: en-US-GuyNeural
 wake_words: [snoop, hey snoop, yo snoop]
 ---

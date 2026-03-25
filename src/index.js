@@ -727,9 +727,10 @@ client.once('ready', async () => {
   logger.info(`🤖 Jarvis Voice Bot online as ${client.user.tag}`);
   logger.info(`📡 Guild: ${GUILD_ID} | Voice: ${VOICE_CHANNEL_ID} | Multi-user: ${MULTI_USER_ENABLED} | Callback: ${WEBHOOK_CALLBACK_MODE}`);
 
-  // Seed wake words from the startup persona (VOICE_PERSONA env var, default: jarvis)
+  // Seed wake words + Chatterbox voice from the startup persona (VOICE_PERSONA env var, default: jarvis)
   const startupPersona = getActivePersona();
   setPersonaWakeWords(startupPersona.wakeWords || []);
+  switchChatterboxVoice(startupPersona.voice).catch(e => logger.warn(`[startup] chatterbox voice seed error: ${e.message}`));
   
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
   
@@ -785,6 +786,7 @@ client.once('ready', async () => {
   setPersonaSwitchCallback((name) => {
     const p = switchPersona(name);
     setPersonaWakeWords(p.wakeWords || []);
+    switchChatterboxVoice(p.voice).catch(e => logger.warn(`[persona] chatterbox switch error: ${e.message}`));
     return p;
   });
 
