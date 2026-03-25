@@ -54,10 +54,10 @@ export function isVerifiedOwner(spkr, requiredTier = 'high') {
  */
 export function passesAuthGate(spkr, { context = 'active', sessionAuthenticated = false } = {}) {
   const CONTEXT_TIERS = {
-    wake:      'high',
-    attention: 'high',
+    wake:      'medium',
+    attention: 'medium',
     active:    'medium',
-    followup:  'medium',
+    followup:  'low',
     passive:   'low',
   };
 
