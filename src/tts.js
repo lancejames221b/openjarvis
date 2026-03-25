@@ -42,9 +42,11 @@ const PIPER_MODEL = process.env.PIPER_MODEL || 'medium'; // medium (~1.5s) or hi
 
 // ── Chatterbox TTS ────────────────────────────────────────────────────
 // Multi-voice Chatterbox TTS service. Only used when TTS_PROVIDER=chatterbox.
-// CHATTERBOX_VOICE selects the active voice (jarvis | custom). Default: jarvis.
+// CHATTERBOX_VOICE selects the startup voice (jarvis | custom). Default: jarvis.
+// _activeChatterboxVoice is the runtime-mutable voice — updated by switchChatterboxVoice().
 const CHATTERBOX_URL   = process.env.CHATTERBOX_URL   || 'http://127.0.0.1:3340';
 const CHATTERBOX_VOICE = process.env.CHATTERBOX_VOICE || 'jarvis';
+let _activeChatterboxVoice = CHATTERBOX_VOICE; // mutable — persona switches update this
 
 // ── Kokoro TTS ────────────────────────────────────────────────────────
 // OpenAI-compatible TTS service — 114-155ms/sentence. Only used when TTS_PROVIDER=kokoro.
@@ -388,7 +390,7 @@ export async function synthesizeChatterboxStream(text, onFile) {
     const res = await fetch(`${CHATTERBOX_URL}/tts/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: CHATTERBOX_VOICE }),
+      body: JSON.stringify({ text, voice: _activeChatterboxVoice }),
       signal: AbortSignal.timeout(120000), // 2 min total for long responses
     });
 
@@ -461,7 +463,7 @@ async function synthesizeChatterbox(text) {
     const res = await fetch(`${CHATTERBOX_URL}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: CHATTERBOX_VOICE }),
+      body: JSON.stringify({ text, voice: _activeChatterboxVoice }),
       signal: AbortSignal.timeout(60000), // 60s — model inference takes time
     });
 
@@ -693,21 +695,25 @@ export function splitIntoSentences(text) {
 export async function switchChatterboxVoice(voice) {
   if ((process.env.TTS_PROVIDER || 'piper').toLowerCase() !== 'chatterbox') return;
   if (!voice) return;
+  const prev = _activeChatterboxVoice;
+  _activeChatterboxVoice = voice;
+  logger.info(`[chatterbox] active voice: ${prev} → ${voice} (next TTS request will use ${voice})`);
+  // Also pre-warm the voice on the server side so first response isn't slow
   try {
     const res = await fetch(`${CHATTERBOX_URL}/voice/switch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voice }),
-      signal: AbortSignal.timeout(20000), // GPU clear + cond pre-compute can take ~5-10s
+      signal: AbortSignal.timeout(20000),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
-      logger.info(`[chatterbox] voice switch: ${JSON.stringify(data)}`);
+      logger.info(`[chatterbox] pre-warmed voice: ${JSON.stringify(data)}`);
     } else {
-      logger.warn(`[chatterbox] voice switch failed (${res.status}): ${JSON.stringify(data)}`);
+      logger.warn(`[chatterbox] pre-warm failed (${res.status}): ${JSON.stringify(data)} — will still use ${voice} per-request`);
     }
   } catch (e) {
-    logger.warn(`[chatterbox] voice switch error: ${e.message}`);
+    logger.warn(`[chatterbox] pre-warm error: ${e.message} — will still use ${voice} per-request`);
   }
 }
 
