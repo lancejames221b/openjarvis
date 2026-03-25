@@ -9,6 +9,7 @@ import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscr
 import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
+import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -74,6 +75,27 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
   if (mobileToggle !== null) {
     const success = setMobileMode(mobileToggle);
     return { type: 'mode_toggle', mode: 'mobile', enabled: mobileToggle, success };
+  }
+
+  // ── Persona switch ────────────────────────────────────────────────
+  if (isAdmin) {
+    // "switch to snoop" / "be snoop" / "use jarvis" / "jarvis persona" / "switch persona to alfred"
+    const personaMatch = cleanedTranscript.match(/(?:switch\s+(?:to|persona\s+to)|be|use|load|activate)\s+([a-zA-Z0-9_-]+)(?:\s+(?:persona|mode|personality))?$/i)
+      || cleanedTranscript.match(/([a-zA-Z0-9_-]+)\s+(?:persona|mode|personality)$/i);
+    if (personaMatch) {
+      const requested = personaMatch[1].toLowerCase();
+      const available = listPersonalities();
+      if (available.includes(requested)) {
+        const p = switchPersona(requested);
+        return { type: 'persona_switch', persona: p.name, voice: p.voice };
+      }
+    }
+    // "list personas" / "what personas" / "show personalities"
+    if (/(?:list|show|what)\s+(?:personas?|personalities|voices)/i.test(cleanedTranscript)) {
+      const available = listPersonalities();
+      const current = getActivePersona().name;
+      return { type: 'persona_list', available, current };
+    }
   }
 
   // ── Enrollment commands ────────────────────────────────────────────

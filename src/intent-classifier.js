@@ -57,7 +57,8 @@ function getExtraStopPrefixes() {
 // They determine whether the utterance should be silently dropped.
 
 const WHISPER_HALL_EXACT = new Set([
-  'thank you', 'you', 'bye', 'hmm', 'um', 'uh', 'ah', 'oh',
+  // NOTE: 'thank you' removed — it's a real phrase, not a hallucination
+  'you', 'bye', 'hmm', 'um', 'uh', 'ah', 'oh',
   'so', 'okay', "i'm sorry", 'what', 'no no no',
   'no, no, no', 'the end', 'goodbye',
 ]);
@@ -87,6 +88,7 @@ const SHORT_COMMAND_WHITELIST = new Set([
   'fire away', 'lets hear it', 'no', 'no thanks', 'not now',
   'tell me', 'tell me more', 'go on', 'continue', 'more',
   'what was it', 'say again', 'repeat that', 'skip it',
+  'thank you', 'thanks', 'thank you jarvis', 'thanks jarvis',
 ]);
 
 // Callback to check if a follow-up is expected (set by index.js at init)

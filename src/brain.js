@@ -16,12 +16,13 @@ import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHai
  */
 
 import 'dotenv/config';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(__dirname, '../prompts');
+const PERSONALITIES_DIR = join(__dirname, '../personalities');
 
 function loadPrompt(filename) {
   try {
@@ -29,6 +30,69 @@ function loadPrompt(filename) {
   } catch (err) {
     logger.warn(`Failed to load prompt file ${filename}: ${err.message}`);
     return '';
+  }
+}
+
+// ── Personality Loader ────────────────────────────────────────────────
+// Loads a personality from personalities/<name>.md
+// Frontmatter (--- key: value ---) is parsed for metadata.
+// Returns { name, voice, ttsVoiceEdge, wakeWords, content }
+function loadPersonality(name) {
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, '');
+  const filePath = join(PERSONALITIES_DIR, `${safe}.md`);
+  let raw;
+  try {
+    raw = readFileSync(filePath, 'utf8').trim();
+  } catch {
+    logger.warn(`[persona] Personality '${safe}' not found — falling back to jarvis`);
+    if (safe !== 'jarvis') return loadPersonality('jarvis');
+    return { name: 'Jarvis', voice: 'jarvis', ttsVoiceEdge: 'en-GB-SoniaNeural', wakeWords: ['jarvis'], content: 'British butler persona, understated, dry wit, say "sir" occasionally.' };
+  }
+
+  const meta = { name: safe, voice: safe, ttsVoiceEdge: null, wakeWords: [safe], content: '' };
+
+  // Parse YAML-ish frontmatter
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (fmMatch) {
+    const fm = fmMatch[1];
+    const body = fmMatch[2].trim();
+    for (const line of fm.split('\n')) {
+      const [k, ...rest] = line.split(':');
+      const val = rest.join(':').trim();
+      if (k === 'name') meta.name = val;
+      else if (k === 'voice') meta.voice = val;
+      else if (k === 'tts_voice_edge') meta.ttsVoiceEdge = val;
+      else if (k === 'wake_words') meta.wakeWords = val.replace(/[\[\]]/g, '').split(',').map(w => w.trim());
+    }
+    meta.content = body;
+  } else {
+    meta.content = raw;
+  }
+
+  logger.info(`[persona] Loaded personality: ${meta.name} (file: ${safe}.md)`);
+  return meta;
+}
+
+// Active persona — loaded from VOICE_PERSONA env var (default: jarvis)
+// Can be hot-swapped at runtime via switchPersona()
+let _activePersona = loadPersonality(process.env.VOICE_PERSONA || 'jarvis');
+
+export function getActivePersona() { return _activePersona; }
+
+export function switchPersona(name) {
+  const p = loadPersonality(name);
+  _activePersona = p;
+  logger.info(`[persona] Switched to: ${p.name}`);
+  return p;
+}
+
+export function listPersonalities() {
+  try {
+    return readdirSync(PERSONALITIES_DIR)
+      .filter(f => f.endsWith('.md'))
+      .map(f => f.replace('.md', ''));
+  } catch {
+    return [];
   }
 }
 
@@ -222,8 +286,10 @@ const ASK_MODE_INSTRUCTION = '\n' + loadPrompt('ask-mode.txt');
 
 // Prompts vars resolved at call time so runtime env values are current
 function getVoicePromptVars() {
+  const persona = getActivePersona();
   return {
-    VOICE_NAME,
+    VOICE_NAME: persona.name || VOICE_NAME,
+    PERSONA_CONTENT: persona.content || '',
     DEFAULT_TEXT_CHANNEL: _defaultTextChannel,
     VOICE_REPORT_CHANNEL: _voiceReportChannel, // #hud — smart thread target
     WEBHOOK_HOST: _webhookHost,

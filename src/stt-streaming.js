@@ -19,6 +19,35 @@ function resample48to16(buf) {
   return out;
 }
 
+/**
+ * Clean up WhisperLiveKit streaming artifacts:
+ * - Remove standalone dash tokens (silence hallucinations: "- - -")
+ * - Deduplicate consecutive repeated words (model repetition loops)
+ */
+function cleanTranscript(text) {
+  if (!text) return '';
+
+  // Remove standalone dashes/hyphens (hallucinated silence markers)
+  let t = text.replace(/(?<!\w)-+(?!\w)/g, ' ');
+
+  // Deduplicate consecutive repeated words (case-insensitive)
+  // e.g. "Service Service Service" → "Service", "the the the" → "the"
+  t = t.replace(/\b(\w[\w''-]*)\b([\s,.!?;:]*\b\1\b)+/gi, '$1');
+
+  // Collapse multiple spaces
+  t = t.replace(/\s{2,}/g, ' ').trim();
+
+  // Strip leading punctuation/space artifacts
+  t = t.replace(/^[\s,.\-!?;:]+/, '');
+
+  // Strip trailing artifacts but preserve sentence-ending punctuation
+  t = t.replace(/[\s,.\-!?;:]+$/, (m) =>
+    m.includes('.') || m.includes('?') || m.includes('!') ? m.trim().slice(-1) : ''
+  );
+
+  return t.trim();
+}
+
 export class StreamingSTTSession {
   constructor(userId, { onPartial, onConfirmed } = {}) {
     this.userId = userId;
@@ -90,7 +119,11 @@ export class StreamingSTTSession {
     // Give server up to 3s to send final lines before we give up
     const timeout = new Promise(r => setTimeout(r, 3000));
     await Promise.race([this._finished, timeout]);
-    return this._confirmedLines.join(' ').trim() || null;
+    // Use only the last confirmed line — WhisperLiveKit sends incremental
+    // rolling confirmations. The last line is the most complete version,
+    // then clean hallucination artifacts (dashes, repeated words).
+    const last = this._confirmedLines[this._confirmedLines.length - 1];
+    return cleanTranscript(last || '') || null;
   }
 
   _finish() {

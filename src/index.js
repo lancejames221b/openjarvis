@@ -2387,6 +2387,26 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
+    if (dispatchResult.type === 'persona_switch') {
+      const { persona, voice } = dispatchResult;
+      logger.info(`🎭 Persona switched to: ${persona} (voice: ${voice})`);
+      const ack = await synthesizeSpeech(`Switching to ${persona} persona.`);
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
+    if (dispatchResult.type === 'persona_list') {
+      const { available, current } = dispatchResult;
+      const others = available.filter(p => p !== current.toLowerCase());
+      const listText = others.length
+        ? `Current persona is ${current}. Available: ${others.join(', ')}.`
+        : `Only ${current} is available.`;
+      logger.info(`📋 Persona list: ${available.join(', ')} (active: ${current})`);
+      const ack = await synthesizeSpeech(listText);
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
     if (dispatchResult.type === 'enrollment') {
       if (dispatchResult.action === 'cancel') {
         enrollmentState.cancel();
