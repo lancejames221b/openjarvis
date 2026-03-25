@@ -692,7 +692,7 @@ export function splitIntoSentences(text) {
  *
  * No-op if TTS_PROVIDER !== 'chatterbox'.
  */
-export async function switchChatterboxVoice(voice) {
+export async function switchChatterboxVoice(voice, { throwOnFail = false } = {}) {
   if ((process.env.TTS_PROVIDER || 'piper').toLowerCase() !== 'chatterbox') return;
   if (!voice) return;
   const prev = _activeChatterboxVoice;
@@ -710,9 +710,18 @@ export async function switchChatterboxVoice(voice) {
     if (res.ok) {
       logger.info(`[chatterbox] pre-warmed voice: ${JSON.stringify(data)}`);
     } else {
-      logger.warn(`[chatterbox] pre-warm failed (${res.status}): ${JSON.stringify(data)} — will still use ${voice} per-request`);
+      const msg = `pre-warm failed (${res.status}): ${JSON.stringify(data)}`;
+      if (throwOnFail) {
+        _activeChatterboxVoice = prev; // revert local state too
+        throw new Error(msg);
+      }
+      logger.warn(`[chatterbox] ${msg} — will still use ${voice} per-request`);
     }
   } catch (e) {
+    if (throwOnFail) {
+      _activeChatterboxVoice = prev; // revert local state
+      throw e;
+    }
     logger.warn(`[chatterbox] pre-warm error: ${e.message} — will still use ${voice} per-request`);
   }
 }

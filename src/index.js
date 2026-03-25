@@ -21,7 +21,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
@@ -783,11 +783,32 @@ client.once('ready', async () => {
   setPostToTextCallback((message) => postToTextChannel(message));
 
   // Wire up runtime persona switch for POST /persona endpoint
-  setPersonaSwitchCallback((name) => {
+  // Wire the atomic switchPersonaFull implementation
+  setSwitchPersonaFullImpl(async (name) => {
+    const previous = getActivePersona();
     const p = switchPersona(name);
     setPersonaWakeWords(p.wakeWords || []);
-    switchChatterboxVoice(p.voice).catch(e => logger.warn(`[persona] chatterbox switch error: ${e.message}`));
-    return p;
+    try {
+      await Promise.race([
+        switchChatterboxVoice(p.voice, { throwOnFail: true }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('voice switch timeout')), 10000)),
+      ]);
+      logger.info(`[persona] switchPersonaFull: ${previous.name} → ${p.name} (voice: ${p.voice}) ✅`);
+    } catch (e) {
+      // Revert personality and wake words on voice switch failure
+      logger.warn(`[persona] voice switch failed (${e.message}) — reverting to ${previous.name}`);
+      switchPersona(previous.name.toLowerCase());
+      setPersonaWakeWords(previous.wakeWords || []);
+      const err = new Error(`Voice switch failed: ${e.message}`);
+      err.revertedTo = previous.name;
+      throw err;
+    }
+    return { persona: p.name, voice: p.voice, wakeWords: p.wakeWords, previous: previous.name };
+  });
+
+  setPersonaSwitchCallback(async (name) => {
+    const result = await switchPersonaFull(name);
+    return { name: result.persona, voice: result.voice, wakeWords: result.wakeWords };
   });
 
   // Wire up runtime persona creation for POST /persona/create endpoint
@@ -810,8 +831,9 @@ client.once('ready', async () => {
     ].filter(Boolean).join('\n');
     writeFileSync(filePath, `${fm}\n${content}\n`, 'utf8');
     logger.info(`[persona] Created: ${filePath}`);
-    // Return the parsed persona object
-    return switchPersona(name);
+    // Return the parsed persona info WITHOUT switching active persona
+    const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+    return { name: displayName, voice, ttsVoiceEdge: ttsVoiceEdge || null, wakeWords, content };
   });
 
   startAlertWebhook();
@@ -2428,14 +2450,23 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     if (dispatchResult.type === 'persona_switch') {
       const { persona, voice, wakeWords } = dispatchResult;
-      logger.info(`🎭 Persona switched to: ${persona} (voice: ${voice}, wakeWords: [${(wakeWords || []).join(', ')}])`);
-      // Update active wake words — persona's words + jarvis variants (always in base set)
-      setPersonaWakeWords(wakeWords || []);
-      // Speak ack immediately in the old voice (instant feedback)
-      const ack = await synthesizeSpeech(`Switching to ${persona} persona.`);
+      logger.info(`🎭 Persona switch requested: ${persona} (voice: ${voice})`);
+      // 1. Speak ack in OLD voice (instant feedback before GPU pre-warm)
+      const ack = await synthesizeSpeech(`Switching to ${persona}.`);
       if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
-      // Unload prior voice from GPU and pre-warm new one (runs after ack — non-blocking to user)
-      switchChatterboxVoice(voice).catch(e => logger.warn(`[persona] chatterbox switch error: ${e.message}`));
+      // 2. Atomic switch: await voice clone + rollback on failure
+      try {
+        await switchPersonaFull(persona.toLowerCase());
+        logger.info(`🎭 Persona switch complete: ${persona} ✅`);
+        // 3. Confirmation spoken in NEW voice
+        const confirm = await synthesizeSpeech(`${persona} online.`);
+        if (confirm) { await playAudioEnhanced(confirm); try { unlinkSync(confirm); } catch {} }
+      } catch (e) {
+        logger.warn(`[persona] switch failed, reverting: ${e.message}`);
+        const revertName = e.revertedTo || 'previous persona';
+        const errAck = await synthesizeSpeech(`Voice switch failed. Staying on ${revertName}.`);
+        if (errAck) { await playAudioEnhanced(errAck); try { unlinkSync(errAck); } catch {} }
+      }
       return;
     }
 
@@ -2856,19 +2887,18 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // ── Smart Thread Routing: Always post to #hud as a thread when configured ──
     // Groups results by intent category — same category within TTL continues the thread.
-    if (VOICE_REPORT_CHANNEL_ID && fullText) {
+    // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
+    // When transcript mode is on, it replaces postTaskToThread to avoid double-posting.
+    const transcriptModeEnabled = isTranscriptModeEnabled();
+    if (transcriptModeEnabled && !userDisconnected) {
+      logger.info(`📝 Full transcript mode enabled — posting conversation as thread (task #${taskId})`);
+      await postTranscriptThread(taskId, transcript, fullText, duration);
+    } else if (VOICE_REPORT_CHANNEL_ID && fullText) {
       const taskMeta = activeTasks.get(taskId);
       const intentCategory = taskMeta?.intentType || brainOptions.intentType || 'ACTION';
       logger.info(`📤 Posting task #${taskId} (${intentCategory}) to thread in channel ${VOICE_REPORT_CHANNEL_ID}`);
       postTaskToThread(client, VOICE_REPORT_CHANNEL_ID, intentCategory, taskId, transcript, fullText, duration)
         .catch(err => logger.error(`[ThreadRouter] postTaskToThread failed for task #${taskId}: ${err.message}`));
-    }
-
-    // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
-    const transcriptModeEnabled = isTranscriptModeEnabled();
-    if (transcriptModeEnabled && !userDisconnected) {
-      logger.info(`📝 Full transcript mode enabled — posting conversation as thread (task #${taskId})`);
-      await postTranscriptThread(taskId, transcript, fullText, duration);
     }
     
     // Post completion to activity feed

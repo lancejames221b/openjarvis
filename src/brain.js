@@ -86,6 +86,25 @@ export function switchPersona(name) {
   return p;
 }
 
+// Injected by index.js at startup — wires in wake-word updater and Chatterbox voice switcher
+let _switchPersonaFullImpl = null;
+export function setSwitchPersonaFullImpl(fn) { _switchPersonaFullImpl = fn; }
+
+/**
+ * Atomic persona switch: personality + wake words + TTS voice clone together.
+ * Awaits the Chatterbox voice switch. On failure, reverts to previous persona.
+ * @param {string} name — persona name
+ * @returns {{ persona, voice, wakeWords, previous }}
+ */
+export async function switchPersonaFull(name) {
+  if (typeof _switchPersonaFullImpl === 'function') {
+    return _switchPersonaFullImpl(name);
+  }
+  // Fallback: personality only (no voice switch available yet)
+  const p = switchPersona(name);
+  return { persona: p.name, voice: p.voice, wakeWords: p.wakeWords, previous: null };
+}
+
 export function listPersonalities() {
   try {
     return readdirSync(PERSONALITIES_DIR)
@@ -109,6 +128,11 @@ const HOOKS_TOKEN = process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
+
+// ── Thinking param — driven by VOICE_DEFAULT_THINKING env var ───────────
+// 'off'/'disabled' → explicit { type: 'disabled' }, anything else (adaptive, low, etc.) → omit and let gateway decide
+const _voiceThinking = process.env.VOICE_DEFAULT_THINKING || 'adaptive';
+const THINKING_PARAM = (_voiceThinking === 'off' || _voiceThinking === 'disabled') ? { thinking: { type: 'disabled' } } : {};
 const _defaultTextChannel = process.env.DISCORD_TEXT_CHANNEL_ID || ''; // Used in prompt templates for sub-agent output routing
 // Voice report channel — #hud (smart thread target). Falls back to text channel.
 const _voiceReportChannel = process.env.VOICE_REPORT_CHANNEL_ID || _defaultTextChannel;
@@ -450,7 +474,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           user: getActiveSessionUser(),
           stream: false,
           model: voiceModel,
-          thinking: { type: 'disabled' },
+          ...THINKING_PARAM,
         }),
       }, signal);
 
@@ -514,7 +538,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         user: getActiveSessionUser(),
         stream: true,
         model: voiceModel,
-        thinking: { type: 'disabled' },
+        ...THINKING_PARAM,
       }),
     }, signal);
 
@@ -758,7 +782,7 @@ export async function generateResponse(userMessage, history = [], signal, option
         max_tokens: 8192,
         user: getActiveSessionUser(),
         model: voiceModel,
-        thinking: { type: 'disabled' },
+        ...THINKING_PARAM,
       }),
     }, signal);
 
@@ -810,7 +834,7 @@ export async function generateAck(userMessage) {
         model: ACK_MODEL,
         stream: false,
         max_tokens: 30,
-        thinking: { type: 'disabled' },
+        ...THINKING_PARAM,
         messages: [
           { role: 'system', content: ACK_SYSTEM },
           { role: 'user', content: userMessage },
@@ -895,7 +919,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
         model: ACK_MODEL,
         stream: false,
         max_tokens: 50,
-        thinking: { type: 'disabled' },
+        ...THINKING_PARAM,
         messages: [
           { role: 'system', content: CONTEXTUAL_ACK_SYSTEM },
           { role: 'user', content: userPrompt },
@@ -950,7 +974,7 @@ export async function generateContextualInterim(userRequest) {
         model: ACK_MODEL,
         stream: false,
         max_tokens: 30,
-        thinking: { type: 'disabled' },
+        ...THINKING_PARAM,
         messages: [
           { role: 'system', content: INTERIM_SYSTEM },
           { role: 'user', content: `Original request: "${userRequest}"\n\nIt's been 8+ seconds with no response yet. Generate a brief contextual "still working" message.` },
@@ -1014,7 +1038,7 @@ export async function generateTextResponse(userMessage, options = {}) {
         max_tokens: 8192,
         user: options.sessionUser || getActiveSessionUser(),
         model: process.env.VOICE_MODEL,
-        thinking: { type: 'disabled' },
+        ...THINKING_PARAM,
       }),
     });
 
