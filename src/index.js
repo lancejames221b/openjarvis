@@ -27,7 +27,7 @@ import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
-import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback } from './alert-webhook.js';
+import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback } from './alert-webhook.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
@@ -786,6 +786,30 @@ client.once('ready', async () => {
     const p = switchPersona(name);
     setPersonaWakeWords(p.wakeWords || []);
     return p;
+  });
+
+  // Wire up runtime persona creation for POST /persona/create endpoint
+  setPersonaCreateCallback(({ name, content, voice, ttsVoiceEdge, wakeWords, overwrite }) => {
+    const filePath = join(__dirname, '..', 'personalities', `${name}.md`);
+    if (!overwrite && existsSync(filePath)) {
+      const err = new Error(`Persona '${name}' already exists — set overwrite: true to replace`);
+      err.code = 'EEXIST';
+      throw err;
+    }
+    // Build frontmatter
+    const wakeWordsStr = `[${wakeWords.join(', ')}]`;
+    const fm = [
+      '---',
+      `name: ${name.charAt(0).toUpperCase() + name.slice(1)}`,
+      `voice: ${voice}`,
+      ttsVoiceEdge ? `tts_voice_edge: ${ttsVoiceEdge}` : null,
+      `wake_words: ${wakeWordsStr}`,
+      '---',
+    ].filter(Boolean).join('\n');
+    writeFileSync(filePath, `${fm}\n${content}\n`, 'utf8');
+    logger.info(`[persona] Created: ${filePath}`);
+    // Return the parsed persona object
+    return switchPersona(name);
   });
 
   startAlertWebhook();

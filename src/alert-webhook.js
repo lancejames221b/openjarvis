@@ -49,6 +49,7 @@ let markBotResponseCallback = null; // Callback to refresh conversation window a
 let postActivityCallback = null; // Callback for activity feed
 let postToTextCallback = null; // Callback for posting to text channel
 let personaSwitchCallback = null; // Callback for runtime persona switch (set by index.js)
+let personaCreateCallback = null; // Callback for runtime persona creation (set by index.js)
 let escalationInterval = null; // Periodic stale alert check
 
 // ── Health Monitoring State (populated by index.js) ──────────────────
@@ -311,6 +312,10 @@ export function setCurrentVoiceChannelId(channelId) {
 
 export function setPersonaSwitchCallback(cb) {
   personaSwitchCallback = cb;
+}
+
+export function setPersonaCreateCallback(cb) {
+  personaCreateCallback = cb;
 }
 
 app.post('/alert', async (req, res) => {
@@ -676,6 +681,92 @@ app.post('/persona', async (req, res) => {
     return res.json({ ok: true, persona: result.name, voice: result.voice, wakeWords: result.wakeWords });
   } catch (err) {
     logger.warn(`[/persona] switch error: ${err.message}`);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /persona/create — Create a new persona file at runtime
+ * Body: { name, content, voice?, tts_voice_edge?, wake_words?, overwrite? }
+ * - name: alphanumeric + hyphens/underscores, required
+ * - content: personality prompt text, required
+ * - voice: TTS voice profile (default: "jarvis")
+ * - tts_voice_edge: Edge TTS voice string (optional)
+ * - wake_words: array of wake word phrases (default: [name])
+ * - overwrite: boolean (default false) — set true to replace existing persona
+ */
+app.post('/persona/create', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { name, content, voice, tts_voice_edge, wake_words, overwrite = false } = req.body || {};
+
+  // Validate name
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ ok: false, error: 'missing name' });
+  }
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safeName) {
+    return res.status(400).json({ ok: false, error: 'invalid name — use alphanumeric, hyphens, underscores only' });
+  }
+
+  // Validate content
+  if (!content || typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ ok: false, error: 'missing content — personality prompt required' });
+  }
+
+  if (typeof personaCreateCallback !== 'function') {
+    return res.status(503).json({ ok: false, error: 'persona create not available yet' });
+  }
+
+  // Build wake_words array
+  const wakeWords = Array.isArray(wake_words) && wake_words.length > 0
+    ? wake_words.map(w => String(w).trim()).filter(Boolean)
+    : [safeName.toLowerCase()];
+
+  try {
+    const result = await personaCreateCallback({
+      name: safeName,
+      content: content.trim(),
+      voice: voice || 'jarvis',
+      ttsVoiceEdge: tts_voice_edge || null,
+      wakeWords,
+      overwrite,
+    });
+    logger.info(`🎭 /persona/create: created ${result.name}`);
+    return res.json({ ok: true, persona: result });
+  } catch (err) {
+    const status = err.code === 'EEXIST' ? 409 : 500;
+    logger.warn(`[/persona/create] error: ${err.message}`);
+    return res.status(status).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * GET /personas — List all available personas with active indicator
+ */
+app.get('/personas', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+
+  if (typeof personaSwitchCallback !== 'function') {
+    return res.status(503).json({ ok: false, error: 'persona system not available yet' });
+  }
+
+  try {
+    const { listPersonalities, getActivePersona } = await import('./brain.js');
+    const all = listPersonalities();
+    const active = getActivePersona();
+    return res.json({
+      ok: true,
+      active: active.name,
+      personas: all.map(p => ({
+        name: p,
+        active: p.toLowerCase() === active.name.toLowerCase(),
+      })),
+    });
+  } catch (err) {
+    logger.warn(`[/personas] list error: ${err.message}`);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
