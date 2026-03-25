@@ -87,7 +87,7 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
       const available = listPersonalities();
       if (available.includes(requested)) {
         const p = switchPersona(requested);
-        return { type: 'persona_switch', persona: p.name, voice: p.voice };
+        return { type: 'persona_switch', persona: p.name, voice: p.voice, wakeWords: p.wakeWords };
       }
     }
     // "list personas" / "what personas" / "show personalities"

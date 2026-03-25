@@ -21,10 +21,10 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback, getActivePersona } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
-import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME } from './wakeword.js';
+import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback } from './alert-webhook.js';
@@ -726,6 +726,10 @@ const client = new Client({
 client.once('ready', async () => {
   logger.info(`🤖 Jarvis Voice Bot online as ${client.user.tag}`);
   logger.info(`📡 Guild: ${GUILD_ID} | Voice: ${VOICE_CHANNEL_ID} | Multi-user: ${MULTI_USER_ENABLED} | Callback: ${WEBHOOK_CALLBACK_MODE}`);
+
+  // Seed wake words from the startup persona (VOICE_PERSONA env var, default: jarvis)
+  const startupPersona = getActivePersona();
+  setPersonaWakeWords(startupPersona.wakeWords || []);
   
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
   
@@ -2388,8 +2392,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     }
 
     if (dispatchResult.type === 'persona_switch') {
-      const { persona, voice } = dispatchResult;
-      logger.info(`🎭 Persona switched to: ${persona} (voice: ${voice})`);
+      const { persona, voice, wakeWords } = dispatchResult;
+      logger.info(`🎭 Persona switched to: ${persona} (voice: ${voice}, wakeWords: [${(wakeWords || []).join(', ')}])`);
+      // Update active wake words — persona's words + jarvis variants (always in base set)
+      setPersonaWakeWords(wakeWords || []);
       // Speak ack immediately in the old voice (instant feedback)
       const ack = await synthesizeSpeech(`Switching to ${persona} persona.`);
       if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }

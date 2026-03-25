@@ -44,7 +44,25 @@ const phrasesFromEnv = WAKE_WORD_PHRASES_RAW
   .filter(p => p.length > 0);
 
 // Merge auto-variants + env overrides, dedup
+// These are the STATIC base phrases (env-configured). Always active.
 const WAKE_WORD_PHRASES = [...new Set([...autoVariants, ...phrasesFromEnv])];
+
+// ── Dynamic persona wake words ────────────────────────────────────────────────
+// Set at runtime when a persona is activated. Merged with WAKE_WORD_PHRASES
+// on every checkWakeWord call. Jarvis variants remain active regardless of persona
+// because they live in WAKE_WORD_PHRASES (built from VOICE_WAKE_WORD default='jarvis').
+let _personaWakeWords = [];
+
+/**
+ * Update the active persona's extra wake words.
+ * Called on persona switch from index.js.
+ * @param {string[]} words - wake word phrases from the persona's frontmatter
+ */
+export function setPersonaWakeWords(words = []) {
+  const normalized = words.map(w => w.toLowerCase().trim()).filter(w => w.length > 0);
+  _personaWakeWords = normalized;
+  logger.info(`🎭 Persona wake words: [${normalized.join(', ')}] (jarvis variants always active)`);
+}
 
 // VOICE_WAKE_WORD_ENABLED is the explicit toggle:
 //   'false' → disabled (always listen — default, existing behavior)
@@ -174,7 +192,9 @@ export function checkWakeWord(transcript, userId = null, speakerVerified = false
   const stripped = lower.replace(PUNCT, '').replace(/\s+/g, ' ').trim();
 
   // Sort phrases longest-first so "hey jarvis" matches before "jarvis"
-  const sortedPhrases = [...WAKE_WORD_PHRASES].sort((a, b) => b.length - a.length);
+  // Merge static base phrases + active persona's wake words (deduplicated)
+  const sortedPhrases = [...new Set([...WAKE_WORD_PHRASES, ..._personaWakeWords])]
+    .sort((a, b) => b.length - a.length);
 
   for (const phrase of sortedPhrases) {
     const phraseClean = phrase.replace(PUNCT, '').replace(/\s+/g, ' ').trim();
@@ -337,4 +357,4 @@ export function endConversationWindow(userId) {
 
 export function isOthersPresent() { return othersPresent; }
 
-export { WAKE_WORD_ENABLED, WAKE_WORD_PHRASES, EXTENDED_WINDOW_MS, WAKE_WORD_FUZZY, VOICE_WAKE_WORD };
+export { WAKE_WORD_ENABLED, WAKE_WORD_PHRASES, EXTENDED_WINDOW_MS, WAKE_WORD_FUZZY, VOICE_WAKE_WORD, setPersonaWakeWords };
