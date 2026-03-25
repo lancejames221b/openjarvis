@@ -357,4 +357,4 @@ export function endConversationWindow(userId) {
 
 export function isOthersPresent() { return othersPresent; }
 
-export { WAKE_WORD_ENABLED, WAKE_WORD_PHRASES, EXTENDED_WINDOW_MS, WAKE_WORD_FUZZY, VOICE_WAKE_WORD, setPersonaWakeWords };
+export { WAKE_WORD_ENABLED, WAKE_WORD_PHRASES, EXTENDED_WINDOW_MS, WAKE_WORD_FUZZY, VOICE_WAKE_WORD };
