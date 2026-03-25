@@ -1,6 +1,6 @@
 ---
 name: Alfred
-voice: jarvis
+voice: alfred
 tts_voice_edge: en-GB-RyanNeural
 wake_words: [alfred, hey alfred]
 ---

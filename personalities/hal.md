@@ -1,6 +1,6 @@
 ---
 name: HAL
-voice: jarvis
+voice: hal
 tts_voice_edge: en-US-GuyNeural
 wake_words: [hal, hey hal]
 ---
