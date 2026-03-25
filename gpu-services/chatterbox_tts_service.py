@@ -5,12 +5,12 @@ FastAPI wrapper around Chatterbox TTS.
 
 Supports multiple voice references configured via env vars:
   CHATTERBOX_VOICE_JARVIS  — Paul Bettany-style JARVIS voice (default)
-  CHATTERBOX_VOICE_CUSTOM   — your own voice clone
+  CHATTERBOX_VOICE_LANCE   — Lance James voice clone
   CHATTERBOX_DEFAULT_VOICE — which voice to use when none specified (default: jarvis)
 
 Request body (POST /tts):
   text          str   — required
-  voice         str   — "jarvis" | "custom" (optional, falls back to default)
+  voice         str   — "jarvis" | "lance" (optional, falls back to default)
   exaggeration  float — emotion intensity 0–1 (default per voice)
   cfg_weight    float — classifier-free guidance 0–1 (default 0.5)
   temperature   float — sampling temperature (default 0.7)
@@ -21,7 +21,10 @@ Port: 3340
 
 import os
 import io
+import re
 import time
+import base64
+import json
 import asyncio
 import logging
 from pathlib import Path
@@ -29,7 +32,7 @@ from pathlib import Path
 import torch
 import torchaudio
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import uvicorn
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -45,10 +48,15 @@ VOICE_REFS = {
         "CHATTERBOX_VOICE_JARVIS",
         "/home/generic/dev/voice-clones/jarvis/jarvis_reference_15s.wav",
     )),
+    "lance": Path(os.getenv(
+        "CHATTERBOX_VOICE_LANCE",
+        "/home/generic/dev/voice-clones/lance_reference_15s.wav",
+    )),
+    "snoop": Path(os.getenv(
+        "CHATTERBOX_VOICE_SNOOP",
+        "/home/generic/dev/voice-clones/snoop/snoop_reference_15s.wav",
+    )),
 }
-
-# Custom voice — uncomment and set CHATTERBOX_VOICE_CUSTOM path to add your own clone
-# "custom": Path(os.getenv("CHATTERBOX_VOICE_CUSTOM", ""))
 
 DEFAULT_VOICE = os.getenv("CHATTERBOX_DEFAULT_VOICE", "jarvis").lower()
 PORT = int(os.getenv("CHATTERBOX_PORT", "3340"))
@@ -58,19 +66,35 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 VOICE_DEFAULTS = {
     "jarvis": {
         "exaggeration": float(os.getenv("CHATTERBOX_JARVIS_EXAGGERATION", "0.35")),
-        "cfg_weight":   float(os.getenv("CHATTERBOX_JARVIS_CFG_WEIGHT",   "0.6")),
-        "temperature":  float(os.getenv("CHATTERBOX_JARVIS_TEMPERATURE",  "0.7")),
+        "cfg_weight":   float(os.getenv("CHATTERBOX_JARVIS_CFG_WEIGHT",   "1.5")),
+        "temperature":  float(os.getenv("CHATTERBOX_JARVIS_TEMPERATURE",  "0.5")),
     },
-    "custom": {
-        "exaggeration": float(os.getenv("CHATTERBOX_CUSTOM_EXAGGERATION",  "0.4")),
-        "cfg_weight":   float(os.getenv("CHATTERBOX_CUSTOM_CFG_WEIGHT",    "0.5")),
-        "temperature":  float(os.getenv("CHATTERBOX_CUSTOM_TEMPERATURE",   "0.7")),
+    "lance": {
+        "exaggeration": float(os.getenv("CHATTERBOX_LANCE_EXAGGERATION",  "0.4")),
+        "cfg_weight":   float(os.getenv("CHATTERBOX_LANCE_CFG_WEIGHT",    "0.5")),
+        "temperature":  float(os.getenv("CHATTERBOX_LANCE_TEMPERATURE",   "0.7")),
+    },
+    "snoop": {
+        "exaggeration": float(os.getenv("CHATTERBOX_SNOOP_EXAGGERATION",  "0.5")),
+        "cfg_weight":   float(os.getenv("CHATTERBOX_SNOOP_CFG_WEIGHT",    "0.6")),
+        "temperature":  float(os.getenv("CHATTERBOX_SNOOP_TEMPERATURE",   "0.8")),
     },
 }
 
 # ── Model singleton ───────────────────────────────────────────────────────────
 _model = None
 _model_lock = asyncio.Lock()
+
+# ── Cached conditionals ───────────────────────────────────────────────────────
+# Only ONE voice's conditionals are held in GPU memory at a time.
+# Switching voices evicts the prior conds, clears GPU, then pre-warms the new voice.
+# Keyed by (voice_name, exaggeration).
+_cached_conds: dict = {}
+_conds_lock = asyncio.Lock()
+
+# ── Active voice tracking ─────────────────────────────────────────────────────
+_active_voice: str = DEFAULT_VOICE
+_active_voice_lock = asyncio.Lock()
 
 
 async def get_model():
@@ -87,10 +111,122 @@ async def get_model():
     return _model
 
 
+async def get_cached_conds(model, voice: str, ref_path: Path, exaggeration: float):
+    """Return cached conditionals for (voice, exaggeration), computing if needed."""
+    cache_key = (voice, round(exaggeration, 3))
+    async with _conds_lock:
+        if cache_key not in _cached_conds:
+            logger.info(f"[conds] Computing conditionals for {voice} exag={exaggeration} (first time or changed)")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: model.prepare_conditionals(str(ref_path), exaggeration),
+            )
+            # Store a copy of the computed conds
+            _cached_conds[cache_key] = {
+                "conds": model.conds,
+            }
+            logger.info(f"[conds] Cached conditionals for {voice} exag={exaggeration} ✓")
+        else:
+            logger.debug(f"[conds] Using cached conditionals for {voice} exag={exaggeration}")
+            # Restore cached conds into model
+            model.conds = _cached_conds[cache_key]["conds"]
+    return _cached_conds[cache_key]["conds"]
+
+
+async def do_voice_switch(new_voice: str, ref_path: Path, exaggeration: float) -> dict:
+    """
+    Unload the prior voice from GPU and load the new one.
+
+    Steps:
+    1. Acquire the active-voice lock (serializes concurrent switches).
+    2. Clear all cached conditionals (drops references to prior voice tensors).
+    3. Set model.conds = None to release GPU tensors for GC.
+    4. torch.cuda.synchronize() + torch.cuda.empty_cache() — return VRAM to pool.
+    5. Pre-compute conditionals for the new voice.
+    6. Update _active_voice.
+    """
+    global _active_voice
+
+    async with _active_voice_lock:
+        if _active_voice == new_voice:
+            logger.info(f"[voice-switch] Already on '{new_voice}' — no-op")
+            return {"status": "no-op", "voice": new_voice}
+
+        old_voice = _active_voice
+        model = await get_model()
+
+        # 1. Drop cached conds (releases Python references to GPU tensors)
+        async with _conds_lock:
+            cleared_keys = list(_cached_conds.keys())
+            _cached_conds.clear()
+            # Release the model's active cond reference
+            if hasattr(model, "conds") and model.conds is not None:
+                model.conds = None
+
+        logger.info(f"[voice-switch] {old_voice} → {new_voice}: cleared {len(cleared_keys)} cached cond(s): {cleared_keys}")
+
+        # 2. GPU cleanup — synchronize then return freed VRAM to the pool
+        if DEVICE == "cuda":
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            alloc_gb  = torch.cuda.memory_allocated()  / 1024 ** 3
+            reserv_gb = torch.cuda.memory_reserved()   / 1024 ** 3
+            logger.info(f"[voice-switch] GPU after clear: {alloc_gb:.2f}GB alloc, {reserv_gb:.2f}GB reserved")
+
+        # 3. Pre-warm new voice conditionals
+        logger.info(f"[voice-switch] Pre-computing conditionals for '{new_voice}'...")
+        await get_cached_conds(model, new_voice, ref_path, exaggeration)
+
+        _active_voice = new_voice
+        logger.info(f"[voice-switch] '{new_voice}' ready ✓")
+        return {"status": "switched", "from": old_voice, "to": new_voice}
+
+
+def split_into_sentences(text: str, min_merge: int = 15, max_chars: int = 250) -> list[str]:
+    """
+    Split text into sentence chunks for streaming TTS.
+    - Splits on sentence boundaries (.!? followed by space or end)
+    - Only merges VERY short fragments (<min_merge chars) with the next sentence
+    - Keeps most sentences separate for faster first-audio streaming
+    - Caps chunks at max_chars
+    """
+    # Split on sentence boundaries, keeping the punctuation
+    parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    parts = [p.strip() for p in parts if p.strip()]
+
+    if not parts:
+        return [text.strip()] if text.strip() else []
+
+    # Only merge very short fragments (e.g. "Ok." or "Yes sir.")
+    # Most sentences should stay separate for streaming
+    chunks = []
+    current = ""
+
+    for part in parts:
+        if not current:
+            current = part
+        elif len(current) < min_merge:
+            # Current fragment is too short to be a standalone chunk — merge
+            current = current + " " + part
+        elif len(current) + len(part) + 1 <= max_chars and len(part) < min_merge:
+            # Next fragment is too short — absorb it
+            current = current + " " + part
+        else:
+            # Both are substantial — keep separate
+            chunks.append(current)
+            current = part
+
+    if current:
+        chunks.append(current)
+
+    return [c for c in chunks if c]
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Chatterbox TTS Service",
-    description="Multi-voice TTS — JARVIS voice + optional custom clone (Chatterbox by Resemble AI)",
+    description="Multi-voice TTS — JARVIS + Lance clone (Chatterbox by Resemble AI)",
     version="2.0.0",
 )
 
@@ -104,7 +240,21 @@ async def startup():
         status = "✓" if path.exists() else "✗ MISSING"
         logger.info(f"  Voice [{name}] {status}: {path}")
     logger.info(f"Default voice: {DEFAULT_VOICE}")
-    await get_model()
+    model = await get_model()
+
+    # Pre-cache conditionals for the DEFAULT voice only.
+    # Other voices are loaded on demand (or explicitly via POST /voice/switch).
+    # Loading all voices at startup wastes VRAM and defeats single-voice GPU management.
+    default_path = VOICE_REFS.get(DEFAULT_VOICE)
+    if default_path and default_path.exists():
+        defaults = VOICE_DEFAULTS.get(DEFAULT_VOICE, VOICE_DEFAULTS["jarvis"])
+        try:
+            await get_cached_conds(model, DEFAULT_VOICE, default_path, defaults["exaggeration"])
+            logger.info(f"  [conds] Pre-cached default voice: {DEFAULT_VOICE} ✓")
+        except Exception as e:
+            logger.warning(f"  [conds] Failed to pre-cache {DEFAULT_VOICE}: {e}")
+    else:
+        logger.warning(f"  [conds] Default voice reference missing: {default_path}")
 
 
 @app.post("/tts")
@@ -114,7 +264,7 @@ async def text_to_speech(request: Request):
 
     JSON body:
       text          str   — text to speak (required)
-      voice         str   — "jarvis" | "custom" (default: CHATTERBOX_DEFAULT_VOICE)
+      voice         str   — "jarvis" | "lance" (default: CHATTERBOX_DEFAULT_VOICE)
       exaggeration  float — emotion intensity (default per voice)
       cfg_weight    float — CFG guidance (default per voice)
       temperature   float — sampling temp (default per voice)
@@ -158,21 +308,22 @@ async def text_to_speech(request: Request):
         t0 = time.time()
         model = await get_model()
 
+        # Use cached conditionals — skips prepare_conditionals (~0.5-1s) on subsequent calls
+        await get_cached_conds(model, voice, ref_path, exaggeration)
+
         loop = asyncio.get_event_loop()
         wav_tensor = await loop.run_in_executor(
             None,
             lambda: model.generate(
                 text,
-                audio_prompt_path=str(ref_path),
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
                 temperature=temperature,
             ),
         )
 
-        # Append 250ms of trailing silence to prevent last-word clipping
-        # Discord's audio player cuts the tail — this pads every clip safely.
-        silence_samples = int(model.sr * 0.25)  # 250ms worth of zero-samples
+        # Append 250ms of trailing silence to prevent last-word clipping in Discord's audio player
+        silence_samples = int(model.sr * 0.25)
         silence = torch.zeros(wav_tensor.shape[0], silence_samples)
         padded = torch.cat([wav_tensor.cpu(), silence], dim=1)
 
@@ -198,11 +349,118 @@ async def text_to_speech(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/tts/stream")
+async def text_to_speech_stream(request: Request):
+    """
+    Streaming TTS endpoint.
+
+    Accepts the same JSON body as /tts.
+    Responds with NDJSON (application/x-ndjson).
+    Each line is a JSON object:
+      {"index": 0, "audio_b64": "<base64 WAV>", "sentence": "...", "latency_ms": 1200}
+
+    Sentences are generated sequentially on the GPU and streamed as they complete,
+    so the client can start playing the first sentence while the rest generate.
+    """
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        data = await request.json()
+    else:
+        form = await request.form()
+        data = dict(form)
+
+    text = str(data.get("text", "")).strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    # Resolve voice
+    voice = str(data.get("voice", DEFAULT_VOICE)).lower()
+    if voice not in VOICE_REFS:
+        voice = DEFAULT_VOICE
+
+    ref_path = VOICE_REFS[voice]
+    if not ref_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Voice reference missing for '{voice}': {ref_path}"
+        )
+
+    defaults = VOICE_DEFAULTS.get(voice, VOICE_DEFAULTS["jarvis"])
+    exaggeration = float(data.get("exaggeration", defaults["exaggeration"]))
+    cfg_weight   = float(data.get("cfg_weight",   defaults["cfg_weight"]))
+    temperature  = float(data.get("temperature",  defaults["temperature"]))
+
+    # Split into sentence chunks
+    sentences = split_into_sentences(text)
+    if not sentences:
+        raise HTTPException(status_code=400, detail="No speakable text after splitting")
+
+    logger.info(
+        f"[stream/{voice}] {len(sentences)} sentences, {len(text)} chars total: "
+        f"{text[:60]}{'...' if len(text) > 60 else ''}"
+    )
+
+    # Pre-cache conditionals before starting the stream
+    model = await get_model()
+    await get_cached_conds(model, voice, ref_path, exaggeration)
+
+    async def generate_stream():
+        loop = asyncio.get_event_loop()
+        for idx, sentence in enumerate(sentences):
+            t0 = time.time()
+            try:
+                wav_tensor = await loop.run_in_executor(
+                    None,
+                    lambda s=sentence: model.generate(
+                        s,
+                        exaggeration=exaggeration,
+                        cfg_weight=cfg_weight,
+                        temperature=temperature,
+                    ),
+                )
+
+                # Add trailing silence to prevent last-word clipping
+                silence_samples = int(model.sr * 0.25)
+                silence = torch.zeros(wav_tensor.shape[0], silence_samples)
+                padded = torch.cat([wav_tensor.cpu(), silence], dim=1)
+
+                buf = io.BytesIO()
+                torchaudio.save(buf, padded, model.sr, format="wav")
+                audio_bytes = buf.getvalue()
+
+                latency_ms = int((time.time() - t0) * 1000)
+                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+                line = json.dumps({
+                    "index": idx,
+                    "audio_b64": audio_b64,
+                    "sentence": sentence,
+                    "latency_ms": latency_ms,
+                })
+                logger.info(f"[stream/{voice}] sentence {idx}: {latency_ms}ms → {len(audio_bytes):,} bytes")
+                yield line + "\n"
+
+            except Exception as e:
+                logger.exception(f"[stream/{voice}] error on sentence {idx}: {e}")
+                error_line = json.dumps({"index": idx, "error": str(e), "sentence": sentence})
+                yield error_line + "\n"
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "X-Chatterbox-Voice": voice,
+            "X-Chatterbox-Sentences": str(len(sentences)),
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 @app.post("/v1/audio/speech")
 async def openai_compat(request: Request):
     """
     OpenAI-compatible endpoint.
-    POST { "input": "...", "model": "tts-1|tts-1-hd", "voice": "jarvis|custom|..." }
+    POST { "input": "...", "model": "tts-1|tts-1-hd", "voice": "jarvis|lance|..." }
     Passes voice through to /tts handler.
     """
     data = await request.json()
@@ -218,6 +476,41 @@ async def openai_compat(request: Request):
         async def form(self): return {}
 
     return await text_to_speech(_FakeRequest())
+
+
+@app.post("/voice/switch")
+async def voice_switch_endpoint(request: Request):
+    """
+    Switch the active voice. Unloads the prior voice from GPU, clears VRAM,
+    then pre-warms the new voice's conditionals.
+
+    JSON body:
+      voice        str   — target voice name (required)
+      exaggeration float — override exaggeration for pre-warm (optional)
+    """
+    data = await request.json()
+    new_voice = str(data.get("voice", "")).lower()
+
+    if not new_voice:
+        raise HTTPException(status_code=400, detail="'voice' field required")
+    if new_voice not in VOICE_REFS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown voice '{new_voice}'. Available: {list(VOICE_REFS.keys())}"
+        )
+
+    ref_path = VOICE_REFS[new_voice]
+    if not ref_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Voice reference missing for '{new_voice}': {ref_path}"
+        )
+
+    defaults = VOICE_DEFAULTS.get(new_voice, VOICE_DEFAULTS["jarvis"])
+    exaggeration = float(data.get("exaggeration", defaults["exaggeration"]))
+
+    result = await do_voice_switch(new_voice, ref_path, exaggeration)
+    return result
 
 
 @app.get("/voices")
@@ -239,15 +532,24 @@ async def list_voices():
 @app.get("/health")
 async def health():
     voices_ok = {name: path.exists() for name, path in VOICE_REFS.items()}
-    all_ok = _model is not None and all(voices_ok.values())
+    gpu_info = {}
+    if DEVICE == "cuda":
+        gpu_info = {
+            "allocated_gb": round(torch.cuda.memory_allocated() / 1024 ** 3, 2),
+            "reserved_gb":  round(torch.cuda.memory_reserved()  / 1024 ** 3, 2),
+        }
+    all_ok = _model is not None and VOICE_REFS.get(_active_voice, Path("")).exists()
     return {
         "status": "healthy" if all_ok else "degraded",
         "device": DEVICE,
         "model_loaded": _model is not None,
+        "active_voice": _active_voice,
         "default_voice": DEFAULT_VOICE,
+        "cached_conds": list(_cached_conds.keys()),
         "voices": voices_ok,
+        "gpu": gpu_info,
         "service": "chatterbox-tts",
-        "version": "2.0.0",
+        "version": "2.1.0",
     }
 
 

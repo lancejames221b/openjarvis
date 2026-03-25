@@ -681,4 +681,34 @@ export function splitIntoSentences(text) {
   return result.filter(s => s.length > 0);
 }
 
+/**
+ * Switch the active Chatterbox voice.
+ * Calls POST /voice/switch on the Chatterbox service, which:
+ *   1. Unloads the prior voice's conditionals from GPU
+ *   2. Runs torch.cuda.empty_cache() to return VRAM to the pool
+ *   3. Pre-warms conditionals for the new voice
+ *
+ * No-op if TTS_PROVIDER !== 'chatterbox'.
+ */
+export async function switchChatterboxVoice(voice) {
+  if ((process.env.TTS_PROVIDER || 'piper').toLowerCase() !== 'chatterbox') return;
+  if (!voice) return;
+  try {
+    const res = await fetch(`${CHATTERBOX_URL}/voice/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voice }),
+      signal: AbortSignal.timeout(20000), // GPU clear + cond pre-compute can take ~5-10s
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      logger.info(`[chatterbox] voice switch: ${JSON.stringify(data)}`);
+    } else {
+      logger.warn(`[chatterbox] voice switch failed (${res.status}): ${JSON.stringify(data)}`);
+    }
+  } catch (e) {
+    logger.warn(`[chatterbox] voice switch error: ${e.message}`);
+  }
+}
+
 export { STREAMING_TTS_ENABLED };

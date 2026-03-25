@@ -22,7 +22,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
 import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback } from './brain.js';
-import { synthesizeSpeech, splitIntoSentences, isTTSAvailable } from './tts.js';
+import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
@@ -2390,8 +2390,11 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (dispatchResult.type === 'persona_switch') {
       const { persona, voice } = dispatchResult;
       logger.info(`🎭 Persona switched to: ${persona} (voice: ${voice})`);
+      // Speak ack immediately in the old voice (instant feedback)
       const ack = await synthesizeSpeech(`Switching to ${persona} persona.`);
       if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      // Unload prior voice from GPU and pre-warm new one (runs after ack — non-blocking to user)
+      switchChatterboxVoice(voice).catch(e => logger.warn(`[persona] chatterbox switch error: ${e.message}`));
       return;
     }
 
