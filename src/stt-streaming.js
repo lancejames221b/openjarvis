@@ -30,9 +30,40 @@ function cleanTranscript(text) {
   // Remove standalone dashes/hyphens (hallucinated silence markers)
   let t = text.replace(/(?<!\w)-+(?!\w)/g, ' ');
 
-  // Deduplicate consecutive repeated words (case-insensitive)
+  // Deduplicate consecutive repeated words (case-insensitive exact match)
   // e.g. "Service Service Service" → "Service", "the the the" → "the"
   t = t.replace(/\b(\w[\w''-]*)\b([\s,.!?;:]*\b\1\b)+/gi, '$1');
+
+  // Stem dedup: collapse consecutive words sharing the same 5-char prefix
+  // e.g. "deploy deploys Deploy Deployees Deploy's" → "deploy"
+  // Only triggers for words ≥ 6 chars to avoid over-collapsing short words
+  {
+    const tokens = t.split(/(\s+)/); // preserve whitespace tokens
+    const out = [];
+    let lastStem = null;
+    let lastWord = null;
+    for (const tok of tokens) {
+      if (/^\s+$/.test(tok)) {
+        out.push(tok);
+        continue;
+      }
+      const clean = tok.replace(/[^a-zA-Z''-]/g, '');
+      if (clean.length >= 6) {
+        const stem = clean.toLowerCase().slice(0, 5);
+        if (stem === lastStem) {
+          // Same stem — drop this token (remove trailing whitespace too)
+          if (out.length && /^\s+$/.test(out[out.length - 1])) out.pop();
+          continue;
+        }
+        lastStem = stem;
+      } else {
+        lastStem = null; // reset stem tracking on short words
+      }
+      lastWord = clean;
+      out.push(tok);
+    }
+    t = out.join('');
+  }
 
   // Collapse multiple spaces
   t = t.replace(/\s{2,}/g, ' ').trim();

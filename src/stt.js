@@ -281,6 +281,34 @@ function postProcessTranscript(text) {
   processed = processed.replace(/\b(focus|focusing|look) on the tent\b/gi, '$1 on the channel');
   processed = processed.replace(/\bthe tent\b/gi, 'the channel');
 
+  // Deduplicate consecutive repeated words (case-insensitive exact match)
+  // e.g. "Service Service Service" → "Service"
+  processed = processed.replace(/\b(\w[\w''-]*)\b([\s,.!?;:]*\b\1\b)+/gi, '$1');
+
+  // Stem dedup: collapse consecutive words sharing the same 5-char prefix (≥6 char words only)
+  // e.g. "deploy deploys Deploy Deployees Deploy's" → "deploy"
+  {
+    const tokens = processed.split(/(\s+)/);
+    const out = [];
+    let lastStem = null;
+    for (const tok of tokens) {
+      if (/^\s+$/.test(tok)) { out.push(tok); continue; }
+      const clean = tok.replace(/[^a-zA-Z''-]/g, '');
+      if (clean.length >= 6) {
+        const stem = clean.toLowerCase().slice(0, 5);
+        if (stem === lastStem) {
+          if (out.length && /^\s+$/.test(out[out.length - 1])) out.pop();
+          continue;
+        }
+        lastStem = stem;
+      } else {
+        lastStem = null;
+      }
+      out.push(tok);
+    }
+    processed = out.join('').trim();
+  }
+
   return processed;
 }
 
