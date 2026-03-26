@@ -606,16 +606,31 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     let sseBuffer = '';
     let pauseCheckInterval = null;
     
-    // Check for pauses every 500ms while streaming
-    // If no tokens for 2s, emit buffer chunk so user doesn't wait
+    // Check for pauses while streaming.
+    // IMPORTANT: Only flush on pause if the buffer looks like a complete sentence
+    // (ends with sentence-ending punctuation). LLM pauses of 600ms+ mid-sentence
+    // are COMMON during inference — flushing those creates truncated sentences.
+    // Use a longer timeout (3s) as a safety valve for genuinely stuck mid-sentence text.
+    const LONG_PAUSE_MS = parseInt(process.env.VOICE_LONG_PAUSE_MS || '3000', 10);
+    const SENTENCE_END_RE = /[.!?]["''")\]]*\s*$/;  // ends with sentence-ending punctuation (optionally followed by quotes/parens)
+
     const checkForPause = () => {
-      if (Date.now() - lastTokenTime > PAUSE_THRESHOLD_MS && buffer.trim().length > 0) {
+      const elapsed = Date.now() - lastTokenTime;
+      if (elapsed > PAUSE_THRESHOLD_MS && buffer.trim().length > 0) {
         const phrase = trimForVoice(buffer.trim());
         if (phrase && phrase.length > 2 && !AGENT_SIGNAL_PATTERN.test(phrase)) {
           // Hold back first emission if it looks like start of a signal (NO, _NO → NO_REPLY)
           if (!firstSentenceEmitted && /^_?NO_?$/i.test(phrase)) {
             return; // Wait for more tokens
           }
+
+          // CORE FIX: Only flush on short pause if text ends with sentence-ending punctuation.
+          // If it doesn't look like a complete sentence, wait for more tokens.
+          // A longer safety timeout (3s) flushes regardless to prevent infinite holding.
+          if (!SENTENCE_END_RE.test(phrase) && elapsed < LONG_PAUSE_MS) {
+            return; // Not a complete sentence yet — wait for more tokens
+          }
+
           // If interim was already spoken, skip the first sentence to avoid duplicate ack
           if (firstTokenTimerFired && !firstSentenceEmitted) {
             buffer = '';

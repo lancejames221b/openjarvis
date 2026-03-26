@@ -2773,12 +2773,22 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
             // Flush BEFORE adding if this sentence would exceed max
             // (prevents 500+ char chunks that cause Chatterbox repetition)
             if (batchText.length > 0 && (batchText.length + sentence.length) > BATCH_FLUSH_MAX) {
-              flushToPipeline(batchText);
-              batchText = '';
+              // Only flush if batchText ends with sentence-ending punctuation
+              // to avoid splitting mid-sentence when brain.js sends partial chunks
+              if (/[.!?]["''")\]]*\s*$/.test(batchText.trim())) {
+                flushToPipeline(batchText);
+                batchText = '';
+              } else if (batchText.length > BATCH_FLUSH_MAX * 1.5) {
+                // Hard safety limit — flush even mid-sentence if way too long
+                flushToPipeline(batchText);
+                batchText = '';
+              }
+              // else: keep accumulating — text doesn't look like a complete sentence yet
             }
             batchText += sentence + ' ';
-            // Also flush if batch already hit min and sentence is a natural break
-            if (batchText.length >= BATCH_FLUSH_MIN && sentence.length < BATCH_FLUSH_MIN) {
+            // Also flush if batch already hit min and the BATCH ends on a sentence boundary
+            // (changed: check batchText ends with punctuation, not just sentence length)
+            if (batchText.length >= BATCH_FLUSH_MIN && /[.!?]["''")\]]*\s*$/.test(batchText.trim())) {
               flushToPipeline(batchText);
               batchText = '';
             }
