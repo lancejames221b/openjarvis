@@ -641,17 +641,37 @@ function synthesizeEdgeStream(text) {
  * @returns {string[]} Array of sentence batches
  */
 export function splitIntoSentences(text) {
+  // Protect known abbreviations so their periods don't trigger false sentence splits.
+  // e.g. "Mr. Smith", "U.S. markets", "Dr. Biden", "Gov. Newsom"
+  const PLACEHOLDER = '\x00'; // null byte — safe sentinel not present in normal text
+
+  const ABBREV_PATTERNS = [
+    // Titles and honorifics
+    /\b(Mr|Mrs|Ms|Miss|Dr|Prof|Gov|Sen|Rep|Gen|Col|Lt|Sgt|Cpl|Pvt|Sr|Jr|Rev|Capt|Cmdr|Adm|Atty|Supt|Det|Insp)\./gi,
+    // Common abbreviations
+    /\b(vs|etc|approx|est|dept|corp|inc|llc|vol|pp|ed|fig|ave|blvd|rd)\./gi,
+    // Month abbreviations
+    /\b(Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\./gi,
+    // Single/double capital initials mid-abbreviation: U.S., U.K., D.C.
+    /\b([A-Z])\.(?=[A-Z]\.|[a-z]|\s[A-Z][a-z])/g,
+  ];
+
+  let protected_text = text;
+  for (const pattern of ABBREV_PATTERNS) {
+    protected_text = protected_text.replace(pattern, (m) => m.replace(/\./g, PLACEHOLDER));
+  }
+
   // Split on . ! ? followed by space or end of string
   // Keep the punctuation with the sentence
-  const sentences = text
+  const sentences = protected_text
     .split(/([.!?]+\s+|[.!?]+$)/g)
     .filter(s => s.trim().length > 0);
   
-  // Recombine sentence with its punctuation
+  // Recombine sentence with its punctuation, restore protected periods
   const individual = [];
   for (let i = 0; i < sentences.length; i += 2) {
-    const sentence = sentences[i].trim();
-    const punct = sentences[i + 1] || '';
+    const sentence = sentences[i].trim().replace(/\x00/g, '.');
+    const punct = (sentences[i + 1] || '').replace(/\x00/g, '.');
     if (sentence) {
       individual.push(sentence + punct);
     }
