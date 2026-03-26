@@ -681,8 +681,11 @@ export function splitIntoSentences(text) {
   // for better prosody. Piper/edge: smaller chunks → faster first-audio.
   const _provider = (process.env.TTS_PROVIDER || 'piper').toLowerCase();
   const _isFastProvider = _provider === 'chatterbox' || _provider === 'kokoro';
-  const MIN_CHUNK = _isFastProvider ? 120 : 60;
-  const MAX_CHUNK = _isFastProvider ? 450 : 300;
+  const MIN_CHUNK = _isFastProvider ? 80 : 60;
+  // MAX_CHUNK for Chatterbox must stay under ~220 chars — the model has a ~250-char
+  // generate() context limit. Larger chunks get internally split by the Python service
+  // and the concatenation can lose pieces. Feed 200-char max so each chunk is one call.
+  const MAX_CHUNK = _isFastProvider ? 200 : 300;
   const result = [];
   let current = '';
   
