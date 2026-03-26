@@ -31,7 +31,7 @@ import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeak
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
-import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled, isAskModeEnabled } from './tldr-mode.js';
+import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled } from './tldr-mode.js';
 import { postTaskToThread } from './thread-router.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';

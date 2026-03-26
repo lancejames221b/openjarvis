@@ -5,7 +5,7 @@
  */
 
 import logger from './logger.js';
-import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode, isAskModeToggleCommand, setAskMode } from './tldr-mode.js';
+import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from './tldr-mode.js';
 import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
@@ -54,13 +54,6 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
   if (transcriptToggle !== null) {
     const success = setTranscriptMode(transcriptToggle);
     return { type: 'mode_toggle', mode: 'transcript', enabled: transcriptToggle, success };
-  }
-
-  // ── Ask mode toggle ────────────────────────────────────────────────
-  const askToggle = isAdmin ? isAskModeToggleCommand(rawTranscript) : null;
-  if (askToggle !== null) {
-    const success = setAskMode(askToggle);
-    return { type: 'mode_toggle', mode: 'ask', enabled: askToggle, success };
   }
 
   // ── TTS provider toggle ────────────────────────────────────────────

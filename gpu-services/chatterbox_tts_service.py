@@ -56,6 +56,10 @@ VOICE_REFS = {
         "CHATTERBOX_VOICE_SNOOP",
         "/home/generic/dev/voice-clones/snoop/snoop_reference_15s.wav",
     )),
+    "c3po": Path(os.getenv(
+        "CHATTERBOX_VOICE_C3PO",
+        "/home/generic/dev/voice-clones/c3po/c3po_reference_15s.wav",
+    )),
 }
 
 DEFAULT_VOICE = os.getenv("CHATTERBOX_DEFAULT_VOICE", "jarvis").lower()
@@ -78,6 +82,11 @@ VOICE_DEFAULTS = {
         "exaggeration": float(os.getenv("CHATTERBOX_SNOOP_EXAGGERATION",  "0.5")),
         "cfg_weight":   float(os.getenv("CHATTERBOX_SNOOP_CFG_WEIGHT",    "0.6")),
         "temperature":  float(os.getenv("CHATTERBOX_SNOOP_TEMPERATURE",   "0.8")),
+    },
+    "c3po": {
+        "exaggeration": float(os.getenv("CHATTERBOX_C3PO_EXAGGERATION",  "0.55")),
+        "cfg_weight":   float(os.getenv("CHATTERBOX_C3PO_CFG_WEIGHT",    "1.2")),
+        "temperature":  float(os.getenv("CHATTERBOX_C3PO_TEMPERATURE",   "0.6")),
     },
 }
 

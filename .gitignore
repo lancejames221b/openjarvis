@@ -10,3 +10,4 @@ data/
 venv/
 __pycache__/
 *.pyc
+config-backups/

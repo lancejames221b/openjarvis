@@ -78,8 +78,8 @@ const SHORT_COMMAND_WHITELIST = new Set([
   'softer', 'volume up', 'volume down', 'lights on', 'lights off',
   'good morning', 'good night', 'wake up', 'stand down', 'dismissed',
   'enroll', 'enroll voice', 'enroll my voice',
-  'brief mode', 'ask mode', 'tldr mode', 'tldr on', 'tldr off',
-  'ask mode on', 'ask mode off', 'brief mode on', 'brief mode off',
+  'brief mode', 'tldr mode', 'tldr on', 'tldr off',
+  'brief mode on', 'brief mode off',
   'mobile mode', 'mobile mode on', 'mobile mode off',
   'desk mode', 'heading out', 'going mobile', 'on the go',
   // Follow-up / debrief responses (mute queue, alert briefing, any "shall I?" prompt)

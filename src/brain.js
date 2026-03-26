@@ -323,12 +323,8 @@ export function isGatewayCircuitOpen() {
 
 // Voice tag prepended to messages so the agent formats for TTS
 // Key: use tools exactly as you would in text chat. The ONLY difference is output format.
-import { isAskModeEnabled } from './tldr-mode.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
-
-// Prompts loaded from prompts/ directory at startup
-const ASK_MODE_INSTRUCTION = '\n' + loadPrompt('ask-mode.txt');
 
 // Prompts vars resolved at call time so runtime env values are current
 function getVoicePromptVars() {
@@ -350,7 +346,6 @@ function getVoiceTag() {
   const vars = getVoicePromptVars();
   let tag = resolvePrompt('voice-main.txt', vars);
   if (isMobileModeEnabled()) tag += '\n' + resolvePrompt('mobile-mode.txt', vars);
-  if (isAskModeEnabled()) tag += '\n' + resolvePrompt('ask-mode.txt', vars);
   return tag;
 }
 
@@ -465,17 +460,9 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   let buffer = ''; // Declare outside try so catch handler can access it
   let fullText = ''; // Declare outside try so catch handler can check if anything was spoken
 
-  // ── Intent-based model routing ───────────────────────────────────────
-  // Simple intents (casual chat, greetings, lookups) → haiku for speed/cost
-  // Tool-bearing or complex intents → full sonnet model
-  const SIMPLE_INTENT_TYPES = new Set(['CASUAL', 'CONVERSATIONAL', 'SIMPLE_LOOKUP', 'GREETING', 'CONTINUATION']);
-  const TOOL_TRIGGER_RE = /\b(email|calendar|remind|schedule|create|send|check my|look up|search|find)\b/i;
+  // ── Model — single model for all intents ────────────────────────────
   const intentType = options.intentType || null;
-  const simpleModelCandidate = process.env.VOICE_MODEL_SIMPLE || process.env.VOICE_MODEL;
-  const useSimple = intentType && SIMPLE_INTENT_TYPES.has(intentType) && !TOOL_TRIGGER_RE.test(userMessage);
-  const voiceModel = isAskModeEnabled()
-    ? process.env.VOICE_MODEL_ASK
-    : (useSimple ? simpleModelCandidate : process.env.VOICE_MODEL);
+  const voiceModel = process.env.VOICE_MODEL;
   logger.info({ taskId: options.taskId, intentType, model: voiceModel }, '🧠 Model selected');
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
