@@ -16,7 +16,7 @@ import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHai
  */
 
 import 'dotenv/config';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -73,15 +73,37 @@ function loadPersonality(name) {
   return meta;
 }
 
-// Active persona — loaded from VOICE_PERSONA env var (default: jarvis)
-// Can be hot-swapped at runtime via switchPersona()
-let _activePersona = loadPersonality(process.env.VOICE_PERSONA || 'jarvis');
+// Active persona — loaded from persisted state file, then VOICE_PERSONA env var, then 'jarvis'
+// Persists last-set persona across restarts so runtime switches survive service bounces.
+const PERSONA_STATE_FILE = join(__dirname, '..', 'data', 'persona-state.json');
+
+function loadPersistedPersonaName() {
+  try {
+    const raw = readFileSync(PERSONA_STATE_FILE, 'utf8');
+    const { name } = JSON.parse(raw);
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedPersonaName(name) {
+  try {
+    writeFileSync(PERSONA_STATE_FILE, JSON.stringify({ name, updatedAt: new Date().toISOString() }), 'utf8');
+  } catch (err) {
+    logger.warn(`[persona] Failed to persist persona state: ${err.message}`);
+  }
+}
+
+let _activePersona = loadPersonality(loadPersistedPersonaName() || process.env.VOICE_PERSONA || 'jarvis');
+logger.info(`[persona] Startup persona: ${_activePersona.name}`);
 
 export function getActivePersona() { return _activePersona; }
 
 export function switchPersona(name) {
   const p = loadPersonality(name);
   _activePersona = p;
+  savePersistedPersonaName(p.name.toLowerCase());
   logger.info(`[persona] Switched to: ${p.name}`);
   return p;
 }
