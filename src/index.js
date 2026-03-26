@@ -276,7 +276,10 @@ const _isKokoro = (process.env.TTS_PROVIDER || 'piper').toLowerCase() === 'kokor
 const _isFastTTS = _isChatterbox || _isKokoro; // both are fast enough for large batches
 const TTS_PIPELINE_CONCURRENCY = parseInt(process.env.TTS_PIPELINE_CONCURRENCY ?? (_isChatterbox ? '2' : '3'));
 const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? '40');
-const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? (_isFastTTS ? '400' : '150'));
+// Chatterbox model.generate() has a ~250-char context limit — batches larger than that get
+// internally split+concatenated in the Python service, and the concat can drop middle chunks.
+// Keep Chatterbox batches at ≤200 so each flush is a single generate() call with no concat.
+const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? (_isChatterbox ? '200' : _isFastTTS ? '400' : '150'));
 
 // Voice activity tracking
 const userSpeaking = new Map();
