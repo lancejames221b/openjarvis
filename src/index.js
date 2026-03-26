@@ -532,9 +532,15 @@ class AudioQueue {
   constructor() {
     this.queue = [];
     this.playing = false;
+    this._holdTimer = null; // speaking hold — prevents jump between slow Chatterbox sentences
   }
   
   add(audioSource, metadata = {}) {
+    // Cancel any pending "speaking done" hold — more audio arrived
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
     if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
       const dropped = this.queue.shift();
       logger.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
@@ -545,6 +551,7 @@ class AudioQueue {
   }
   
   clear() {
+    if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
     this.queue = [];
     if (this.playing) {
       player.stop(true);
@@ -555,11 +562,29 @@ class AudioQueue {
   
   async playNext() {
     if (this.queue.length === 0) {
+      // Hold state briefly — Chatterbox may still be generating the next sentence.
+      // If more audio arrives within the hold window, we resume without a jump/re-mute.
+      const holdMs = parseInt(process.env.SPEAKING_HOLD_MS || '800');
+      if (holdMs > 0 && this.playing) {
+        this._holdTimer = setTimeout(() => {
+          this._holdTimer = null;
+          if (this.queue.length === 0) {
+            this.playing = false;
+            isSpeaking = false;
+            serverMuteOwner(false);
+          } else {
+            this.playNext(); // audio arrived during hold — continue seamlessly
+          }
+        }, holdMs);
+        return; // don't clear isSpeaking yet
+      }
       this.playing = false;
       isSpeaking = false;
       serverMuteOwner(false);
       return;
     }
+    // Cancel hold timer if we have audio to play
+    if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
 
     // Mute-gated: hold response when others present + owner unmuted
     // Skip mute-gating when wake word is active — wake word handles filtering
