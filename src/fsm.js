@@ -145,16 +145,48 @@ export function isWakeUpCommand(transcript, speakerVerified = false) {
     const fuzzyPattern = new RegExp(
       `^([a-z]{1,${fuzzyMaxPrefix}})[,.]?\\s+(.{${fuzzyMinSentence},})$`, 'i'
     );
+    const fuzzyMinWords = parseInt(process.env.WAKE_WORD_FUZZY_MIN_WORDS || '0');
     const m = lower.match(fuzzyPattern);
     if (m) {
+      // Enforce minimum word count if configured — prevents short side-remarks from triggering
+      if (fuzzyMinWords > 0) {
+        const wordCount = lower.trim().split(/\s+/).length;
+        if (wordCount < fuzzyMinWords) {
+          return false;
+        }
+      }
       const prefix = m[1];
       const COMMON = [
-        'so', 'but', 'and', 'the', 'its', 'ok', 'okay', 'yes', 'no', 'hey', 'well',
-        'now', 'just', 'wait', 'oh', 'i', 'we', 'you', 'he', 'she', 'it', 'they',
-        'this', 'that', 'what', 'how', 'why', 'when', 'where', 'can', 'could', 'would',
-        'should', 'will', 'do', 'did', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
-        'get', 'got', 'go', 'going', 'let', 'make', 'take', 'also', 'actually',
-        'basically', 'literally',
+        // Articles & determiners
+        'a', 'an', 'the',
+        // Pronouns
+        'i', 'we', 'you', 'he', 'she', 'it', 'they', 'me', 'us', 'him', 'her', 'them',
+        'my', 'our', 'your', 'his', 'its', 'their',
+        'this', 'that', 'these', 'those', 'here', 'there',
+        // Conjunctions & connectors
+        'so', 'but', 'and', 'or', 'yet', 'nor', 'if', 'as', 'though', 'although',
+        // Prepositions
+        'at', 'by', 'for', 'in', 'of', 'on', 'to', 'up', 'out', 'with', 'from',
+        'down', 'back', 'into', 'onto', 'over', 'under', 'about',
+        // Acknowledgements & fillers
+        'ok', 'okay', 'yes', 'no', 'hey', 'well', 'oh', 'ah', 'um', 'uh',
+        'yeah', 'yep', 'yup', 'nah', 'nope', 'sure', 'right', 'alright', 'alrighty',
+        // Time & sequence
+        'now', 'just', 'wait', 'also', 'actually', 'basically', 'literally',
+        'then', 'again', 'still', 'already', 'finally', 'first', 'next', 'last',
+        // Common verbs (when starting a sentence, not a command)
+        'not', 'never', 'always', 'maybe', 'perhaps',
+        'see', 'look', 'think', 'know', 'like', 'need', 'want', 'say', 'tell',
+        'try', 'use', 'put', 'set', 'ask', 'give', 'keep', 'hold', 'call', 'run',
+        'come', 'come', 'came', 'feel', 'felt', 'mean', 'means', 'meant',
+        // Auxiliary verbs
+        'will', 'do', 'did', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
+        'can', 'could', 'would', 'should', 'might', 'must', 'shall',
+        // Common sentence starters
+        'get', 'got', 'go', 'going', 'gone', 'let', 'make', 'take',
+        // Quantifiers
+        'some', 'any', 'all', 'both', 'more', 'most', 'much', 'many', 'few',
+        'each', 'every', 'other', 'another', 'same', 'such', 'only',
       ];
       if (!COMMON.includes(prefix)) {
         logger.info(`🎯 Fuzzy wake (FSM gate): "${prefix}" → treating as wake word (speaker verified)`);

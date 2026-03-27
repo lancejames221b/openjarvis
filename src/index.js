@@ -473,7 +473,7 @@ let lastInteractionTime = Date.now(); // Init to now — prevents immediate idle
 // Mute-gated output: when others present + owner unmuted, hold responses
 let ownerMuted = false;
 let lastUserMessage = '';
-const ACTIVE_CONVERSATION_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+const ACTIVE_CONVERSATION_WINDOW_MS = parseInt(process.env.CONVERSATION_WINDOW_MS || '60000'); // default 60s, override via .env
 
 // detectFollowUpLikely imported from ./fsm.js
 
@@ -1064,6 +1064,12 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   if (joinedChannel && (!leftChannel || leftChannel !== joinedChannel)) {
     userDisconnected = false; // Reset disconnect flag on join
     logger.info(`👋 User joined voice channel ${joinedChannel}`);
+    // Auto-clear any stale server mute — can get stuck when user disconnects while muted.
+    // Guild-level server mute persists across voice sessions, so clear it on join.
+    if (newState.serverMute) {
+      logger.info('🔊 Clearing stale server mute on owner join...');
+      serverMuteOwner(false);
+    }
     // Apply implicit wake on join when owner is not muted — same as unmute flow.
     // Allows Lance to start talking immediately after joining without wake word,
     // as long as UNMUTE_IMPLICIT_WAKE is enabled. Voiceprint still required.
@@ -3102,10 +3108,10 @@ async function playAudioEnhanced(audioPath) {
 
   const { createReadStream: crs, statSync: fstatSync } = await import('fs');
   const fileStat = fstatSync(audioPath);
-  // WAV at 22050 Hz, 16-bit mono = 44100 bytes/sec (~43 KB/s).
-  // Previous formula used 5 KB/s, overestimating 8x — caused mute to hold 18+ seconds on 3s clips.
+  // WAV at 24000 Hz, 16-bit mono = 48000 bytes/sec (Chatterbox TTS native format).
+  // Previous formula used 22050 Hz (44100 bytes/sec) — off by 8.5%; corrected to 24000 Hz.
   const isWav = audioPath.endsWith('.wav');
-  const bytesPerSec = isWav ? 44100 : 16000; // WAV 22050Hz mono 16-bit : MP3 ~128kbps
+  const bytesPerSec = isWav ? 48000 : 16000; // WAV 24000Hz mono 16-bit (Chatterbox) : MP3 ~128kbps
   const estimatedDurationMs = Math.max(1500, (fileStat.size / bytesPerSec) * 1000);
 
   const resource = createAudioResource(crs(audioPath));
