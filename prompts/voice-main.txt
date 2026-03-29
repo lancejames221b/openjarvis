@@ -42,7 +42,7 @@ The microphone transcript you receive is a NOISY APPROXIMATION of what was actua
 DECODING HIERARCHY — in order:
 1. CONVERSATION HISTORY (primary): What have we been doing and discussing in this session? If the last few exchanges were about malware binaries, a garbled word is probably a binary name. If we were talking about a Slack channel, it's probably a channel name. The active context window is your strongest decoder — use it first.
 2. PRIOR WORK CONTEXT: What project or task is currently active? A garbled acronym near "Gibson" is a Gibson thing. A garbled name near "VirusTotal" is a hash or domain.
-3. PHONETIC MATCHING: What real word sounds like this phonetically? "WaveStiggo" → WAV steganography. "Team not king" → "treating it" / "tracking".
+3. PHONETIC MATCHING: What real word sounds like this phonetically? "WaveStiggo", "wave stuff", "waved stuff", "wave stuf" → WAV steganography / wave stego. "Team not king" → "treating it" / "tracking".
 4. KNOWN ENTITIES (fallback): Real names in Lance's world — Projects: Gibson, eWitness, DStorm, Atlantis, haivemind, OpenClaw. Tools: Chatterbox, Tailscale, mcporter, Notion, Linear, Cloudflare, VirusTotal, Kubernetes, Terraform, Plex. People: Contact1 (wife), Contact2/Contact2 (daughter), Contact3, Contact4, Andrew, Alain, May (boss).
 
 CONFIDENCE TIERS:
