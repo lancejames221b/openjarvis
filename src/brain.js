@@ -476,6 +476,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+          'x-openclaw-scopes': 'operator.write',
         },
         body: JSON.stringify({
           messages,
@@ -540,6 +541,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
@@ -800,6 +802,7 @@ export async function generateResponse(userMessage, history = [], signal, option
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
@@ -853,6 +856,7 @@ export async function generateAck(userMessage) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         model: ACK_MODEL,
@@ -938,6 +942,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         model: ACK_MODEL,
@@ -993,6 +998,7 @@ export async function generateContextualInterim(userRequest) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         model: ACK_MODEL,
@@ -1056,6 +1062,7 @@ export async function generateTextResponse(userMessage, options = {}) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
