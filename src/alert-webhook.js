@@ -1403,6 +1403,56 @@ async function sendTextNotification(alert) {
   }
 }
 
+// ── /test-voice: inject a text message through the full voice pipeline (bypasses STT) ──
+app.post('/test-voice', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: 'message required' });
+
+  try {
+    // Sanity-check the gateway directly before calling brain
+    const gwUrl = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+    const gwToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const pingRes = await fetch(`${gwUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${gwToken}`,
+        'x-openclaw-scopes': 'operator.write',
+      },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'Reply: pong' }], max_tokens: 5, model: 'openclaw' }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const pingData = await pingRes.json();
+    logger.info(`🧪 direct gateway ping: status=${pingRes.status} ok=${pingRes.ok} body=${JSON.stringify(pingData).substring(0, 120)}`);
+
+    const { generateResponse } = await import('./brain.js');
+    const { speakText } = await import('./speech-output.js');
+
+    logger.info(`🧪 /test-voice inject: "${message.substring(0, 80)}"`);
+    const startMs = Date.now();
+
+    const result = await generateResponse(message, [], null, {});
+    const elapsed = Date.now() - startMs;
+    const text = result?.text || result || '';
+
+    logger.info(`🧪 /test-voice response (${elapsed}ms): "${String(text).substring(0, 120)}" | full result: ${JSON.stringify(result)}`);
+
+    if (text) {
+      await speakText(text);
+    }
+
+    res.json({ ok: true, elapsed_ms: elapsed, response: String(text).substring(0, 500) });
+  } catch (err) {
+    logger.error(`❌ /test-voice error: ${err?.message || String(err)} | stack: ${err?.stack?.split('\n')[1]}`);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
 // Export the express app for testing (tests start their own server on a random port)
 export { app };
 
@@ -1410,6 +1460,6 @@ export function startAlertWebhook() {
   const TAILSCALE_IP = process.env.TAILSCALE_IP || 'localhost';
   app.listen(WEBHOOK_PORT, TAILSCALE_IP, () => {
     logger.info(`🔔 Alert webhook listening on ${TAILSCALE_IP}:${WEBHOOK_PORT} (Tailscale only)`);
-    logger.info(`   Endpoints: /alert, /speak, /handoff, /post, /remind, /remind/:id/ack, /reminders, /context/active, /health`);
+    logger.info(`   Endpoints: /alert, /speak, /handoff, /post, /remind, /remind/:id/ack, /reminders, /context/active, /health, /test-voice`);
   });
 }

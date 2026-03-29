@@ -148,6 +148,7 @@ const SPEAK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || '';
 const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
 const HOOKS_TOKEN = process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
+const voiceModel = process.env.VOICE_MODEL || 'openclaw'; // module-level so all functions share it
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
 
@@ -462,7 +463,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
   // ── Model — single model for all intents ────────────────────────────
   const intentType = options.intentType || null;
-  const voiceModel = process.env.VOICE_MODEL;
+  // voiceModel is now module-level (const voiceModel above) — reads VOICE_MODEL env at startup
   logger.info({ taskId: options.taskId, intentType, model: voiceModel }, '🧠 Model selected');
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
