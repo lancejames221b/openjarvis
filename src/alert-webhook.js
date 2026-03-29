@@ -48,6 +48,7 @@ let speakCallback = null; // Callback for immediate TTS delivery
 let markBotResponseCallback = null; // Callback to refresh conversation window after speaking
 let postActivityCallback = null; // Callback for activity feed
 let postToTextCallback = null; // Callback for posting to text channel
+let postToThreadCallback = null; // Callback for posting task-progress / background-agent results to #hud as threads
 let personaSwitchCallback = null; // Callback for runtime persona switch (set by index.js)
 let personaCreateCallback = null; // Callback for runtime persona creation (set by index.js)
 let escalationInterval = null; // Periodic stale alert check
@@ -227,6 +228,7 @@ async function executeReminderTier(id, reminder) {
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+              'x-openclaw-scopes': 'operator.write',
             },
             body: JSON.stringify({
               messages: [
@@ -304,6 +306,12 @@ export function setPostActivityCallback(cb) {
 
 export function setPostToTextCallback(cb) {
   postToTextCallback = cb;
+}
+
+// Register a callback that posts task-progress / background-agent results to #hud as a thread.
+// Signature: (transcript, fullText, intentCategory, taskId) => void
+export function setPostToThreadCallback(cb) {
+  postToThreadCallback = cb;
 }
 
 export function setCurrentVoiceChannelId(channelId) {
@@ -505,6 +513,22 @@ app.post('/speak', async (req, res) => {
       postToTextCallback(`📝 *(text-only, task spoke inline)* ${message.substring(0, 300)}`);
     }
     return res.json({ ok: true, delivered: 'text-only-task-spoke-inline' });
+  }
+
+  // ── Sub-agent result routing ─────────────────────────────────────────
+  // task-progress and background-agent results get posted to #hud as threads.
+  // This is the /speak callback from a spawned sub-agent finishing its work.
+  const isSubAgentResult = source === 'task-progress' || source === 'background-agent' || source === 'task-complete';
+  if (isSubAgentResult && postToThreadCallback) {
+    logger.info(`📤 Routing sub-agent result (${source}) to #hud thread (task #${taskId})`);
+    postToThreadCallback(taskId, source, message);
+    if (userInVoice && speakCallback) {
+      // Speak a brief summary (truncated) — full result is in the thread
+      speakCallback(message);
+      _recordSpoken(message, source);
+      if (markBotResponseCallback) markBotResponseCallback(ALLOWED_USERS[0], { followUpLikely: true });
+    }
+    return res.json({ ok: true, delivered: 'thread+voice', userInVoice });
   }
 
   if (userInVoice && speakCallback) {

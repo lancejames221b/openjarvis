@@ -729,7 +729,7 @@ async function generateDynamicGreeting() {
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}`, 'x-openclaw-scopes': 'operator.write' },
       body: JSON.stringify({
         model: process.env.VOICE_MODEL || 'anthropic-console/claude-sonnet-4-6',
         messages: [{ role: 'user', content: prompt }],
