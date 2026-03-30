@@ -203,7 +203,7 @@ let lastEventLoopCheck = Date.now();
 let eventLoopLagWarnings = 0;
 
 function startHealthMonitor() {
-  setInterval(() => {
+  setInterval(async () => {
     const mem = process.memoryUsage();
     const rssMb = Math.round(mem.rss / 1024 / 1024);
     
@@ -243,6 +243,21 @@ function startHealthMonitor() {
       reconnectAttempts: reconnectState.attempts,
       lastSuccessfulInteraction: lastInteractionTime || null,
     });
+
+    // Stuck server-mute watchdog — clear mute if no audio is playing and no active tasks
+    // Catches cases where unmute failed due to disconnect, error, or crash during playback
+    try {
+      const guild = client.isReady() ? client.guilds.cache.get(GUILD_ID) : null;
+      if (guild && ALLOWED_USERS[0]) {
+        const member = guild.members.cache.get(ALLOWED_USERS[0]);
+        if (member?.voice?.serverMute && activeTasks.size === 0 && !audioQueue?.playing) {
+          logger.warn('🔧 Watchdog: detected stuck server mute with no active playback — clearing');
+          await member.voice.setMute(false, 'Watchdog: clearing stuck server mute');
+        }
+      }
+    } catch (err) {
+      logger.warn(`Stuck-mute watchdog error: ${err.message}`);
+    }
   }, HEALTH_CHECK_INTERVAL_MS);
   
   logger.info('🏥 Process health monitor started (30s interval)');
@@ -1650,7 +1665,8 @@ async function handleVoiceDisconnect(userId) {
     return;
   }
   
-  // Idle disconnect — silent exit
+  // Idle disconnect — silent exit, ensure owner is not left server-muted
+  serverMuteOwner(false);
   logger.info(`🔇 Idle disconnect (${Math.round(timeSinceLastInteraction / 1000)}s since last interaction) — no handoff`);
 }
 
