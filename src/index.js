@@ -2536,6 +2536,44 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
+    // ── Channel focus commands ──────────────────────────────────────────
+    if (dispatchResult.type === 'focus_set') {
+      const { channelName, purpose } = dispatchResult;
+      logger.info(`🎯 Focus set: #${channelName}`);
+      const msg = purpose
+        ? `Focused on ${channelName}. ${purpose.substring(0, 80)}.`
+        : `Focused on ${channelName}.`;
+      const ack = await synthesizeSpeech(msg);
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
+    if (dispatchResult.type === 'focus_clear') {
+      logger.info('🎯 Focus cleared');
+      const ack = await synthesizeSpeech('Focus cleared. No channel context active.');
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
+    if (dispatchResult.type === 'focus_query') {
+      const { focus } = dispatchResult;
+      const msg = focus
+        ? `Currently focused on ${focus.channelName}.`
+        : 'No channel focus set. Say "focus on" followed by a channel name to set one.';
+      const ack = await synthesizeSpeech(msg);
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
+    if (dispatchResult.type === 'channel_list') {
+      const { channels } = dispatchResult;
+      const names = channels.slice(0, 10).map(c => c.name);
+      const msg = `Available channels: ${names.join(', ')}. ${channels.length > 10 ? `And ${channels.length - 10} more.` : ''}`;
+      const ack = await synthesizeSpeech(msg);
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
     if (dispatchResult.type === 'persona_list') {
       const { available, current } = dispatchResult;
       const others = available.filter(p => p !== current.toLowerCase());
@@ -2939,8 +2977,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     // Strip any leaked signal fragments from the final text
     const fullText = (result.text || fullResponse || '')
-      .replace(/\s*_?NO_?R?E?P?L?Y?\s*/gi, ' ')
-      .replace(/\s*HEARTBEAT_?O?K?\s*/gi, ' ')
+      .replace(/(?:^|\s)_?NO_?REPLY(?:\s|[.!?]|$)/gi, ' ')
+      .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
       .trim();
     logger.info(`💬 Task #${taskId} done (${Date.now() - startTime}ms): "${fullText.substring(0, 80)}..."`);
     // Post Jarvis response to CC — split if over 2000 chars

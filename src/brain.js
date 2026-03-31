@@ -326,6 +326,7 @@ export function isGatewayCircuitOpen() {
 // Key: use tools exactly as you would in text chat. The ONLY difference is output format.
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
+import { getFocusContextTag } from './focus-state.js';
 
 // Prompts vars resolved at call time so runtime env values are current
 function getVoicePromptVars() {
@@ -440,7 +441,15 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     }
   }
 
-  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${priorCtxTag}${userMessage}`;
+  // Inject channel focus context if active
+  let focusTag = '';
+  const focusCtx = getFocusContextTag();
+  if (focusCtx) {
+    focusTag = focusCtx + ' ';
+    logger.info('Injected channel focus context into voice message');
+  }
+
+  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${focusTag}${priorCtxTag}${userMessage}`;
   
   const messages = [
     ...history.slice(-6).map(m => ({ role: m.role, content: m.content })),
@@ -477,14 +486,14 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-          'x-openclaw-scopes': 'operator.write',
+          'X-OpenClaw-Scopes': 'operator.write',
         },
         body: JSON.stringify({
           messages,
           max_tokens: 8192,
           user: getActiveSessionUser(),
           stream: false,
-          model: voiceModel,
+          model: 'openclaw',
           ...THINKING_PARAM,
         }),
       }, signal);
@@ -542,6 +551,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -549,7 +559,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         max_tokens: 8192,
         user: getActiveSessionUser(),
         stream: true,
-        model: voiceModel,
+        model: 'openclaw',
         ...THINKING_PARAM,
       }),
     }, signal);
@@ -722,8 +732,8 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     
     // Strip signal fragments from fullText (SSE may interleave signals with content)
     // Removes NO_REPLY, _NO_REPLY, HEARTBEAT_OK, and partial fragments
-    fullText = fullText.replace(/\s*_?NO_?R?E?P?L?Y?\s*/gi, ' ')
-                       .replace(/\s*HEARTBEAT_?O?K?\s*/gi, ' ')
+    fullText = fullText.replace(/(?:^|\s)_?NO_?REPLY(?:\s|[.!?]|$)/gi, ' ')
+                       .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
                        .trim();
 
     // Check for NO_REPLY / HEARTBEAT_OK -- agent had nothing to say
@@ -786,7 +796,14 @@ export async function generateResponse(userMessage, history = [], signal, option
     const score = options.sentiment.sentiment_score != null ? `, score: ${options.sentiment.sentiment_score.toFixed(2)}` : '';
     contextTags += `[SENTIMENT: ${options.sentiment.sentiment}${score}] `;
   }
-  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${userMessage}`;
+  // Inject channel focus context if active
+  let focusTag = '';
+  const focusCtxNonStream = getFocusContextTag();
+  if (focusCtxNonStream) {
+    focusTag = focusCtxNonStream + ' ';
+  }
+
+  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${focusTag}${userMessage}`;
   
   const messages = [
     ...history.slice(-6).map(m => ({ role: m.role, content: m.content })),
@@ -803,13 +820,14 @@ export async function generateResponse(userMessage, history = [], signal, option
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
         user: getActiveSessionUser(),
-        model: voiceModel,
+        model: 'openclaw',
         ...THINKING_PARAM,
       }),
     }, signal);
@@ -857,6 +875,7 @@ export async function generateAck(userMessage) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -943,6 +962,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -999,6 +1019,7 @@ export async function generateContextualInterim(userRequest) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -1063,13 +1084,14 @@ export async function generateTextResponse(userMessage, options = {}) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
         user: options.sessionUser || getActiveSessionUser(),
-        model: process.env.VOICE_MODEL,
+        model: 'openclaw',
         ...THINKING_PARAM,
       }),
     });
@@ -1099,7 +1121,14 @@ export async function dispatchViaWebhook(userMessage, history = [], options = {}
     const score = options.sentiment.sentiment_score != null ? `, score: ${options.sentiment.sentiment_score.toFixed(2)}` : '';
     contextTags += `[SENTIMENT: ${options.sentiment.sentiment}${score}] `;
   }
-  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${userMessage}`;
+  // Inject channel focus context if active
+  let webhookFocusTag = '';
+  const webhookFocusCtx = getFocusContextTag();
+  if (webhookFocusCtx) {
+    webhookFocusTag = webhookFocusCtx + ' ';
+  }
+
+  const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${webhookFocusTag}${userMessage}`;
 
   // Wrap the voice message with delivery instructions
   const hookMessage = `${voiceMessage}
@@ -1115,6 +1144,7 @@ Replace YOUR_RESPONSE_HERE with your actual spoken response (escaped for JSON). 
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${HOOKS_TOKEN}`,
+        'X-OpenClaw-Scopes': 'operator.write',
       },
       body: JSON.stringify({
         message: hookMessage,

@@ -10,6 +10,7 @@ import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
+import { setFocusByName, clearFocus, getFocus, listChannels } from './focus-state.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -89,6 +90,43 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
       const available = listPersonalities();
       const current = getActivePersona().name;
       return { type: 'persona_list', available, current };
+    }
+  }
+
+  // ── Channel focus commands ──────────────────────────────────────────
+  if (isAdmin) {
+    // "focus on gibson" / "switch to ewitness" / "work on gibson" / "focus ewitness"
+    const focusMatch = cleanedTranscript.match(/(?:focus\s+(?:on\s+)?|switch\s+(?:to\s+)?|work\s+(?:on\s+)?)([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)\s*$/i);
+    if (focusMatch) {
+      const target = focusMatch[1].trim();
+      // Don't match persona/mode/tts commands that overlap
+      const personas = listPersonalities();
+      const nonFocusKeywords = new Set(['tldr', 'transcript', 'mobile', 'tts', 'piper', 'chatterbox', 'edge', ...personas]);
+      if (!nonFocusKeywords.has(target.toLowerCase())) {
+        const result = setFocusByName(target);
+        if (result) {
+          return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose };
+        }
+        // Channel not found — fall through to brain (might be a different command)
+      }
+    }
+
+    // "clear focus" / "unfocus" / "no focus" / "reset focus"
+    if (/(?:clear|reset|remove|drop|no)\s*focus|unfocus/i.test(cleanedTranscript)) {
+      clearFocus();
+      return { type: 'focus_clear' };
+    }
+
+    // "where am i" / "what channel" / "what focus" / "what context"
+    if (/(?:where\s+am\s+i|what\s+(?:channel|focus|context)|current\s+(?:focus|context))/i.test(cleanedTranscript)) {
+      const focus = getFocus();
+      return { type: 'focus_query', focus };
+    }
+
+    // "list channels" / "available channels" / "show channels"
+    if (/(?:list|show|available|what)\s+channels/i.test(cleanedTranscript)) {
+      const channels = listChannels();
+      return { type: 'channel_list', channels };
     }
   }
 
