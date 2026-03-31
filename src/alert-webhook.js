@@ -445,6 +445,27 @@ function _recordSpoken(message, source) {
   if (_recentSpokenTexts.length > 10) _recentSpokenTexts.shift(); // cap at 10
 }
 
+// ── /speak in-flight mutex: prevents race-condition double-speak ─────
+// Two simultaneous HTTP requests for identical content can both pass the
+// hash dedup if body parsing completes in the same event-loop tick before
+// either handler records the hash. This 200ms window closes that gap.
+const _inFlightSpeaks = new Map(); // normalizedKey -> timestamp
+const IN_FLIGHT_TTL_MS = 200;
+
+function _isInFlight(message) {
+  const key = message.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 80);
+  const now = Date.now();
+  const last = _inFlightSpeaks.get(key);
+  if (last && now - last < IN_FLIGHT_TTL_MS) return true;
+  _inFlightSpeaks.set(key, now);
+  if (_inFlightSpeaks.size > 50) {
+    for (const [k, t] of _inFlightSpeaks) {
+      if (now - t > IN_FLIGHT_TTL_MS * 5) _inFlightSpeaks.delete(k);
+    }
+  }
+  return false;
+}
+
 app.post('/speak', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) {
@@ -457,6 +478,12 @@ app.post('/speak', async (req, res) => {
     return res.status(400).json({ error: 'message required' });
   }
   
+  // ── In-flight race dedup (200ms window) — catches simultaneous identical requests ──
+  if (_isInFlight(message)) {
+    logger.info(`⏭️  /speak in-flight dedup: skipping race duplicate (${message.substring(0, 40)}...)`);
+    return res.json({ ok: true, delivered: 'inflight-dedup-skip' });
+  }
+
   // ── Cross-path content deduplication (exact hash) ──
   if (_isDuplicateContentFn && _isDuplicateContentFn(message)) {
     logger.info(`⏭️  /speak dedup: skipping duplicate content (${message.substring(0, 40)}...)`);

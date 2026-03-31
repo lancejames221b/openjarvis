@@ -1509,20 +1509,26 @@ async function postToTextChannel(message) {
  * Post voice conversation as a thread (user question → thread with Jarvis response + task tracking)
  */
 async function postTranscriptThread(taskId, userTranscript, jarvisResponse, duration) {
-  if (!TEXT_CHANNEL_ID) {
+  // Use VOICE_REPORT_CHANNEL_ID (#hud) instead of TEXT_CHANNEL_ID (#jarvis-voice).
+  // Posting to #jarvis-voice (which is also VOICE_CALLBACK_CHANNEL_ID) created a feedback
+  // loop: the transcript message landed in the callback channel and could trigger a second
+  // /speak path, causing jobs to be spoken twice. #hud is the correct target — it's already
+  // used by postTaskToThread (thread-router) for all other voice task output.
+  const targetChannelId = VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
+  if (!targetChannelId) {
     logger.warn('⚠️  No text channel configured, skipping transcript thread');
     return false;
   }
   
   try {
-    const channel = client.channels.cache.get(TEXT_CHANNEL_ID);
+    const channel = client.channels.cache.get(targetChannelId);
     if (!channel) {
-      logger.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
+      logger.error(`❌ Channel ${targetChannelId} not found in cache`);
       return false;
     }
     
     // Post the initial message with task ID and user's question
-    logger.info(`📤 Posting voice transcript thread (task #${taskId}) to ${channel.name}...`);
+    logger.info(`📤 Posting voice transcript thread (task #${taskId}) to ${channel.name} (#hud)...`);
     const initialMsg = await channel.send(`🎙️ **Task #${taskId}** | You: ${userTranscript}`);
     
     // Create a thread on that message with task ID in the name
