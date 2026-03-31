@@ -14,7 +14,11 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { exec as _exec } from 'child_process';
+import { promisify } from 'util';
 import logger from './logger.js';
+
+const execAsync = promisify(_exec);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = join(__dirname, '..', 'data', 'focus-state.json');
@@ -125,50 +129,150 @@ export function hasFocus() {
 }
 
 /**
+ * Build structured references for a channel — actionable paths, tools, commands.
+ * @param {string} channelId
+ * @param {object} channelData — registry entry
+ * @returns {object}
+ */
+function _buildReferences(channelId, channelData) {
+  const refs = {};
+  const proj = channelData.project || {};
+
+  // File paths
+  refs.contextFile = `~/dev/contexts/${channelId}.md`;
+  refs.channelRegistryPath = '~/dev/contexts/channel-registry.json';
+
+  // Repo / working directory
+  if (proj.repo) {
+    // Derive local repo path from repo name
+    const repoName = proj.repo.split('/').pop();
+    refs.repo = proj.repo;
+    refs.branch = proj.branch || 'main';
+    refs.localPath = `~/dev/${repoName}`;
+  }
+
+  // Infrastructure
+  if (proj.gcpProject) refs.gcpProject = proj.gcpProject;
+  if (proj.gcpServer) refs.gcpServer = proj.gcpServer;
+  if (proj.cloudSQL) refs.cloudSQL = `${proj.cloudSQL}/${proj.cloudSQLDb || ''}`;
+  if (proj.esCluster) refs.esCluster = proj.esCluster;
+
+  // Tracking URLs
+  const tracking = channelData.tracking || {};
+  if (tracking.notion?.commandCenter?.url) refs.notionUrl = tracking.notion.commandCenter.url;
+  if (tracking.trello?.url) refs.trelloUrl = tracking.trello.url;
+  if (proj.linearUrl) refs.linearUrl = proj.linearUrl;
+
+  // MCP tools for this channel's domain
+  refs.mcpTools = channelData.mcpTools || [];
+
+  // Actionable commands
+  refs.commands = {
+    readDirective: `cat ~/dev/contexts/${channelId}.md`,
+    searchHaivemind: `mcporter call haivemind.search_memories query="${channelId} context" limit=10`,
+    readDiscord: `message action=read channelId=${channelId} limit=20`,
+  };
+  if (proj.repo) {
+    refs.commands.gitStatus = `cd ~/dev/${proj.repo.split('/').pop()} && git status`;
+    refs.commands.gitLog = `cd ~/dev/${proj.repo.split('/').pop()} && git log --oneline -5`;
+  }
+
+  return refs;
+}
+
+/**
+ * Pre-fetch haivemind context for a channel. Fire-and-forget, non-blocking.
+ * Stores result in _focus.haivemindContext.
+ * @param {string} channelId
+ */
+async function _prefetchHaivemind(channelId) {
+  try {
+    const mcporterPath = process.env.MCPORTER_PATH || '/home/generic/.npm-global/bin/mcporter';
+    // Shell-safe: wrap key=value args in double quotes, escape inner content
+    // CRITICAL: mcporter reads config relative to CWD — must run from ~/dev
+    const query = `${channelId} context`.replace(/"/g, '\\"');
+    const { stdout } = await execAsync(
+      `${mcporterPath} call haivemind.search_memories "query=${query}" "limit=8"`,
+      { timeout: 10000, cwd: '/home/generic/dev', env: { ...process.env, PATH: `${process.env.PATH}:/home/generic/.npm-global/bin` } }
+    );
+    const raw = stdout.trim();
+    const data = JSON.parse(raw);
+    const memories = data?.result?.memories || data?.memories || [];
+    if (memories.length > 0 && _focus && _focus.channelId === channelId) {
+      _focus.haivemindContext = memories
+        .map(m => m.content || String(m))
+        .join('\n---\n')
+        .substring(0, 2000);
+      _saveState(_focus);
+      logger.info(`[focus] Pre-fetched ${memories.length} haivemind memories for #${_focus.channelName}`);
+    }
+  } catch (e) {
+    logger.warn(`[focus] haivemind pre-fetch failed (non-fatal): ${e.message}`);
+  }
+}
+
+/**
  * Set the focus to a channel (by name/alias).
- * Resolves the channel, loads its directive, and persists.
+ * Resolves the channel, loads its directive, builds structured references,
+ * and kicks off a haivemind pre-fetch.
  * @param {string} nameOrAlias — channel name or alias (e.g. "gibson")
- * @returns {{ channelId: string, channelName: string, directive: string|null, purpose: string } | null}
+ * @returns {{ channelId: string, channelName: string, directive: string|null, purpose: string, references: object } | null}
  */
 export function setFocusByName(nameOrAlias) {
   const resolved = resolveChannel(nameOrAlias);
   if (!resolved) return null;
 
   const directive = loadDirective(resolved.channelId);
+  const registry = _loadRegistry();
+  const channelData = registry.channels?.[resolved.channelId] || {};
+  const references = _buildReferences(resolved.channelId, channelData);
 
   _focus = {
     channelId: resolved.channelId,
     channelName: resolved.channelName,
     purpose: resolved.purpose,
     directive: directive || null,
+    references,
+    haivemindContext: null, // populated async
     setAt: new Date().toISOString(),
   };
 
   _saveState(_focus);
   logger.info(`[focus] Set focus: ${resolved.channelName} (${resolved.channelId})`);
+
+  // Pre-fetch haivemind in background (non-blocking)
+  _prefetchHaivemind(resolved.channelId);
+
   return _focus;
 }
 
 /**
- * Set focus directly by channel ID (used programmatically).
+ * Set focus directly by channel ID (used programmatically, e.g. from handoff).
  * @param {string} channelId
  * @param {string} channelName
  */
 export function setFocusById(channelId, channelName) {
   const directive = loadDirective(channelId);
   const registry = _loadRegistry();
-  const channelData = registry.channels?.[channelId];
+  const channelData = registry.channels?.[channelId] || {};
+  const references = _buildReferences(channelId, channelData);
 
   _focus = {
     channelId,
     channelName: channelName || channelData?.name || 'unknown',
     purpose: channelData?.purpose || '',
     directive: directive || null,
+    references,
+    haivemindContext: null,
     setAt: new Date().toISOString(),
   };
 
   _saveState(_focus);
   logger.info(`[focus] Set focus by ID: ${_focus.channelName} (${channelId})`);
+
+  // Pre-fetch haivemind in background
+  _prefetchHaivemind(channelId);
+
   return _focus;
 }
 
@@ -251,15 +355,34 @@ export function getFocusContextTag() {
     tag += `[CHANNEL DIRECTIVE:\n${snippet}\n]`;
   }
 
-  // ── haivemind search instruction ───────────────────────────────────
-  tag += `\n[CHANNEL MEMORY: Search haivemind for "${_focus.channelId} context" to restore prior work and decisions for this channel.]`;
+  // ── Structured references ──────────────────────────────────────────
+  const refs = _focus.references || {};
+  const refLines = [];
+  if (refs.contextFile) refLines.push(`Context file: ${refs.contextFile}`);
+  if (refs.repo) refLines.push(`Repo: ${refs.repo} (branch: ${refs.branch || 'main'})`);
+  if (refs.localPath) refLines.push(`Local path: ${refs.localPath}`);
+  if (refs.gcpProject) refLines.push(`GCP: ${refs.gcpProject}${refs.gcpServer ? ` (${refs.gcpServer})` : ''}`);
+  if (refs.cloudSQL) refLines.push(`Cloud SQL: ${refs.cloudSQL}`);
+  if (refLines.length > 0) {
+    tag += `[REFERENCES:\n${refLines.join('\n')}\n]\n`;
+  }
+
+  // ── Pre-fetched haivemind context ─────────────────────────────────
+  if (_focus.haivemindContext) {
+    // Include pre-fetched memory so the agent doesn't need to search
+    const memSnippet = _focus.haivemindContext.substring(0, 1200);
+    tag += `[CHANNEL MEMORY (pre-fetched):\n${memSnippet}\n]\n`;
+  } else {
+    tag += `[CHANNEL MEMORY: Search haivemind for "${_focus.channelId} context" to restore prior work and decisions.]\n`;
+  }
 
   return tag;
 }
 
 /**
  * Get the full context blob for sub-agent task injection.
- * Richer than the prompt tag — includes everything the sub-agent needs.
+ * Richer than the prompt tag — includes structured references,
+ * pre-fetched haivemind context, actionable commands, and the full directive.
  * @returns {string | null}
  */
 export function getFullFocusContext() {
@@ -296,17 +419,41 @@ export function getFullFocusContext() {
     if (tracking.trello?.url) ctx += `**Trello:** ${tracking.trello.url}\n`;
   }
 
-  if (channelData.contextFile) {
-    ctx += `**Context file:** ~/dev/contexts/${channelData.contextFile}\n`;
+  // ── Structured references (actionable, not just descriptive) ──────
+  const refs = _focus.references || {};
+  ctx += `\n### References\n`;
+  ctx += `- **Context file:** ${refs.contextFile || `~/dev/contexts/${_focus.channelId}.md`}\n`;
+  if (refs.repo) ctx += `- **Repo:** ${refs.repo} (branch: ${refs.branch || 'main'})\n`;
+  if (refs.localPath) ctx += `- **Local path:** ${refs.localPath}\n`;
+  if (refs.gcpProject) ctx += `- **GCP project:** ${refs.gcpProject}${refs.gcpServer ? ` (${refs.gcpServer})` : ''}\n`;
+  if (refs.cloudSQL) ctx += `- **Cloud SQL:** ${refs.cloudSQL}\n`;
+  if (refs.notionUrl) ctx += `- **Notion:** ${refs.notionUrl}\n`;
+  if (refs.trelloUrl) ctx += `- **Trello:** ${refs.trelloUrl}\n`;
+  if (refs.linearUrl) ctx += `- **Linear:** ${refs.linearUrl}\n`;
+
+  // ── Commands the sub-agent should run ─────────────────────────────
+  const cmds = refs.commands || {};
+  ctx += `\n### Startup Commands (run these first)\n`;
+  ctx += `\`\`\`bash\n`;
+  ctx += `# Read the full channel directive\n${cmds.readDirective || `cat ~/dev/contexts/${_focus.channelId}.md`}\n\n`;
+  ctx += `# Search haivemind for prior work and decisions\n${cmds.searchHaivemind || `mcporter call haivemind.search_memories query="${_focus.channelId} context" limit=10`}\n\n`;
+  ctx += `# Read recent Discord messages (ground truth)\n${cmds.readDiscord || `message action=read channelId=${_focus.channelId} limit=20`}\n`;
+  if (cmds.gitStatus) {
+    ctx += `\n# Check repo state\n${cmds.gitStatus}\n${cmds.gitLog}\n`;
+  }
+  ctx += `\`\`\`\n`;
+
+  // ── Pre-fetched haivemind context (if available) ──────────────────
+  if (_focus.haivemindContext) {
+    ctx += `\n### Prior Context (from haivemind)\n${_focus.haivemindContext}\n`;
   }
 
-  // Full directive (no truncation for sub-agents)
+  // ── Full directive ────────────────────────────────────────────────
   if (_focus.directive) {
     ctx += `\n### Channel Directive\n${_focus.directive}\n`;
   }
 
-  ctx += `\n**haivemind:** Search for "${_focus.channelId} context" to get prior work and decisions.\n`;
-  ctx += `**Post output to:** Discord channel ${_focus.channelId} (#${_focus.channelName})\n`;
+  ctx += `\n**Post output to:** Discord channel ${_focus.channelId} (#${_focus.channelName})\n`;
 
   return ctx;
 }
