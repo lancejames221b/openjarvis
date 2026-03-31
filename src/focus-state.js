@@ -104,21 +104,9 @@ export function loadDirective(channelId) {
   try {
     const filePath = join(CONTEXTS_DIR, `${channelId}.md`);
     const content = readFileSync(filePath, 'utf8');
-
-    // Extract the most useful sections: first ~1500 chars, prioritising
-    // headers, purpose, current focus, active work
-    const lines = content.split('\n');
-    const result = [];
-    let chars = 0;
-    const MAX_CHARS = 1500;
-
-    for (const line of lines) {
-      if (chars + line.length > MAX_CHARS) break;
-      result.push(line);
-      chars += line.length + 1;
-    }
-
-    return result.join('\n').trim() || null;
+    // Return the full directive — truncation happens at injection time
+    // based on whether it's for the voice prompt tag or sub-agent context
+    return content.trim() || null;
   } catch {
     return null;
   }
@@ -192,27 +180,135 @@ export function clearFocus() {
 }
 
 /**
- * Get a compact context string for injection into voice prompts.
+ * Get a rich context string for injection into voice prompts.
+ * Includes channel registry metadata (project, repo, branch, todos, tracking),
+ * channel directive, and haivemind search instructions.
  * Returns null if unfocused.
  * @returns {string | null}
  */
 export function getFocusContextTag() {
   if (!_focus) return null;
 
+  const registry = _loadRegistry();
+  const channelData = registry.channels?.[_focus.channelId] || {};
+
   let tag = `[CHANNEL FOCUS: #${_focus.channelName}`;
   if (_focus.purpose) {
     tag += ` — ${_focus.purpose}`;
   }
-  tag += ']';
+  tag += ']\n';
 
-  // Append directive snippet if available (truncated for voice prompt)
-  if (_focus.directive) {
-    // Take just the first ~800 chars of the directive for the prompt
-    const snippet = _focus.directive.substring(0, 800);
-    tag += `\n[CHANNEL DIRECTIVE SNIPPET:\n${snippet}\n]`;
+  // ── Channel registry metadata ──────────────────────────────────────
+  const parts = [];
+
+  if (channelData.currentFocus) {
+    parts.push(`Current Focus: ${channelData.currentFocus}`);
   }
 
+  if (channelData.todos && channelData.todos.length > 0) {
+    parts.push(`Open TODOs:\n${channelData.todos.map(t => `  - ${t}`).join('\n')}`);
+  }
+
+  // Project details (repo, branch, GCP, Linear, etc.)
+  const proj = channelData.project;
+  if (proj) {
+    const projLines = [];
+    if (proj.name) projLines.push(`Project: ${proj.name}`);
+    if (proj.status) projLines.push(`Status: ${proj.status}${proj.statusReason ? ` (${proj.statusReason})` : ''}`);
+    if (proj.repo) projLines.push(`Repo: ${proj.repo}${proj.branch ? `, branch: ${proj.branch}` : ''}`);
+    if (proj.gcpProject) projLines.push(`GCP: ${proj.gcpProject}${proj.gcpServer ? ` (${proj.gcpServer})` : ''}`);
+    if (proj.linearUrl) projLines.push(`Linear: ${proj.linearUrl}`);
+    if (proj.dueDate) projLines.push(`Due: ${proj.dueDate}`);
+    parts.push(projLines.join('\n'));
+  }
+
+  // Tracking (Notion, Trello)
+  const tracking = channelData.tracking;
+  if (tracking) {
+    const trackLines = [];
+    if (tracking.notion?.commandCenter?.url) {
+      trackLines.push(`Notion: ${tracking.notion.commandCenter.url}`);
+    }
+    if (tracking.trello?.url) {
+      trackLines.push(`Trello: ${tracking.trello.url}`);
+    }
+    if (trackLines.length) parts.push(trackLines.join('\n'));
+  }
+
+  // MCP tools configured for this channel
+  if (channelData.mcpTools && channelData.mcpTools.length > 0) {
+    parts.push(`MCP Tools: ${channelData.mcpTools.join(', ')}`);
+  }
+
+  if (parts.length > 0) {
+    tag += `[CHANNEL REGISTRY:\n${parts.join('\n')}\n]\n`;
+  }
+
+  // ── Channel directive ──────────────────────────────────────────────
+  if (_focus.directive) {
+    // Generous slice — sub-agents need real context
+    const snippet = _focus.directive.substring(0, 2000);
+    tag += `[CHANNEL DIRECTIVE:\n${snippet}\n]`;
+  }
+
+  // ── haivemind search instruction ───────────────────────────────────
+  tag += `\n[CHANNEL MEMORY: Search haivemind for "${_focus.channelId} context" to restore prior work and decisions for this channel.]`;
+
   return tag;
+}
+
+/**
+ * Get the full context blob for sub-agent task injection.
+ * Richer than the prompt tag — includes everything the sub-agent needs.
+ * @returns {string | null}
+ */
+export function getFullFocusContext() {
+  if (!_focus) return null;
+
+  const registry = _loadRegistry();
+  const channelData = registry.channels?.[_focus.channelId] || {};
+
+  let ctx = `## Channel Context: #${_focus.channelName} (${_focus.channelId})\n`;
+  if (_focus.purpose) ctx += `**Purpose:** ${_focus.purpose}\n`;
+
+  if (channelData.currentFocus) ctx += `**Current Focus:** ${channelData.currentFocus}\n`;
+
+  if (channelData.todos?.length > 0) {
+    ctx += `**Open TODOs:**\n${channelData.todos.map(t => `- ${t}`).join('\n')}\n`;
+  }
+
+  const proj = channelData.project;
+  if (proj) {
+    ctx += `**Project:** ${proj.name || 'unnamed'}`;
+    if (proj.status) ctx += ` | Status: ${proj.status}`;
+    if (proj.repo) ctx += ` | Repo: ${proj.repo}`;
+    if (proj.branch) ctx += ` | Branch: ${proj.branch}`;
+    if (proj.gcpProject) ctx += ` | GCP: ${proj.gcpProject}`;
+    if (proj.gcpServer) ctx += ` | Server: ${proj.gcpServer}`;
+    if (proj.linearUrl) ctx += ` | Linear: ${proj.linearUrl}`;
+    if (proj.dueDate) ctx += ` | Due: ${proj.dueDate}`;
+    ctx += '\n';
+  }
+
+  const tracking = channelData.tracking;
+  if (tracking) {
+    if (tracking.notion?.commandCenter?.url) ctx += `**Notion:** ${tracking.notion.commandCenter.url}\n`;
+    if (tracking.trello?.url) ctx += `**Trello:** ${tracking.trello.url}\n`;
+  }
+
+  if (channelData.contextFile) {
+    ctx += `**Context file:** ~/dev/contexts/${channelData.contextFile}\n`;
+  }
+
+  // Full directive (no truncation for sub-agents)
+  if (_focus.directive) {
+    ctx += `\n### Channel Directive\n${_focus.directive}\n`;
+  }
+
+  ctx += `\n**haivemind:** Search for "${_focus.channelId} context" to get prior work and decisions.\n`;
+  ctx += `**Post output to:** Discord channel ${_focus.channelId} (#${_focus.channelName})\n`;
+
+  return ctx;
 }
 
 /**

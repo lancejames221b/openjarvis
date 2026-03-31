@@ -326,7 +326,7 @@ export function isGatewayCircuitOpen() {
 // Key: use tools exactly as you would in text chat. The ONLY difference is output format.
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
-import { getFocusContextTag } from './focus-state.js';
+import { getFocusContextTag, getFullFocusContext } from './focus-state.js';
 
 // Prompts vars resolved at call time so runtime env values are current
 function getVoicePromptVars() {
