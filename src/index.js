@@ -1291,10 +1291,20 @@ export function markTaskSpokeInline(taskId) {
 }
 
 export function didTaskSpeakInline(taskId) {
-  if (!taskId) return false;
-  const ts = _taskSpokeInline.get(taskId);
-  if (!ts) return false;
-  return (Date.now() - ts) < TASK_SPOKE_TTL_MS;
+  const now = Date.now();
+  // If taskId given, check specific task first
+  if (taskId) {
+    const ts = _taskSpokeInline.get(taskId);
+    if (ts && (now - ts) < TASK_SPOKE_TTL_MS) return true;
+  }
+  // Fallback: if no taskId (sub-agent /speak curl doesn't include it), check if ANY
+  // task spoke inline in the last 10s. This prevents sub-agent kickoff /speak from
+  // double-speaking when the main task already emitted an inline TTS response.
+  const RECENT_WINDOW_MS = 10_000;
+  for (const ts of _taskSpokeInline.values()) {
+    if (now - ts < RECENT_WINDOW_MS) return true;
+  }
+  return false;
 }
 
 // Periodic cleanup of message ID cache
