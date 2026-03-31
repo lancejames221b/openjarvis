@@ -690,7 +690,15 @@ async function briefPendingAlerts(userId) {
 async function briefPendingHandoffs(userId) {
   const handoffs = getPendingHandoffs();
   if (handoffs.length === 0) return;
-  
+
+  // Auto-focus on the most recent handoff's channel (belt-and-suspenders with /handoff endpoint)
+  const latestWithChannel = [...handoffs].reverse().find(h => h.channelId);
+  if (latestWithChannel) {
+    const { setFocusById } = await import('./focus-state.js');
+    setFocusById(latestWithChannel.channelId, latestWithChannel.channel || null);
+    logger.info(`🎯 Voice auto-focused on #${latestWithChannel.channel || latestWithChannel.channelId} from handoff briefing`);
+  }
+
   // Build voice briefing
   let briefing = '';
   if (handoffs.length === 1) {

@@ -14,6 +14,7 @@ import { queueAlert, getPendingAlerts, clearAlerts } from './alert-queue.js';
 import { markCompleted, getActiveTasks, getLedgerStats } from './task-ledger.js';
 import { setActiveAlert } from './alert-context.js';
 import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './bot-state.js';
+import { setFocusById } from './focus-state.js';
 import logger from './logger.js';
 
 const app = express();
@@ -980,7 +981,14 @@ app.post('/handoff', async (req, res) => {
   while (pendingHandoffs.length > MAX_HANDOFFS) pendingHandoffs.shift();
   
   logger.info(`📋 Handoff queued from #${channel}: "${summary.substring(0, 60)}..."`);
-  
+
+  // Auto-focus voice on the handoff channel — voice bot now knows
+  // what project/channel the user was working in before switching to voice
+  if (channelId) {
+    setFocusById(channelId, channel || null);
+    logger.info(`🎯 Voice auto-focused on #${channel || channelId} via handoff`);
+  }
+
   // Update active context
   activeContext.topic = topic || channel;
   activeContext.surface = source || 'text-channel';
