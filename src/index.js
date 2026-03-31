@@ -250,7 +250,7 @@ function startHealthMonitor() {
       const guild = client.isReady() ? client.guilds.cache.get(GUILD_ID) : null;
       if (guild && ALLOWED_USERS[0]) {
         const member = guild.members.cache.get(ALLOWED_USERS[0]);
-        if (member?.voice?.serverMute && activeTasks.size === 0 && !audioQueue?.playing) {
+        if (member?.voice?.serverMute && activeTasks.size === 0 && !audioQueue?.playing && !isSpeaking) {
           logger.warn('🔧 Watchdog: detected stuck server mute with no active playback — clearing');
           await member.voice.setMute(false, 'Watchdog: clearing stuck server mute');
         }
