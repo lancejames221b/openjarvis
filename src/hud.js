@@ -20,6 +20,13 @@ import { getActiveTasks, getLedgerStats, getTask } from './task-ledger.js';
 import { getFocus } from './focus-state.js';
 import { getState } from './bot-state.js';
 
+// Trello config (same as join-briefing)
+const TRELLO_API_KEY = process.env.TRELLO_API_KEY || '';
+const TRELLO_TOKEN = process.env.TRELLO_TOKEN || '';
+const TRELLO_COMMITS_LIST_ID = process.env.TRELLO_COMMITS_LIST_ID || 'YOUR_TRELLO_LIST_ID';
+const TRELLO_CURRENT_LIST_ID = process.env.TRELLO_CURRENT_LIST_ID || 'YOUR_TRELLO_LIST_ID_2';
+const HUD_TRELLO = process.env.HUD_TRELLO !== 'false';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
 const HUD_STATE_PATH = join(DATA_DIR, 'hud-state.json');
@@ -45,6 +52,10 @@ let _startedAt = Date.now();
 let _lastCompletedTask = null;
 let _currentTaskId = null;
 let _queueDepth = 0;
+
+// Trello cache (refreshed every 5 min)
+let _trelloCache = { commits: [], current: [], fetchedAt: 0 };
+const TRELLO_CACHE_TTL_MS = 5 * 60 * 1000;
 
 // ── State persistence ─────────────────────────────────────────────────
 
@@ -127,6 +138,13 @@ async function _doUpdate() {
       return;
     }
 
+    // Refresh Trello cache if stale (non-blocking on failure)
+    if (HUD_TRELLO) {
+      await _refreshTrelloCache().catch(err =>
+        logger.warn(`[hud] Trello refresh failed: ${err.message}`)
+      );
+    }
+
     const embed = _buildEmbed();
 
     // Try to edit existing message, create new if missing
@@ -162,45 +180,61 @@ function _buildEmbed() {
 
   const fields = [];
 
-  // Current state
+  // Current state + uptime + focus (top row)
   fields.push({
     name: 'State',
     value: `${stateEmoji} **${botState}**`,
     inline: true,
   });
-
-  // Uptime
   fields.push({
     name: 'Uptime',
     value: uptimeStr,
     inline: true,
   });
-
-  // Focus
   fields.push({
     name: 'Focus',
     value: focus ? `#${focus.channelName}` : 'None',
     inline: true,
   });
 
-  // Active task
+  // ── Trello: Current Task ──
+  if (HUD_TRELLO && _trelloCache.current.length > 0) {
+    const taskNames = _trelloCache.current.map(c => `⚡ ${c.name}`).join('\n');
+    fields.push({
+      name: 'Current Task',
+      value: taskNames,
+      inline: false,
+    });
+  }
+
+  // ── Trello: 3 Commits ──
+  if (HUD_TRELLO && _trelloCache.commits.length > 0) {
+    const commitLines = _trelloCache.commits.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+    fields.push({
+      name: '3 Commits',
+      value: commitLines,
+      inline: false,
+    });
+  }
+
+  // ── Active voice task (from internal ledger) ──
   if (activeTasks.length > 0) {
     const current = _currentTaskId ? getTask(_currentTaskId) : activeTasks[0];
     if (current) {
       const elapsed = _formatUptime(Date.now() - new Date(current.createdAt).getTime());
       fields.push({
-        name: '▶ Active Task',
+        name: '🎙️ Voice Task',
         value: `\`#${current.taskId}\` ${_truncate(current.transcript, 60)}\n*${current.state}* — ${elapsed}`,
         inline: false,
       });
     }
   }
 
-  // Queue
-  if (_queueDepth > 0 || activeTasks.length > 1) {
+  // Queue (only if something pending)
+  if (_queueDepth > 0) {
     fields.push({
       name: 'Queue',
-      value: `${_queueDepth} audio queued · ${activeTasks.length} task${activeTasks.length !== 1 ? 's' : ''} active`,
+      value: `${_queueDepth} audio queued`,
       inline: true,
     });
   }
@@ -210,17 +244,19 @@ function _buildEmbed() {
     const ago = _formatUptime(Date.now() - _lastCompletedTask.completedAt);
     fields.push({
       name: '✓ Last Completed',
-      value: `\`#${_lastCompletedTask.taskId}\` — ${_lastCompletedTask.state} · ${ago} ago`,
-      inline: false,
+      value: `\`#${_lastCompletedTask.taskId}\` — ${ago} ago`,
+      inline: true,
     });
   }
 
-  // Ledger stats
-  fields.push({
-    name: 'Session Stats',
-    value: `${stats.total} total · ${stats.completed || 0} completed · ${stats.failed || 0} failed · ${stats.orphaned || 0} orphaned`,
-    inline: false,
-  });
+  // Session stats (compact)
+  if (stats.total > 0) {
+    fields.push({
+      name: 'Session',
+      value: `${stats.completed || 0} done · ${stats.failed || 0} failed · ${stats.total} total`,
+      inline: true,
+    });
+  }
 
   return {
     title: '🎙️ Jarvis Voice HUD',
@@ -229,6 +265,38 @@ function _buildEmbed() {
     footer: { text: `Last updated` },
     timestamp: new Date().toISOString(),
   };
+}
+
+// ── Trello cache ──────────────────────────────────────────────────────
+
+async function _refreshTrelloCache() {
+  if (!TRELLO_API_KEY || !TRELLO_TOKEN) return;
+  if (Date.now() - _trelloCache.fetchedAt < TRELLO_CACHE_TTL_MS) return;
+
+  const [commits, current] = await Promise.all([
+    _fetchTrelloList(TRELLO_COMMITS_LIST_ID),
+    _fetchTrelloList(TRELLO_CURRENT_LIST_ID),
+  ]);
+
+  _trelloCache = { commits, current, fetchedAt: Date.now() };
+  logger.info(`[hud] Trello refreshed: ${commits.length} commits, ${current.length} current`);
+}
+
+async function _fetchTrelloList(listId) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(
+      `https://api.trello.com/1/lists/${listId}/cards?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}&fields=name,pos`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return [];
+    const cards = await res.json();
+    return cards.sort((a, b) => a.pos - b.pos);
+  } catch {
+    return [];
+  }
 }
 
 function _stateColor(state) {
