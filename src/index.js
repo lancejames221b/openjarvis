@@ -148,6 +148,7 @@ const CC_CHANNEL_ID = process.env.DISCORD_CC_CHANNEL_ID; // Closed captions chan
 const VOICE_REPORT_CHANNEL_ID = process.env.VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
 const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || TEXT_CHANNEL_ID; // Task activity feed
 const ACTIVITY_FEED_ENABLED = process.env.ACTIVITY_FEED_ENABLED !== 'false'; // Feature flag — default ON
+const VOICE_THREAD_REPORTS_ENABLED = process.env.VOICE_THREAD_REPORTS !== 'false'; // Thread reports in #hud — default ON, set VOICE_THREAD_REPORTS=false to disable
 const ALLOWED_USERS = (process.env.ALLOWED_USERS || '').split(',').map(s => s.trim());
 const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 
@@ -3340,7 +3341,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     if (transcriptModeEnabled && !userDisconnected) {
       logger.info(`📝 Full transcript mode enabled — posting conversation as thread (task #${taskId})`);
       await postTranscriptThread(taskId, transcript, fullText, duration);
-    } else if (VOICE_REPORT_CHANNEL_ID && fullText) {
+    } else if (VOICE_REPORT_CHANNEL_ID && fullText && VOICE_THREAD_REPORTS_ENABLED) {
       const taskMeta = activeTasks.get(taskId);
       const intentCategory = taskMeta?.intentType || brainOptions.intentType || 'ACTION';
       logger.info(`📤 Posting task #${taskId} (${intentCategory}) to thread in channel ${VOICE_REPORT_CHANNEL_ID}`);
