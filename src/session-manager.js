@@ -87,8 +87,8 @@ export async function storeTaskToHaivemind(taskId, userMessage, spokenResult) {
 export async function getHaivemindContext() {
   try {
     const { stdout } = await execAsync(
-      `mcporter call haivemind.search_memories query="VOICE-TASK recent" limit=5`,
-      { timeout: 6000 }
+      `${MCPORTER_PATH} call haivemind.search_memories query="VOICE-TASK recent" limit=5`,
+      { timeout: 6000, cwd: '/home/generic' }
     );
     const raw  = stdout.trim();
     const data = JSON.parse(raw);
@@ -117,13 +117,15 @@ async function _storeSessionSummary(history) {
   logger.info('💾 Session summary stored to haivemind');
 }
 
+const MCPORTER_PATH = '/home/generic/.npm-global/bin/mcporter';
+
 async function _haivemindStore(content, category = 'voice-session') {
   try {
     // Shell-safe: escape single quotes inside the value
     const escaped = content.replace(/'/g, "'\\''");
     await execAsync(
-      `mcporter call haivemind.store_memory content='${escaped}' category='${category}'`,
-      { timeout: 8000 }
+      `${MCPORTER_PATH} call haivemind.store_memory content='${escaped}' category='${category}'`,
+      { timeout: 8000, cwd: '/home/generic' }
     );
   } catch (e) {
     logger.warn({ err: e.message }, 'haivemind store failed (non-fatal)');
