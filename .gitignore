@@ -11,3 +11,6 @@ venv/
 __pycache__/
 *.pyc
 config-backups/
+
+# Local env backups
+.env.backups/

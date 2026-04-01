@@ -101,7 +101,7 @@ let _voiceShortcuts = [];
 
 function loadVoiceShortcuts() {
   try {
-    const raw = readFileSync(join(__dirname, 'shortcuts.json'), 'utf8');
+    const raw = readFileSync(join(__dirname, '..', 'data', 'shortcuts.json'), 'utf8');
     const data = JSON.parse(raw);
     _voiceShortcuts = data.shortcuts || [];
     logger.info({ count: _voiceShortcuts.length }, '⚡ shortcut-engine: loaded voice shortcuts');
