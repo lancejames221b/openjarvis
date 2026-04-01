@@ -78,21 +78,69 @@ function _loadRegistry() {
 export function resolveChannel(nameOrAlias) {
   if (!nameOrAlias) return null;
   const query = nameOrAlias.toLowerCase().trim();
+  // Normalize spoken phrase: strip "channel", "the", "focus on", leading/trailing noise
+  const normalized = query
+    .replace(/^(?:focus\s+on|the|channel|thread)\s+/g, '')
+    .replace(/\s+channel$/, '')
+    .trim();
   const registry = _loadRegistry();
   const channels = registry.channels || {};
 
+  // ── Pass 1: Exact match on name or alias ──────────────────────────
   for (const [channelId, data] of Object.entries(channels)) {
-    // Match channel name
-    if (data.name && data.name.toLowerCase() === query) {
+    const name = (data.name || '').toLowerCase();
+    if (name === normalized || name === query) {
       return { channelId, channelName: data.name, purpose: data.purpose || '' };
     }
-    // Match aliases
-    if (data.aliases && Array.isArray(data.aliases)) {
-      if (data.aliases.some(a => a.toLowerCase() === query)) {
-        return { channelId, channelName: data.name, purpose: data.purpose || '' };
+    if (data.aliases?.some(a => a.toLowerCase() === normalized || a.toLowerCase() === query)) {
+      return { channelId, channelName: data.name, purpose: data.purpose || '' };
+    }
+  }
+
+  // ── Pass 2: Partial / fuzzy match ────────────────────────────────
+  // Score each channel: prefer longer overlap, penalize substring matches in wrong position.
+  // "jarvis voice" → "jarvis-voice-dev"
+  // "ewitness" → "ewitness-engineering" (if no exact match)
+  // "gibson gtm" → "gibson-gtm"
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const querySlug = slug(normalized);
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const [channelId, data] of Object.entries(channels)) {
+    const nameSlug = slug(data.name || '');
+    const allTerms = [nameSlug, ...(data.aliases || []).map(a => slug(a))];
+
+    for (const term of allTerms) {
+      let score = 0;
+      if (term === querySlug) { score = 100; }                          // exact slug match
+      else if (term.startsWith(querySlug)) { score = 80; }              // prefix: "ewitness" → "ewitness-engineering"
+      else if (term.includes(querySlug)) { score = 60; }                // substring in name
+      else if (querySlug.includes(term) && term.length >= 4) { score = 40; } // query contains term
+      else {
+        // Word-overlap: "jarvis voice" (words: jarvis, voice) vs "jarvis-voice-dev" (words: jarvis, voice, dev)
+        const qWords = querySlug.split('-').filter(w => w.length >= 3);
+        const tWords = term.split('-');
+        const overlap = qWords.filter(w => tWords.some(t => t.startsWith(w) || w.startsWith(t)));
+        if (overlap.length > 0) {
+          score = 20 + (overlap.length / Math.max(qWords.length, 1)) * 20;
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = { channelId, channelName: data.name, purpose: data.purpose || '' };
       }
     }
   }
+
+  // Only return fuzzy matches with reasonable confidence (score >= 40)
+  if (bestScore >= 40) {
+    logger.info(`[focus] Fuzzy resolved "${nameOrAlias}" → "${bestMatch.channelName}" (score=${bestScore})`);
+    return bestMatch;
+  }
+
   return null;
 }
 
@@ -272,6 +320,99 @@ export function setFocusByName(nameOrAlias) {
 }
 
 /**
+ * Set focus to a channel + an optional thread within it.
+ * Resolves the channel by name/alias (fuzzy), then looks up active/archived threads
+ * in that channel to find one matching threadHint (fuzzy name match).
+ *
+ * If a thread is found, stores threadId + threadName in the focus state.
+ * The context tag will inject the thread name so sub-agents know to work in that thread.
+ *
+ * @param {string} nameOrAlias — channel name/alias
+ * @param {string} threadHint — partial thread name spoken by user (e.g. "beta launch", "Contact3")
+ * @returns {Promise<FocusState|null>}
+ */
+export async function setFocusWithThread(nameOrAlias, threadHint) {
+  const resolved = resolveChannel(nameOrAlias);
+  if (!resolved) return null;
+
+  // Try to resolve the thread via Discord bot client (if available in global scope)
+  let threadId = null;
+  let threadName = null;
+
+  try {
+    // Query Discord REST for active + archived threads in the resolved channel
+    const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+    const GUILD_ID = process.env.GUILD_ID;
+    if (DISCORD_TOKEN && GUILD_ID) {
+      const headers = { Authorization: `Bot ${DISCORD_TOKEN}`, 'Content-Type': 'application/json' };
+      const fetch = (await import('node-fetch')).default;
+
+      // Active threads first
+      const activeRes = await fetch(`https://discord.com/api/v10/guilds/${GUILD_ID}/threads/active`, { headers });
+      const activeData = activeRes.ok ? await activeRes.json() : { threads: [] };
+
+      // Also try archived threads in the channel
+      const archiveRes = await fetch(`https://discord.com/api/v10/channels/${resolved.channelId}/threads/archived/public?limit=25`, { headers });
+      const archiveData = archiveRes.ok ? await archiveRes.json() : { threads: [] };
+
+      const allThreads = [
+        ...(activeData.threads || []).filter(t => t.parent_id === resolved.channelId),
+        ...(archiveData.threads || []),
+      ];
+
+      // Fuzzy match threadHint against thread names
+      const hint = threadHint.toLowerCase();
+      const hintWords = hint.split(/\s+/).filter(w => w.length >= 3);
+
+      let best = null;
+      let bestScore = 0;
+      for (const t of allThreads) {
+        const tname = (t.name || '').toLowerCase();
+        let score = 0;
+        if (tname.includes(hint)) score = 80;
+        else {
+          const overlap = hintWords.filter(w => tname.includes(w));
+          score = (overlap.length / Math.max(hintWords.length, 1)) * 60;
+        }
+        if (score > bestScore) { bestScore = score; best = t; }
+      }
+
+      if (best && bestScore >= 40) {
+        threadId = best.id;
+        threadName = best.name;
+        logger.info(`[focus] Thread resolved: "${threadHint}" → "${threadName}" (${threadId}) score=${bestScore}`);
+      } else {
+        logger.info(`[focus] No thread matched "${threadHint}" in #${resolved.channelName} (${allThreads.length} threads checked)`);
+      }
+    }
+  } catch (err) {
+    logger.warn(`[focus] Thread lookup failed (non-fatal): ${err.message}`);
+  }
+
+  const directive = loadDirective(resolved.channelId);
+  const registry = _loadRegistry();
+  const channelData = registry.channels?.[resolved.channelId] || {};
+  const references = _buildReferences(resolved.channelId, channelData);
+
+  _focus = {
+    channelId: resolved.channelId,
+    channelName: resolved.channelName,
+    purpose: resolved.purpose,
+    directive: directive || null,
+    references,
+    haivemindContext: null,
+    setAt: new Date().toISOString(),
+    ...(threadId ? { threadId, threadName } : {}),
+  };
+
+  _saveState(_focus);
+  logger.info(`[focus] Set focus: ${resolved.channelName}${threadName ? ` › ${threadName}` : ''} (${resolved.channelId})`);
+  _prefetchHaivemind(resolved.channelId);
+
+  return _focus;
+}
+
+/**
  * Set focus directly by channel ID (used programmatically, e.g. from handoff).
  * @param {string} channelId
  * @param {string} channelName
@@ -322,6 +463,10 @@ export function getFocusContextTag() {
   const channelData = registry.channels?.[_focus.channelId] || {};
 
   let tag = `[CHANNEL FOCUS: #${_focus.channelName}`;
+  if (_focus.threadName) {
+    tag += ` › thread: ${_focus.threadName}`;
+    if (_focus.threadId) tag += ` (${_focus.threadId})`;
+  }
   if (_focus.purpose) {
     tag += ` — ${_focus.purpose}`;
   }

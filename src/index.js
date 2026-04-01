@@ -2656,11 +2656,12 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     // ── Channel focus commands ──────────────────────────────────────────
     if (dispatchResult.type === 'focus_set') {
-      const { channelName, purpose } = dispatchResult;
-      logger.info(`🎯 Focus set: #${channelName}`);
+      const { channelName, purpose, threadName } = dispatchResult;
+      const focusLabel = threadName ? `${channelName}, ${threadName} thread` : channelName;
+      logger.info(`🎯 Focus set: #${channelName}${threadName ? ` › ${threadName}` : ''}`);
       const msg = purpose
-        ? `Focused on ${channelName}. ${purpose.substring(0, 80)}.`
-        : `Focused on ${channelName}.`;
+        ? `Focused on ${focusLabel}. ${purpose.substring(0, 80)}.`
+        : `Focused on ${focusLabel}.`;
       const ack = await synthesizeSpeech(msg);
       if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       return;

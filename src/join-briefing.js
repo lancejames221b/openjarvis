@@ -118,7 +118,10 @@ export async function generateBriefing() {
   // old, it's no longer the active context and shouldn't be announced.
   const focus = getFocus();
   if (focus && isFocusFresh(4)) {
-    parts.push(`Currently focused on ${focus.channelName}`);
+    const focusLabel = focus.threadName
+      ? `${focus.channelName}, ${focus.threadName} thread`
+      : focus.channelName;
+    parts.push(`Currently focused on ${focusLabel}`);
   }
 
   if (parts.length === 0) {

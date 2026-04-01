@@ -11,7 +11,7 @@ import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
-import { setFocusByName, clearFocus, getFocus, listChannels } from './focus-state.js';
+import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels } from './focus-state.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -97,13 +97,25 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   // ── Channel focus commands ──────────────────────────────────────────
   if (isAdmin) {
     // "focus on gibson" / "switch to ewitness" / "work on gibson" / "focus ewitness"
-    const focusMatch = cleanedTranscript.match(/(?:focus\s+(?:on\s+)?|switch\s+(?:to\s+)?|work\s+(?:on\s+)?)([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)\s*$/i);
+    // Also handles threads: "focus on gibson gtm, the beta launch thread"
+    //   / "switch to pr-reviews Contact3 thread" / "focus on jarvis voice dev"
+    const focusMatch = cleanedTranscript.match(
+      /(?:focus\s+(?:on\s+)?|switch\s+(?:to\s+)?|work\s+(?:on\s+)?)\s*([\w\s-]{1,40?}?)(?:\s*[,;]?\s*(?:the\s+)?([\w\s-]+?)\s+thread)?\s*$/i
+    );
     if (focusMatch) {
       const target = focusMatch[1].trim();
+      const threadHint = focusMatch[2]?.trim() || null; // e.g. "beta launch" or "Contact3"
       // Don't match persona/mode/tts commands that overlap
       const personas = listPersonalities();
       const nonFocusKeywords = new Set(['tldr', 'transcript', 'mobile', 'tts', 'piper', 'chatterbox', 'edge', ...personas]);
       if (!nonFocusKeywords.has(target.toLowerCase())) {
+        if (threadHint) {
+          // Thread focus: resolve channel + pass thread hint for Discord lookup
+          const result = await setFocusWithThread(target, threadHint);
+          if (result) {
+            return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose, threadName: result.threadName };
+          }
+        }
         const result = setFocusByName(target);
         if (result) {
           return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose };
