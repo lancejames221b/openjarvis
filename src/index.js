@@ -34,6 +34,8 @@ import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
 import { isTldrModeEnabled, generateTldr, isTranscriptModeEnabled } from './tldr-mode.js';
 import { postTaskToThread } from './thread-router.js';
+import { shouldBrief, markBriefingDelivered, generateBriefing } from './join-briefing.js';
+import { initHud, hudTaskUpdate, hudQueueUpdate, hudRefresh } from './hud.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
@@ -451,6 +453,7 @@ function flushPendingUtterance() {
 
   // ── Task Ledger: track lifecycle ──
   createTask(taskId, merged, userId);
+  hudTaskUpdate(taskId, 'dispatched', { transcript: merged });
 
   const sleepTag = autoSleepAfterTask ? ' [auto-sleep]' : '';
   const speakerTag = speakerName ? ` [${speakerName}]` : '';
@@ -806,6 +809,10 @@ client.once('ready', async () => {
   switchChatterboxVoice(startupPersona.voice).catch(e => logger.warn(`[startup] chatterbox voice seed error: ${e.message}`));
   
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
+
+  // ── Voice Session HUD ──
+  initHud(client);
+  hudRefresh();
 
   // ── Task Ledger: reconcile orphans from previous run ──
   try {
@@ -1200,6 +1207,27 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       // Brief pending handoffs
       if (hasPendingHandoffs()) {
         await briefPendingHandoffs(newState.id);
+      }
+
+      // ── Proactive Join Briefing (Phase 3) ────────────────────────
+      // Calendar + active tasks + focus — spoken summary on voice join
+      if (shouldBrief()) {
+        try {
+          const briefingText = await generateBriefing();
+          if (briefingText) {
+            logger.info(`[briefing] Delivering join briefing: ${briefingText.substring(0, 80)}...`);
+            markBriefingDelivered();
+            const briefAudio = await synthesizeSpeech(briefingText);
+            if (briefAudio) {
+              audioQueue.add(briefAudio);
+            }
+          } else {
+            logger.info(`[briefing] Nothing to report — skipping`);
+            markBriefingDelivered(); // still mark to avoid rapid retries
+          }
+        } catch (err) {
+          logger.error(`[briefing] Failed: ${err.message}`);
+        }
       }
       // Mute queue debrief on reconnect — handles device switch (iPad muted → phone join)
       // If user left while self-muted and rejoins on a different device (unmuted by default),
@@ -2857,10 +2885,12 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       if (webhookResult.dispatched) {
         markWorking(taskId);  // Ledger: task is now working via webhook
+        hudTaskUpdate(taskId, 'working');
         postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) — awaiting /speak callback`);
         logger.info(`📨 Task #${taskId} dispatched successfully — result will arrive via /speak`);
       } else {
         markFailed(taskId, webhookResult.error);  // Ledger: dispatch failed
+        hudTaskUpdate(taskId, 'failed');
         logger.error(`❌ Task #${taskId} webhook dispatch failed: ${webhookResult.error}`);
         const failMsg = "I'm having trouble dispatching that right now, sir.";
         try {
@@ -2942,6 +2972,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       if (!firstAudioLogged) {
         firstAudioLogged = true;
         markStreaming(taskId);  // Ledger: first tokens received
+        hudTaskUpdate(taskId, 'streaming');
         logger.info(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
       }
 
@@ -2995,6 +3026,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Task was cancelled
     if (result.aborted) {
       markFailed(taskId, 'aborted');  // Ledger: task aborted
+      hudTaskUpdate(taskId, 'failed');
       logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
       audioQueue.clear();
@@ -3124,9 +3156,11 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Check if the response was just an ack (sub-agent spawned, real work pending)
     if (isJustAck(fullText)) {
       markWorking(taskId);
+      hudTaskUpdate(taskId, 'working');
       logger.info(`📋 Task #${taskId} response was just an ack — marked WORKING, awaiting /speak callback`);
     } else {
       ledgerMarkCompleted(taskId, 'voice-streaming', fullText?.substring(0, 300));
+      hudTaskUpdate(taskId, 'completed');
     }
 
     // Post completion to activity feed
@@ -3166,6 +3200,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   } catch (err) {
     if (err.name !== 'AbortError') {
       markFailed(taskId, err.message);  // Ledger: task failed
+      hudTaskUpdate(taskId, 'failed');
       logger.error(`❌ Task #${taskId} failed:`, err.message);
       postActivity(`❌ **Task #${taskId}** failed (${((Date.now() - startTime) / 1000).toFixed(1)}s): ${err.message}`);
       try {

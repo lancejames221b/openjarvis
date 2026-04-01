@@ -12,6 +12,7 @@
 import express from 'express';
 import { queueAlert, getPendingAlerts, clearAlerts } from './alert-queue.js';
 import { markCompleted, getActiveTasks, getLedgerStats } from './task-ledger.js';
+import { hudTaskUpdate } from './hud.js';
 import { setActiveAlert } from './alert-context.js';
 import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './bot-state.js';
 import { setFocusById } from './focus-state.js';
@@ -510,6 +511,7 @@ app.post('/speak', async (req, res) => {
     // If taskId provided, mark that specific task. Otherwise mark most recent active task.
     if (taskId) {
       markCompleted(taskId, 'speak-endpoint', message.substring(0, 200));
+      hudTaskUpdate(taskId, 'completed');
       logger.info(`📋 Task #${taskId} completed via /speak callback`);
     } else {
       // Find most recent active task and mark it
@@ -517,6 +519,7 @@ app.post('/speak', async (req, res) => {
       if (active.length > 0) {
         const mostRecent = active[active.length - 1];
         markCompleted(mostRecent.taskId, 'speak-endpoint', message.substring(0, 200));
+        hudTaskUpdate(mostRecent.taskId, 'completed');
         logger.info(`📋 Task #${mostRecent.taskId} completed via /speak callback (auto-matched)`);
       }
     }
