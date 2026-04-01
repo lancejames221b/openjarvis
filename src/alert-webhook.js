@@ -566,6 +566,8 @@ app.post('/speak', async (req, res) => {
   
   // ── ON_SCREEN mode: suppress voice for screen-open actions ──
   const onScreenMode = process.env.ON_SCREEN || 'no_ack';
+  // Declared here (before first use) to avoid TDZ crash in on-screen suppression block below
+  const isSubAgentResult = source === 'task-progress' || source === 'background-agent' || source === 'task-complete';
   const isScreenAction = _isScreenOpenMessage(message);
   if (isScreenAction && (onScreenMode === 'no_ack' || onScreenMode === 'ack_pre')) {
     // no_ack: total silence. ack_pre: already acked before, nothing after.
@@ -596,7 +598,7 @@ app.post('/speak', async (req, res) => {
   // ── Sub-agent result routing ─────────────────────────────────────────
   // task-progress and background-agent results get posted to #hud as threads.
   // This is the /speak callback from a spawned sub-agent finishing its work.
-  const isSubAgentResult = source === 'task-progress' || source === 'background-agent' || source === 'task-complete';
+  // (isSubAgentResult declared above the on-screen block to avoid TDZ)
   if (isSubAgentResult && postToThreadCallback) {
     logger.info(`📤 Routing sub-agent result (${source}) to #hud thread (task #${taskId})`);
     postToThreadCallback(taskId, source, message);

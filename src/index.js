@@ -301,6 +301,38 @@ setInterval(() => {
   }
 }, 2 * 60 * 1000);
 
+// ── Short-timeout stall speak (30s) + backlog cap ───────────────────
+// Speaks "I seem to have lost track of that one" for tasks stalled >30s with no result.
+// Caps activeTasks at 5 — clears oldest with "Clearing backlog" speak if exceeded.
+const _spokeLostTrackFor = new Set();
+setInterval(() => {
+  try {
+    const now = Date.now();
+    // Stall detection: speak if task has been in-flight >30s without completion
+    for (const [taskId, taskMeta] of activeTasks) {
+      if (now - taskMeta.startTime > 30000 && !_spokeLostTrackFor.has(taskId)) {
+        _spokeLostTrackFor.add(taskId);
+        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round((now - taskMeta.startTime)/1000)}s — speaking lost-track`);
+        speakPhrase('I seem to have lost track of that one, sir.').catch(() => {});
+      }
+    }
+    // Backlog cap: if >5 pending tasks, clear oldest and speak
+    if (activeTasks.size > 5) {
+      const entries = [...activeTasks.entries()].sort((a, b) => a[1].startTime - b[1].startTime);
+      const toClear = entries.slice(0, activeTasks.size - 5);
+      for (const [id] of toClear) {
+        markFailed(id, 'backlog-cleared');
+        activeTasks.delete(id);
+        _spokeLostTrackFor.delete(id);
+      }
+      speakPhrase('Clearing backlog, sir.').catch(() => {});
+      logger.warn(`📋 Cleared ${toClear.length} oldest task(s) from backlog (cap=5)`);
+    }
+  } catch (e) {
+    logger.warn(`📋 Stall check failed: ${e.message}`);
+  }
+}, 5000);
+
 // ── Tunable Constants (env var overrides) ────────────────────────────
 const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '60000');
 const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
@@ -1885,10 +1917,13 @@ async function handleVoiceDisconnect(userId) {
   const timeSinceLastInteraction = Date.now() - lastInteractionTime;
   const wasRecentlyActive = timeSinceLastInteraction < ACTIVE_CONVERSATION_WINDOW_MS;
   
-  // Handle in-flight tasks — they'll detect userDisconnected and post to text
+  // Auto-clear all pending tasks on voice disconnect
   if (activeTasks.size > 0) {
-    logger.info(`📤 ${activeTasks.size} tasks in flight — will handoff to text channel when ready`);
-    return;
+    logger.info(`🧹 Auto-clearing ${activeTasks.size} pending task(s) on voice disconnect`);
+    for (const [taskId] of activeTasks) {
+      markFailed(taskId, 'voice-disconnect');
+    }
+    activeTasks.clear();
   }
   
   // Handle recent conversation handoff
@@ -2810,6 +2845,40 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         : 'No channel focus set. Say "focus on" followed by a channel name to set one.';
       const ack = await synthesizeSpeech(msg);
       if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
+    // ── Voice channel move (from channel-router.js detectChannelCommand) ─
+    if (dispatchResult.type === 'voice_move') {
+      const { resolveChannel, setFocusById } = await import('./focus-state.js');
+      const { target } = dispatchResult;
+      const registry = JSON.parse(require('fs').readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
+      // Try to find a voice channel ID from registry.voiceChannels
+      let targetVoiceId = null;
+      const query = target.toLowerCase();
+      if (registry.voiceChannels) {
+        for (const [vcId, vcData] of Object.entries(registry.voiceChannels)) {
+          if ((vcData.name || '').toLowerCase().includes(query) || (vcData.aliases || []).some(a => a.toLowerCase().includes(query))) {
+            targetVoiceId = vcId;
+            // Also update focus context to the associated text channel
+            if (vcData.defaultContext) {
+              const resolved = resolveChannel(vcData.defaultContext);
+              if (resolved) setFocusById(resolved.channelId, resolved.channelName);
+            }
+            break;
+          }
+        }
+      }
+      if (targetVoiceId && currentVoiceChannelId !== targetVoiceId) {
+        logger.info(`🔊 Moving to voice channel ${target} (${targetVoiceId})`);
+        const ack = await synthesizeSpeech(`Moving to ${target}, sir.`);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+        try { await joinChannel(targetVoiceId); } catch (e) { logger.error(`voice_move failed: ${e.message}`); }
+      } else if (!targetVoiceId) {
+        logger.info(`🔊 voice_move: channel "${target}" not found in registry.voiceChannels`);
+        const ack = await synthesizeSpeech(`I couldn't find a voice channel called ${target}, sir.`);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
       return;
     }
 

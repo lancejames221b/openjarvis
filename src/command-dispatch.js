@@ -12,6 +12,7 @@ import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
 import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels } from './focus-state.js';
+import { detectChannelCommand } from './channel-router.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -96,6 +97,15 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
 
   // ── Channel focus commands ──────────────────────────────────────────
   if (isAdmin) {
+    // Channel-router: detect move/focus/query actions from transcript
+    // This wires the dead channel-router.js into the voice pipeline.
+    const channelCmd = detectChannelCommand(rawTranscript);
+    if (channelCmd.action === 'move') {
+      // Physical voice channel hop — return to index.js for actual join
+      return { type: 'voice_move', target: channelCmd.target };
+    }
+    // focus and query actions fall through to existing handlers below
+
     // "focus on gibson" / "switch to ewitness" / "work on gibson" / "focus ewitness"
     // Also handles threads: "focus on gibson gtm, the beta launch thread"
     //   / "switch to pr-reviews Contact3 thread" / "focus on jarvis voice dev"
