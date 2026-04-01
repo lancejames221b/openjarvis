@@ -142,8 +142,9 @@ function setupAudioReceiver(connection, { onUserSpeech, onPartialAudio, onBargeI
   const userSpeaking = new Map();
   const bargeInTimers = new Map();
   const SILENCE_THRESHOLD_MS = process.env.VAD_TIMEOUT ? parseInt(process.env.VAD_TIMEOUT) : 1500;
-  const MIN_AUDIO_DURATION_MS = 300;
+  const MIN_AUDIO_DURATION_MS = parseInt(process.env.MIN_AUDIO_DURATION_MS || '300', 10);
   const BARGE_IN_THRESHOLD_MS = 600;
+  const MIN_AUDIO_RMS = parseFloat(process.env.MIN_AUDIO_RMS || '0.005');
   
   // Import OpusDecoder lazily to avoid circular deps
   let OpusDecoder;
@@ -206,6 +207,20 @@ function setupAudioReceiver(connection, { onUserSpeech, onPartialAudio, onBargeI
         const durationMs = (totalBuffer.length / (48000 * 2)) * 1000;
 
         if (durationMs < MIN_AUDIO_DURATION_MS) return;
+
+        // RMS energy gate — drop near-silence before it reaches Whisper
+        // 16-bit signed PCM at 48kHz stereo
+        const samples = new Int16Array(totalBuffer.buffer, totalBuffer.byteOffset, totalBuffer.length / 2);
+        let sumSq = 0;
+        for (let i = 0; i < samples.length; i++) {
+          const norm = samples[i] / 32768;
+          sumSq += norm * norm;
+        }
+        const rms = Math.sqrt(sumSq / samples.length);
+        if (rms < MIN_AUDIO_RMS) {
+          logger.info(`🔇 RMS energy gate: ${rms.toFixed(5)} < ${MIN_AUDIO_RMS} — dropping ${durationMs.toFixed(0)}ms audio`);
+          return;
+        }
 
         onUserSpeech(userId, totalBuffer);
       });
