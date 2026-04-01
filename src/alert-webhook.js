@@ -425,6 +425,29 @@ function _wordOverlap(a, b) {
   return shared / Math.max(a.size, b.size);
 }
 
+/**
+ * Detect if a /speak message is about opening something on screen.
+ * Matches: "on your screen", "opened X", "pulling up", "it's open", etc.
+ */
+function _isScreenOpenMessage(msg) {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  const patterns = [
+    'on your screen',
+    'on your mac',
+    'on your desktop',
+    'opened ',
+    'opening ',
+    'pulling up',
+    'pulled up',
+    'it\'s open',
+    'is open',
+    'brought up',
+    'bringing up',
+  ];
+  return patterns.some(p => lower.includes(p));
+}
+
 function _isSemanticDuplicate(message) {
   const now = Date.now();
   const incoming = _wordSet(message);
@@ -532,6 +555,21 @@ app.post('/speak', async (req, res) => {
     postActivityCallback(`🔔 **${source || 'Cron'}**: ${message.substring(0, 200)}`);
   }
   
+  // ── ON_SCREEN mode: suppress voice for screen-open actions ──
+  const onScreenMode = process.env.ON_SCREEN || 'no_ack';
+  const isScreenAction = _isScreenOpenMessage(message);
+  if (isScreenAction && (onScreenMode === 'no_ack' || onScreenMode === 'ack_pre')) {
+    // no_ack: total silence. ack_pre: already acked before, nothing after.
+    logger.info(`🔇 /speak ON_SCREEN=${onScreenMode} — suppressing voice for screen action`);
+    if (postToTextCallback) {
+      postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`);
+    }
+    if (isSubAgentResult && postToThreadCallback) {
+      postToThreadCallback(taskId, source, message);
+    }
+    return res.json({ ok: true, delivered: 'on-screen-suppressed' });
+  }
+
   // ── Suppress redundant task-progress voice ──
   // If the task already spoke its result inline (streaming TTS pipeline),
   // don't speak the /speak callback — post to text only. Prevents double-speaking

@@ -504,6 +504,18 @@ function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
   _pendingUtterance.timer = setTimeout(flushPendingUtterance, UTTERANCE_DEBOUNCE_MS);
 }
 
+// ON_SCREEN sentence detection — matches "opening X", "on your screen", etc.
+function _isScreenSentence(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const patterns = [
+    'on your screen', 'on your mac', 'on your desktop',
+    'opening ', 'pulling up', 'pulled up', 'brought up', 'bringing up',
+    'it\'s open', 'is open now',
+  ];
+  return patterns.some(p => lower.includes(p));
+}
+
 // isInterruptCommand imported from ./command-dispatch.js
 
 // Voice-to-text handoff tracking
@@ -2961,11 +2973,18 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       ttsPipeline.add(text);
     };
     
+    const onScreenMode = process.env.ON_SCREEN || 'no_ack';
     const result = await generateResponseStreaming(transcript, history, signal, (sentence) => {
       sentence = trimForVoice(sentence);
       if (!sentence || sentence.length < 2) return;
       // Filter signal fragments (_NO, NO_, NO_REPLY, _NO_REPLY, HEARTBEAT_OK partials)
       if (/^\s*_?(NO_?R?E?P?L?Y?|HEARTBEAT_?O?K?|NO)\s*[.!?]*\s*$/i.test(sentence)) return;
+      // ON_SCREEN: suppress voice for screen-open confirmations
+      if ((onScreenMode === 'no_ack' || onScreenMode === 'ack_post') && _isScreenSentence(sentence)) {
+        logger.info(`🔇 ON_SCREEN=${onScreenMode} — suppressing inline: "${sentence.substring(0, 60)}"`);
+        fullResponse += sentence + ' ';
+        return; // skip TTS, still accumulate text for logging
+      }
 
       fullResponse += sentence + ' ';
 

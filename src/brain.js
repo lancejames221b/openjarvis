@@ -329,6 +329,10 @@ import { getActiveAlert, clearActiveAlert } from './alert-context.js';
 import { getFocusContextTag, getFullFocusContext } from './focus-state.js';
 
 // Prompts vars resolved at call time so runtime env values are current
+// ON_SCREEN ack mode for "open X on my screen" commands
+// Values: no_ack | ack_post | ack_pre | ack_both
+const ON_SCREEN_MODE = process.env.ON_SCREEN || 'no_ack';
+
 function getVoicePromptVars() {
   const persona = getActivePersona();
   return {
@@ -340,6 +344,7 @@ function getVoicePromptVars() {
     WEBHOOK_PORT: String(_webhookPort),
     SPEAK_TOKEN,
     VOICE_CALLBACK_CHANNEL,
+    ON_SCREEN_MODE,
   };
 }
 
