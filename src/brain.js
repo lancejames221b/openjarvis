@@ -1121,11 +1121,14 @@ export async function dispatchViaWebhook(userMessage, history = [], options = {}
     const score = options.sentiment.sentiment_score != null ? `, score: ${options.sentiment.sentiment_score.toFixed(2)}` : '';
     contextTags += `[SENTIMENT: ${options.sentiment.sentiment}${score}] `;
   }
-  // Inject channel focus context if active
+  // Inject full channel focus context for webhook (agent has tools, needs full context)
   let webhookFocusTag = '';
-  const webhookFocusCtx = getFocusContextTag();
-  if (webhookFocusCtx) {
-    webhookFocusTag = webhookFocusCtx + ' ';
+  const webhookFullCtx = getFullFocusContext();  // Full context (registry + directive + references + memory)
+  if (webhookFullCtx) {
+    webhookFocusTag = webhookFullCtx + ' ';
+  } else {
+    const webhookFocusCtx = getFocusContextTag();  // Fallback to tag
+    if (webhookFocusCtx) webhookFocusTag = webhookFocusCtx + ' ';
   }
 
   const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${webhookFocusTag}${userMessage}`;

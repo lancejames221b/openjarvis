@@ -28,6 +28,7 @@ import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback } from './alert-webhook.js';
+import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
@@ -278,6 +279,24 @@ function pruneConversations() {
 // Run pruning every 10 minutes
 setInterval(pruneConversations, 10 * 60 * 1000);
 
+// ── Orphan Task Detection (every 2 minutes) ──────────────────────────
+// Catch tasks that were dispatched but never got a result (webhook didn't callback)
+setInterval(() => {
+  try {
+    const orphans = processOrphans();
+    if (orphans.length > 0) {
+      for (const task of orphans) {
+        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" — no result after ${((Date.now() - task.createdAt) / 1000).toFixed(0)}s`);
+      }
+      // Post to activity feed if postActivity is available
+      const orphanList = orphans.map(t => `• #${t.taskId}: "${t.transcript.substring(0, 60)}"`).join('\n');
+      logger.warn(`📋 ${orphans.length} orphaned tasks detected:\n${orphanList}`);
+    }
+  } catch (e) {
+    logger.warn(`📋 Orphan check failed: ${e.message}`);
+  }
+}, 2 * 60 * 1000);
+
 // ── Tunable Constants (env var overrides) ────────────────────────────
 const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '60000');
 const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
@@ -429,6 +448,9 @@ function flushPendingUtterance() {
   const taskId = ++taskIdCounter;
   const controller = new AbortController();
   activeTasks.set(taskId, { controller, transcript: merged, startTime: Date.now(), userId, autoSleepAfterTask });
+
+  // ── Task Ledger: track lifecycle ──
+  createTask(taskId, merged, userId);
 
   const sleepTag = autoSleepAfterTask ? ' [auto-sleep]' : '';
   const speakerTag = speakerName ? ` [${speakerName}]` : '';
@@ -784,6 +806,22 @@ client.once('ready', async () => {
   switchChatterboxVoice(startupPersona.voice).catch(e => logger.warn(`[startup] chatterbox voice seed error: ${e.message}`));
   
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
+
+  // ── Task Ledger: reconcile orphans from previous run ──
+  try {
+    const { orphans, pending } = reconcileOnStartup();
+    if (orphans.length > 0 || pending.length > 0) {
+      const orphanSummary = orphans.map(t => `• Task #${t.taskId}: "${t.transcript}"`).join('\n');
+      const pendingSummary = pending.map(t => `• Task #${t.taskId}: "${t.transcript}" (${t.state})`).join('\n');
+      const msg = [
+        orphans.length > 0 ? `⚠️ **${orphans.length} orphaned tasks** from previous run:\n${orphanSummary}` : '',
+        pending.length > 0 ? `⏳ **${pending.length} tasks** still awaiting follow-up:\n${pendingSummary}` : '',
+      ].filter(Boolean).join('\n\n');
+      logger.info(`📋 Ledger reconciliation:\n${msg}`);
+    }
+  } catch (e) {
+    logger.warn(`📋 Ledger reconciliation failed: ${e.message}`);
+  }
   
   // Wire up cross-path content deduplication (shared between messageCreate + /speak)
   setDedupCallback(_isDuplicateContent);
@@ -2818,9 +2856,11 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       });
 
       if (webhookResult.dispatched) {
+        markWorking(taskId);  // Ledger: task is now working via webhook
         postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) — awaiting /speak callback`);
         logger.info(`📨 Task #${taskId} dispatched successfully — result will arrive via /speak`);
       } else {
+        markFailed(taskId, webhookResult.error);  // Ledger: dispatch failed
         logger.error(`❌ Task #${taskId} webhook dispatch failed: ${webhookResult.error}`);
         const failMsg = "I'm having trouble dispatching that right now, sir.";
         try {
@@ -2901,6 +2941,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       if (!firstAudioLogged) {
         firstAudioLogged = true;
+        markStreaming(taskId);  // Ledger: first tokens received
         logger.info(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
       }
 
@@ -2953,6 +2994,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     
     // Task was cancelled
     if (result.aborted) {
+      markFailed(taskId, 'aborted');  // Ledger: task aborted
       logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
       audioQueue.clear();
@@ -3078,6 +3120,15 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         .catch(err => logger.error(`[ThreadRouter] postTaskToThread failed for task #${taskId}: ${err.message}`));
     }
     
+    // ── Task Ledger: mark completion ──
+    // Check if the response was just an ack (sub-agent spawned, real work pending)
+    if (isJustAck(fullText)) {
+      markWorking(taskId);
+      logger.info(`📋 Task #${taskId} response was just an ack — marked WORKING, awaiting /speak callback`);
+    } else {
+      ledgerMarkCompleted(taskId, 'voice-streaming', fullText?.substring(0, 300));
+    }
+
     // Post completion to activity feed
     postActivity(`✅ **Task #${taskId}** complete (${duration}s)\n> ${truncate(fullText, 120)}`);
     
@@ -3114,6 +3165,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     
   } catch (err) {
     if (err.name !== 'AbortError') {
+      markFailed(taskId, err.message);  // Ledger: task failed
       logger.error(`❌ Task #${taskId} failed:`, err.message);
       postActivity(`❌ **Task #${taskId}** failed (${((Date.now() - startTime) / 1000).toFixed(1)}s): ${err.message}`);
       try {
