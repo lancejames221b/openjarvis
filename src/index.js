@@ -27,7 +27,7 @@ import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
-import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback } from './alert-webhook.js';
+import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
@@ -39,7 +39,7 @@ import { initHud, hudTaskUpdate, hudQueueUpdate, hudRefresh } from './hud.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
-import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive } from './fsm.js';
+import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
@@ -386,6 +386,8 @@ async function _deliverSpeak(message, speakOpts = {}) {
     logger.info(`🔇 /speak intercepted — queued for mute debrief (${source})`);
     return;
   }
+  // Task result arriving — cancel auto-sleep, we're about to speak
+  cancelTaskAutoSleep();
   const wasAsleep = getState() === 'SLEEP';
   const sentences = splitIntoSentences(message);
   for (const sentence of sentences) {
@@ -483,9 +485,20 @@ function flushPendingUtterance() {
 
   processBrainTask(taskId, userId, merged, conv ? [...conv.history] : [], controller.signal, brainOptions)
     .catch(err => logger.error(`Task #${taskId} error:`, err.message));
+
+  // Arm task auto-sleep: after the steering window expires, go to SLEEP
+  // so mumbling/self-talk doesn't trigger new tasks. Result delivery wakes back up.
+  startTaskAutoSleep();
 }
 
 function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
+  // User is speaking — cancel task auto-sleep (they're steering/engaging)
+  if (isTaskAutoSleepArmed()) {
+    cancelTaskAutoSleep();
+    logger.info('⏱️  Task auto-sleep cancelled — user is steering');
+    // Re-arm after this utterance is dispatched (in flushPendingUtterance -> dispatchTask)
+  }
+
   // If different user or a task is already pending and old, flush first
   if (_pendingUtterance.timer && _pendingUtterance.userId !== userId) {
     clearTimeout(_pendingUtterance.timer);
@@ -2970,6 +2983,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       logger.info(`🔊 Chunk #${batchNum}: ${text.length} chars → pipeline`);
       // Mark this task as having spoken inline — suppresses redundant /speak task-progress voice
       if (batchNum === 1) markTaskSpokeInline(taskId);
+      // Record in semantic dedup as we speak — prevents /speak task-progress from repeating
+      recordInlineSpoken(text);
       ttsPipeline.add(text);
     };
     
@@ -2990,6 +3005,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       if (!firstAudioLogged) {
         firstAudioLogged = true;
+        cancelTaskAutoSleep(); // Result arriving — cancel auto-sleep
         markStreaming(taskId);  // Ledger: first tokens received
         hudTaskUpdate(taskId, 'streaming');
         logger.info(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
@@ -3184,7 +3200,10 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // Post completion to activity feed
     postActivity(`✅ **Task #${taskId}** complete (${duration}s)\n> ${truncate(fullText, 120)}`);
-    
+
+    // Record in semantic dedup so /speak task-progress won't double-speak similar content
+    if (fullText && fullText.length > 10) recordInlineSpoken(fullText);
+
     // Update conversation history with full response
     const conv = conversations.get(userId);
     if (conv) {

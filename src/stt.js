@@ -236,6 +236,79 @@ function isLowConfidenceTranscript(sttData, speakerInfo = null) {
 }
 
 /**
+ * Detect Whisper hallucination patterns that confidence scores miss.
+ * Returns a reason string if hallucination detected, or null if clean.
+ * @param {string} text - Raw transcript text (before post-processing)
+ */
+function detectHallucination(text) {
+  if (!text) return null;
+  const trimmed = text.trim().replace(/\.+$/g, '').trim();
+  if (!trimmed) return null;
+
+  // 1. Known hallucination phrases — Whisper emits these on silence/noise
+  const HALLUCINATION_PHRASES = [
+    /^thank\s*you\.?$/i,
+    /^thanks\.?$/i,
+    /^thanks\s+for\s+watching\.?$/i,
+    /^please\s+subscribe\.?$/i,
+    /^(h[m]+|[m]+([-\s]*m+)*|um+|uh+|ah+)\.?$/i, // "Hmmm", "Mm-mm-mm", "Um", etc.
+    /^(comando[,.\s]*)+$/i,                       // "comando, comando..."
+    /^\.+$/,                                       // just dots
+    /^(okay[,.\s]*)+$/i,                           // "okay okay okay"
+    /^you$/i,
+    /^bye\.?$/i,
+    /^good\s*bye\.?$/i,
+    /^so[,.\s]*$/i,
+    /^\s*\.\s*$/,
+  ];
+  for (const re of HALLUCINATION_PHRASES) {
+    if (re.test(trimmed)) return `hallucination_phrase: "${trimmed}"`;
+  }
+
+  // 2. Repetitive sequence detector — catches "A, B, C, A, B, C" loops
+  //    Split into tokens, look for a repeating subsequence covering >60% of tokens
+  const tokens = trimmed.split(/[\s,]+/).filter(t => t.length > 0).map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  if (tokens.length >= 4) {
+    // Try subsequences of length 2..floor(len/2)
+    for (let seqLen = 2; seqLen <= Math.floor(tokens.length / 2); seqLen++) {
+      const seq = tokens.slice(0, seqLen);
+      let matches = 0;
+      for (let i = 0; i <= tokens.length - seqLen; i += seqLen) {
+        const chunk = tokens.slice(i, i + seqLen);
+        if (chunk.every((t, j) => t === seq[j])) matches++;
+      }
+      const coverage = (matches * seqLen) / tokens.length;
+      if (matches >= 2 && coverage >= 0.6) {
+        return `repeating_sequence: "${seq.join(', ')}" × ${matches} (${(coverage * 100).toFixed(0)}% coverage)`;
+      }
+    }
+  }
+
+  // 3. Brand-name soup — transcript is mostly comma-separated proper nouns with no verbs
+  //    Heuristic: if >70% of "words" are title-cased or known brands and there's no verb
+  const words = trimmed.split(/[\s,]+/).filter(w => w.length > 1);
+  if (words.length >= 3) {
+    const KNOWN_BRANDS = new Set([
+      'openclaw', 'clawdbot', 'roku', 'plex', 'qbittorrent', 'discord',
+      'jarvis', 'jorvis', 'netflix', 'spotify', 'youtube', 'twitch',
+      'hulu', 'amazon', 'alexa', 'siri', 'cortana', 'google',
+    ]);
+    const brandOrTitleCase = words.filter(w => {
+      const lower = w.toLowerCase().replace(/[^a-z]/g, '');
+      return KNOWN_BRANDS.has(lower) || (/^[A-Z]/.test(w) && !/^(I|A|The|And|Or|But|In|On|At|To|For|Is|It|My|Do|If|So|No|Go|Up)$/.test(w));
+    });
+    const ratio = brandOrTitleCase.length / words.length;
+    // Check for at least one common verb stem
+    const hasVerb = words.some(w => /\b(is|are|was|were|can|do|did|have|has|had|will|would|should|could|check|find|look|get|set|open|close|start|stop|run|show|tell|make|let|give|take|put|read|write|send|play|search|audit|review)\b/i.test(w));
+    if (ratio >= 0.7 && !hasVerb) {
+      return `brand_soup: ${(ratio * 100).toFixed(0)}% brands/proper nouns, no verb detected`;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Post-process transcript to correct domain-specific vocabulary
  * @param {string} text - Raw transcript text
  * @returns {string} Corrected transcript
@@ -504,6 +577,15 @@ export async function transcribeAudio(wavPath) {
     }
   }
   
+  // Final hallucination gate — catches patterns that confidence scores miss
+  if (result && result.text) {
+    const hallucinationReason = detectHallucination(result.text);
+    if (hallucinationReason) {
+      logger.info(`Hallucination filter rejected: "${result.text.substring(0, 60)}..." — ${hallucinationReason}`);
+      return { text: '', sentiment: null, segments: [], rejected: 'hallucination', hallucinationReason };
+    }
+  }
+
   return result;
 }
 

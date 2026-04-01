@@ -13,6 +13,52 @@ import logger from './logger.js';
 const ACTIVE_TO_IDLE_BASE_MS = 3 * 60 * 1000;  // 3 min baseline
 const IDLE_TO_SLEEP_MS  = 2 * 60 * 1000;        // 2 more min IDLE -> SLEEP
 
+// ── Task Auto-Sleep ──────────────────────────────────────────────────
+// After dispatching a task, auto-sleep after a steering window so mumbling
+// and self-talk don't get picked up as commands. Wake word required to re-engage.
+// Result delivery (/speak callback) will wake via openAttentionWindow().
+// Set to 0 to disable.
+const TASK_AUTO_SLEEP_MS = parseInt(process.env.TASK_AUTO_SLEEP_MS || '15000');
+let _taskAutoSleepTimer = null;
+
+/**
+ * Start the task auto-sleep countdown. Call after dispatching a task.
+ * During the steering window (TASK_AUTO_SLEEP_MS), user can still talk
+ * without wake word. After it expires, transition to SLEEP.
+ * Any new user utterance resets the timer (they're steering).
+ */
+export function startTaskAutoSleep() {
+  if (TASK_AUTO_SLEEP_MS <= 0) return;
+  cancelTaskAutoSleep(); // reset if already running
+  _taskAutoSleepTimer = setTimeout(() => {
+    _taskAutoSleepTimer = null;
+    const state = getState();
+    if (state === 'ACTIVE' || state === 'IDLE') {
+      logger.info(`😴 Task auto-sleep: ${TASK_AUTO_SLEEP_MS / 1000}s steering window expired — going to SLEEP`);
+      transition('SLEEP', 'task-auto-sleep');
+    }
+  }, TASK_AUTO_SLEEP_MS);
+  logger.info(`⏱️  Task auto-sleep armed: ${TASK_AUTO_SLEEP_MS / 1000}s steering window`);
+}
+
+/**
+ * Cancel the task auto-sleep timer. Call when:
+ * - User speaks (they're steering, reset the window)
+ * - Task completes and result is being delivered
+ * - User explicitly wakes up
+ */
+export function cancelTaskAutoSleep() {
+  if (_taskAutoSleepTimer) {
+    clearTimeout(_taskAutoSleepTimer);
+    _taskAutoSleepTimer = null;
+  }
+}
+
+/** Check if task auto-sleep timer is currently armed */
+export function isTaskAutoSleepArmed() {
+  return _taskAutoSleepTimer !== null;
+}
+
 let _activeTimer = null;
 let _idleTimer = null;
 

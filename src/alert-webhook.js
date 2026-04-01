@@ -412,7 +412,7 @@ export function setDidTaskSpeakInlineCallback(fn) { _didTaskSpeakInlineFn = fn; 
 // are different hashes but same intent — word-overlap catches them.
 const _recentSpokenTexts = []; // [{text, ts, source}]
 const SEMANTIC_DEDUP_WINDOW_MS = 90_000; // 90s
-const SEMANTIC_DEDUP_OVERLAP_THRESHOLD = 0.65; // 65% word overlap
+const SEMANTIC_DEDUP_OVERLAP_THRESHOLD = parseFloat(process.env.SEMANTIC_DEDUP_THRESHOLD || '0.45'); // 45% word overlap (lowered from 65% to catch paraphrased repetitions)
 
 function _wordSet(text) {
   return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2));
@@ -468,6 +468,15 @@ function _isSemanticDuplicate(message) {
 function _recordSpoken(message, source) {
   _recentSpokenTexts.push({ text: message, words: _wordSet(message), ts: Date.now(), source });
   if (_recentSpokenTexts.length > 10) _recentSpokenTexts.shift(); // cap at 10
+}
+
+/**
+ * Record content spoken via the inline TTS pipeline (not /speak endpoint)
+ * so that the /speak semantic dedup can suppress near-duplicate task-progress.
+ * Call this from the streaming TTS path in index.js.
+ */
+export function recordInlineSpoken(message) {
+  _recordSpoken(message, 'inline');
 }
 
 // ── /speak in-flight mutex: prevents race-condition double-speak ─────
