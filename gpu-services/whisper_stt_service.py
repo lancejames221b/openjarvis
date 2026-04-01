@@ -31,10 +31,7 @@ COMPUTE_TYPE = 'float16' if DEVICE == 'cuda' else 'int8'
 # Domain vocabulary hint — add your own project/tool names to improve recognition accuracy.
 # Whisper uses this as a soft prior; it reduces hallucinations on domain-specific terms.
 # Examples: project names, tool names, people's names, abbreviations you use frequently.
-INITIAL_PROMPT = (
-    "Jarvis, OpenClaw, Clawdbot, Roku, Plex, qBittorrent, Discord, "
-    "MCP, Deepgram, VirusTotal, GitHub, Tailscale"
-)
+INITIAL_PROMPT = "Jarvis"
 
 try:
     import torch
@@ -107,6 +104,7 @@ def transcribe():
             initial_prompt=INITIAL_PROMPT,
             vad_filter=True,
             vad_parameters=dict(
+                threshold=0.6,
                 min_silence_duration_ms=500,
                 speech_pad_ms=200,
             ),
