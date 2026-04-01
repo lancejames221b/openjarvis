@@ -46,8 +46,24 @@ class AudioQueue {
   constructor() {
     this.queue = [];
     this.playing = false;
+    this._drainedCallbacks = [];
   }
-  
+
+  /**
+   * Register a one-shot callback that fires when the queue fully drains
+   * (i.e. all queued audio has finished playing).
+   * Multiple callers can register; all fire on the same drain event.
+   */
+  onDrained(cb) {
+    if (typeof cb !== 'function') return;
+    // If not currently playing, fire immediately
+    if (!this.playing && this.queue.length === 0) {
+      setImmediate(cb);
+    } else {
+      this._drainedCallbacks.push(cb);
+    }
+  }
+
   add(audioSource, metadata = {}) {
     if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
       const dropped = this.queue.shift();
@@ -64,12 +80,22 @@ class AudioQueue {
       player.stop(true);
       this.playing = false;
     }
+    // Fire drained callbacks immediately on clear (queue is gone)
+    this._fireDrained();
+  }
+
+  _fireDrained() {
+    const cbs = this._drainedCallbacks.splice(0);
+    for (const cb of cbs) {
+      try { setImmediate(cb); } catch {}
+    }
   }
   
   async playNext() {
     if (this.queue.length === 0) {
       this.playing = false;
       isSpeaking = false;
+      this._fireDrained();
       return;
     }
     this.playing = true;

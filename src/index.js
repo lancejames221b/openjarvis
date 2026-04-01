@@ -1,6 +1,6 @@
 /**
  * Jarvis Voice Bot - Discord Real-Time Voice Assistant
- * 
+ *
  * Thin voice I/O layer: Discord mic → Whisper STT → Clawdbot Gateway → TTS → Discord speaker
  * Same agent, same session, same tools as text chat. Voice is just another input method.
  */
@@ -44,13 +44,13 @@ import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { touchFocus } from './focus-state.js';
 import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
-// Task ledger stripped — voice bot is a thin pipe, no ack tracking needed
+// Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
 import logger from './logger.js';
 
 const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-// Webhook server bind address — matches TAILSCALE_IP in alert-webhook.js (defaults to localhost for non-Tailscale users)
+// Webhook server bind address - matches TAILSCALE_IP in alert-webhook.js (defaults to localhost for non-Tailscale users)
 const WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || 'localhost';
 const WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || 3335;
 const WEBHOOK_BASE_URL = `http://${WEBHOOK_HOST}:${WEBHOOK_PORT}`;
@@ -110,7 +110,7 @@ async function startGatewayHealthCheck() {
   if (healthy) {
     logger.info('✅ Gateway reachable on startup');
   } else {
-    logger.warn('⚠️  Gateway unreachable on startup — will retry every 10s');
+    logger.warn('⚠️  Gateway unreachable on startup - will retry every 10s');
   }
   // Adaptive polling: 10s when unhealthy, 60s when healthy, auto-switches
   const scheduleHealthPoll = (intervalMs) => {
@@ -147,8 +147,8 @@ const CC_CHANNEL_ID = process.env.DISCORD_CC_CHANNEL_ID; // Closed captions chan
 // Falls back to TEXT_CHANNEL_ID if not set.
 const VOICE_REPORT_CHANNEL_ID = process.env.VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
 const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || TEXT_CHANNEL_ID; // Task activity feed
-const ACTIVITY_FEED_ENABLED = process.env.ACTIVITY_FEED_ENABLED !== 'false'; // Feature flag — default ON
-const VOICE_THREAD_REPORTS_ENABLED = process.env.VOICE_THREAD_REPORTS !== 'false'; // Thread reports in #hud — default ON, set VOICE_THREAD_REPORTS=false to disable
+const ACTIVITY_FEED_ENABLED = process.env.ACTIVITY_FEED_ENABLED !== 'false'; // Feature flag - default ON
+const VOICE_THREAD_REPORTS_ENABLED = process.env.VOICE_THREAD_REPORTS !== 'false'; // Thread reports in #hud - default ON, set VOICE_THREAD_REPORTS=false to disable
 const ALLOWED_USERS = (process.env.ALLOWED_USERS || '').split(',').map(s => s.trim());
 const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 
@@ -158,18 +158,18 @@ const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 // Voice bot picks it up and speaks it. No timeout pressure on the gateway.
 const WEBHOOK_CALLBACK_MODE = process.env.WEBHOOK_CALLBACK_MODE === 'true';
 const VOICE_CALLBACK_CHANNEL_ID = process.env.VOICE_CALLBACK_CHANNEL_ID || TEXT_CHANNEL_ID;
-const IMMEDIATE_ACKS_ENABLED = process.env.IMMEDIATE_ACKS_ENABLED === 'true'; // Feature flag — default OFF (was ON, removed for natural flow)
-const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // Master ack flag — default OFF (no more "On it, sir." before every response)
-const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // Contextual Jarvis-style ack on sub-agent spawn — default ON
+const IMMEDIATE_ACKS_ENABLED = process.env.IMMEDIATE_ACKS_ENABLED === 'true'; // Feature flag - default OFF (was ON, removed for natural flow)
+const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // Master ack flag - default OFF (no more "On it, sir." before every response)
+const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // Contextual Jarvis-style ack on sub-agent spawn - default ON
 const CLAWDBOT_BOT_ID = process.env.CLAWDBOT_BOT_ID || ''; // Set CLAWDBOT_BOT_ID in .env to filter webhook callback messages
 
 // ── Self-Mute TTS Queue ───────────────────────────────────────────────
 // When owner self-mutes, queue TTS output instead of speaking.
-// On unmute: "I have N updates — shall I brief you?"
+// On unmute: "I have N updates - shall I brief you?"
 const MUTE_QUEUE_ENABLED = process.env.MUTE_QUEUE_ENABLED === 'true';
 // Skip wake word on unmute prompt if speaker verification is enrolled
 const MUTE_QUEUE_WAKE_BYPASS = process.env.MUTE_QUEUE_WAKE_BYPASS !== 'false'; // default ON
-// Treat self-unmute as an implicit wake word — opens a conversation window
+// Treat self-unmute as an implicit wake word - opens a conversation window
 // so the first thing you say after unmuting doesn't require "Jarvis".
 // Requires speaker verify to confirm identity on first utterance.
 const UNMUTE_IMPLICIT_WAKE = process.env.UNMUTE_IMPLICIT_WAKE !== 'false'; // default ON
@@ -181,14 +181,14 @@ const reconnectState = {
   maxDelayMs: 60000,
   baseDelayMs: 5000,
   textModeNotified: false, // Whether we've posted "standing by in text mode"
-  
+
   nextDelay() {
     this.attempts++;
     // Exponential backoff: 5s → 10s → 20s → 40s → 60s (cap)
     this.currentDelayMs = Math.min(this.baseDelayMs * Math.pow(2, this.attempts - 1), this.maxDelayMs);
     return this.currentDelayMs;
   },
-  
+
   reset() {
     if (this.attempts > 0) {
       logger.info(`🟢 Voice reconnect successful (was at attempt #${this.attempts})`);
@@ -211,22 +211,22 @@ function startHealthMonitor() {
   setInterval(async () => {
     const mem = process.memoryUsage();
     const rssMb = Math.round(mem.rss / 1024 / 1024);
-    
+
     // Memory monitoring
     if (rssMb > MEMORY_CRITICAL_MB) {
-      logger.error(`🔴 CRITICAL: Memory usage ${rssMb}MB > ${MEMORY_CRITICAL_MB}MB — attempting graceful restart`);
+      logger.error(`🔴 CRITICAL: Memory usage ${rssMb}MB > ${MEMORY_CRITICAL_MB}MB - attempting graceful restart`);
       postToTextChannel(`🔴 **Memory critical** (${rssMb}MB). Restarting gracefully.`);
       // Give time for the message to send, then exit (systemd will restart)
       setTimeout(() => process.exit(1), 2000);
     } else if (rssMb > MEMORY_WARNING_MB) {
       logger.warn(`🟡 Memory usage high: ${rssMb}MB > ${MEMORY_WARNING_MB}MB`);
     }
-    
+
     // Event loop lag monitoring
     const now = Date.now();
     const lag = now - lastEventLoopCheck - HEALTH_CHECK_INTERVAL_MS;
     lastEventLoopCheck = now;
-    
+
     if (lag > EVENT_LOOP_LAG_WARNING_MS) {
       eventLoopLagWarnings++;
       logger.warn(`🟡 Event loop lag: ${lag}ms (warning #${eventLoopLagWarnings})`);
@@ -238,7 +238,7 @@ function startHealthMonitor() {
     } else {
       eventLoopLagWarnings = Math.max(0, eventLoopLagWarnings - 1); // Decay warnings on good ticks
     }
-    
+
     // Update health state for /health endpoint
     updateHealthState({
       gatewayHealthy: _gatewayHealthy,
@@ -249,14 +249,14 @@ function startHealthMonitor() {
       lastSuccessfulInteraction: lastInteractionTime || null,
     });
 
-    // Stuck server-mute watchdog — clear mute if no audio is playing and no active tasks
+    // Stuck server-mute watchdog - clear mute if no audio is playing and no active tasks
     // Catches cases where unmute failed due to disconnect, error, or crash during playback
     try {
       const guild = client.isReady() ? client.guilds.cache.get(GUILD_ID) : null;
       if (guild && ALLOWED_USERS[0]) {
         const member = guild.members.cache.get(ALLOWED_USERS[0]);
         if (member?.voice?.serverMute && activeTasks.size === 0 && !audioQueue?.playing && !isSpeaking) {
-          logger.warn('🔧 Watchdog: detected stuck server mute with no active playback — clearing');
+          logger.warn('🔧 Watchdog: detected stuck server mute with no active playback - clearing');
           await member.voice.setMute(false, 'Watchdog: clearing stuck server mute');
         }
       }
@@ -264,11 +264,11 @@ function startHealthMonitor() {
       logger.warn(`Stuck-mute watchdog error: ${err.message}`);
     }
   }, HEALTH_CHECK_INTERVAL_MS);
-  
+
   logger.info('🏥 Process health monitor started (30s interval)');
 }
 
-// Conversation history per user (local backup — gateway session is primary)
+// Conversation history per user (local backup - gateway session is primary)
 const conversations = new Map(); // userId -> { history: [], lastActive: timestamp }
 const CONVERSATION_TTL_MS = 60 * 60 * 1000; // Prune inactive conversations after 1 hour
 
@@ -290,7 +290,7 @@ setInterval(() => {
     const orphans = processOrphans();
     if (orphans.length > 0) {
       for (const task of orphans) {
-        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" — no result after ${((Date.now() - task.createdAt) / 1000).toFixed(0)}s`);
+        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${((Date.now() - task.createdAt) / 1000).toFixed(0)}s`);
       }
       // Post to activity feed if postActivity is available
       const orphanList = orphans.map(t => `• #${t.taskId}: "${t.transcript.substring(0, 60)}"`).join('\n');
@@ -303,7 +303,7 @@ setInterval(() => {
 
 // ── Short-timeout stall speak (30s) + backlog cap ───────────────────
 // Speaks "I seem to have lost track of that one" for tasks stalled >30s with no result.
-// Caps activeTasks at 5 — clears oldest with "Clearing backlog" speak if exceeded.
+// Caps activeTasks at 5 - clears oldest with "Clearing backlog" speak if exceeded.
 const _spokeLostTrackFor = new Set();
 setInterval(() => {
   try {
@@ -312,7 +312,7 @@ setInterval(() => {
     for (const [taskId, taskMeta] of activeTasks) {
       if (now - taskMeta.startTime > 30000 && !_spokeLostTrackFor.has(taskId)) {
         _spokeLostTrackFor.add(taskId);
-        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round((now - taskMeta.startTime)/1000)}s — speaking lost-track`);
+        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round((now - taskMeta.startTime)/1000)}s - speaking lost-track`);
         speakPhrase('I seem to have lost track of that one, sir.').catch(() => {});
       }
     }
@@ -338,7 +338,7 @@ const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '6
 const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
 const INFLIGHT_SIMILARITY_THRESHOLD = parseFloat(process.env.INFLIGHT_SIMILARITY_THRESHOLD ?? '0.75'); // Jaccard bigram overlap to absorb in-flight duplicate
 const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '6');
-// Chatterbox needs fewer, larger chunks — GPU inference per call is expensive (~2-5s each).
+// Chatterbox needs fewer, larger chunks - GPU inference per call is expensive (~2-5s each).
 // Larger batches = fewer calls = lower total latency + better prosody (more context per chunk).
 // Concurrency 2 (vs 3) avoids VRAM contention on single-GPU inference.
 const _isChatterbox = (process.env.TTS_PROVIDER || 'piper').toLowerCase() === 'chatterbox';
@@ -346,7 +346,7 @@ const _isKokoro = (process.env.TTS_PROVIDER || 'piper').toLowerCase() === 'kokor
 const _isFastTTS = _isChatterbox || _isKokoro; // both are fast enough for large batches
 const TTS_PIPELINE_CONCURRENCY = parseInt(process.env.TTS_PIPELINE_CONCURRENCY ?? (_isChatterbox ? '2' : '3'));
 const BATCH_FLUSH_MIN_CHARS = parseInt(process.env.TTS_BATCH_MIN_CHARS ?? '40');
-// Chatterbox model.generate() has a ~250-char context limit — batches larger than that get
+// Chatterbox model.generate() has a ~250-char context limit - batches larger than that get
 // internally split+concatenated in the Python service, and the concat can drop middle chunks.
 // Keep Chatterbox batches at ≤200 so each flush is a single generate() call with no concat.
 const BATCH_FLUSH_MAX_CHARS = parseInt(process.env.TTS_BATCH_MAX_CHARS ?? (_isChatterbox ? '200' : _isFastTTS ? '400' : '150'));
@@ -356,15 +356,15 @@ const userSpeaking = new Map();
 const SILENCE_THRESHOLD_MS = process.env.VAD_TIMEOUT ? parseInt(process.env.VAD_TIMEOUT) : 1500;
 const MIN_AUDIO_DURATION_MS = 300;
 
-// Rolling partial STT state — keyed by userId
+// Rolling partial STT state - keyed by userId
 const partialTranscripts = new Map(); // userId -> { text, ts }
 const partialInFlight = new Map();    // userId -> true (debounce: one partial STT per user at a time)
 
-// Audio player — single player shared with speech-output.js
+// Audio player - single player shared with speech-output.js
 const player = createAudioPlayer({
   behaviors: { noSubscriber: NoSubscriberBehavior.Play },
 });
-// Listener cleanup in playAudio/finish() prevents accumulation — modest limit is safe
+// Listener cleanup in playAudio/finish() prevents accumulation - modest limit is safe
 player.setMaxListeners(20);
 // Share this player with speech-output.js so speakText/speakPhrase use
 // the same player that's subscribed to the voice connection
@@ -390,19 +390,32 @@ const recordMode = {
   entryCount: 0,
 };
 
-// Async task management — concurrent background brain calls
+// Async task management - concurrent background brain calls
 const activeTasks = new Map(); // taskId -> { controller, transcript, startTime }
 let taskIdCounter = 0;
 
-// ── /speak queue: hold incoming speaks while a task response is delivering ──
+// ── /speak queue: hold incoming speaks while audio is playing ─────────
 // Prevents cron results / sub-agent callbacks from interleaving mid-sentence.
+// Two conditions that gate a /speak:
+//   1. _ttsDeliveryActive - task response is actively streaming TTS to audioQueue
+//   2. audioQueue.playing  - audio is currently playing back (even if TTS is done generating)
 let _ttsDeliveryActive = false;       // true while ttsPipeline is streaming to audioQueue
 const _pendingSpeaks = [];            // { message, speakOpts } buffered during delivery
+let _speakFlushScheduled = false;     // prevents double-scheduling of flush
 
 function setTTSDeliveryActive(val) { _ttsDeliveryActive = val; }
 function isTTSDeliveryActive() { return _ttsDeliveryActive; }
 
+/**
+ * Returns true if a /speak should be queued rather than delivered immediately.
+ * Buffers when TTS is actively streaming OR when audio is still playing back.
+ */
+function _shouldBufferSpeak() {
+  return _ttsDeliveryActive || speechAudioQueue.playing;
+}
+
 async function flushPendingSpeaks() {
+  _speakFlushScheduled = false;
   while (_pendingSpeaks.length > 0) {
     const { message, speakOpts } = _pendingSpeaks.shift();
     logger.info(`🔔 Flushing queued /speak (${_pendingSpeaks.length} remaining): "${message.substring(0, 60)}"`);
@@ -410,17 +423,27 @@ async function flushPendingSpeaks() {
   }
 }
 
-// The actual speak delivery — extracted so both immediate and deferred paths use it.
+/**
+ * Schedule flushPendingSpeaks to run once the audioQueue fully drains.
+ * Safe to call multiple times - only one flush is scheduled at a time.
+ */
+function scheduleFlushOnDrain() {
+  if (_speakFlushScheduled || _pendingSpeaks.length === 0) return;
+  _speakFlushScheduled = true;
+  speechAudioQueue.onDrained(() => flushPendingSpeaks().catch(() => {}));
+}
+
+// The actual speak delivery - extracted so both immediate and deferred paths use it.
 async function _deliverSpeak(message, speakOpts = {}) {
   if (!message || message.trim().length < 2) return;
   if (MUTE_QUEUE_ENABLED && isMuteQueueActive()) {
     const source = speakOpts.source || 'speak';
     const priority = speakOpts.priority || 3;
     muteQueueAdd(message.trim(), source, priority);
-    logger.info(`🔇 /speak intercepted — queued for mute debrief (${source})`);
+    logger.info(`🔇 /speak intercepted - queued for mute debrief (${source})`);
     return;
   }
-  // Task result arriving — cancel auto-sleep, we're about to speak
+  // Task result arriving - cancel auto-sleep, we're about to speak
   cancelTaskAutoSleep();
   const wasAsleep = getState() === 'SLEEP';
   const sentences = splitIntoSentences(message);
@@ -476,7 +499,7 @@ function flushPendingUtterance() {
       if (inflightTask.userId !== userId) continue; // Only dedup per-user
       const sim = transcriptSimilarity(merged, inflightTask.transcript);
       if (sim >= INFLIGHT_SIMILARITY_THRESHOLD) {
-        logger.info(`⏭️  In-flight task #${inflightId} covers this (similarity=${sim.toFixed(2)}) — absorbing duplicate: "${merged.substring(0, 60)}"`);
+        logger.info(`⏭️  In-flight task #${inflightId} covers this (similarity=${sim.toFixed(2)}) - absorbing duplicate: "${merged.substring(0, 60)}"`);
         postActivity(`⏭️ Absorbed duplicate (${(sim * 100).toFixed(0)}% similar to Task #${inflightId})\n> ${truncate(merged, 80)}`);
         return;
       }
@@ -526,10 +549,10 @@ function flushPendingUtterance() {
 }
 
 function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
-  // User is speaking — cancel task auto-sleep (they're steering/engaging)
+  // User is speaking - cancel task auto-sleep (they're steering/engaging)
   if (isTaskAutoSleepArmed()) {
     cancelTaskAutoSleep();
-    logger.info('⏱️  Task auto-sleep cancelled — user is steering');
+    logger.info('⏱️  Task auto-sleep cancelled - user is steering');
     // Re-arm after this utterance is dispatched (in flushPendingUtterance -> dispatchTask)
   }
 
@@ -551,7 +574,7 @@ function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
   _pendingUtterance.timer = setTimeout(flushPendingUtterance, UTTERANCE_DEBOUNCE_MS);
 }
 
-// ON_SCREEN sentence detection — matches "opening X", "on your screen", etc.
+// ON_SCREEN sentence detection - matches "opening X", "on your screen", etc.
 function _isScreenSentence(text) {
   if (!text) return false;
   const lower = text.toLowerCase();
@@ -567,7 +590,7 @@ function _isScreenSentence(text) {
 
 // Voice-to-text handoff tracking
 let userDisconnected = false;
-let lastInteractionTime = Date.now(); // Init to now — prevents immediate idle disconnect on startup/restart
+let lastInteractionTime = Date.now(); // Init to now - prevents immediate idle disconnect on startup/restart
 
 // Mute-gated output: when others present + owner unmuted, hold responses
 let ownerMuted = false;
@@ -576,7 +599,7 @@ const ACTIVE_CONVERSATION_WINDOW_MS = parseInt(process.env.CONVERSATION_WINDOW_M
 
 // detectFollowUpLikely imported from ./fsm.js
 
-// resetIdleSleepTimer imported from ./fsm.js — wired with callbacks below after declarations
+// resetIdleSleepTimer imported from ./fsm.js - wired with callbacks below after declarations
 
 // ── Session-Based Speaker Authentication ─────────────────────────────
 // Like Siri/Google: verify speaker on wake word, trust the session after.
@@ -585,7 +608,7 @@ const ACTIVE_CONVERSATION_WINDOW_MS = parseInt(process.env.CONVERSATION_WINDOW_M
 let authenticatedSession = false;
 const SESSION_PASSPHRASE = process.env.SPEAKER_PASSPHRASE || '';  // secret phrase to force-authenticate
 
-// Wire FSM callbacks — gives fsm.js access to local mutable state without circular deps
+// Wire FSM callbacks - gives fsm.js access to local mutable state without circular deps
 wireFSMCallbacks({
   getEnrollmentActive: () => enrollmentState.active,
   getAuthenticatedSession: () => authenticatedSession,
@@ -619,11 +642,11 @@ async function postActivity(message) {
   return null;
 }
 
-// Pin/unpin removed — gateway handles all Discord interaction (has full perms)
+// Pin/unpin removed - gateway handles all Discord interaction (has full perms)
 
 function truncate(str, len = 80) {
   if (!str) return '';
-  return str.length > len ? str.substring(0, len) + '…' : str;
+  return str.length > len ? str.substring(0, len) + '...' : str;
 }
 
 // ── Audio Queue (for streaming TTS) ──────────────────────────────────
@@ -634,24 +657,24 @@ class AudioQueue {
   constructor() {
     this.queue = [];
     this.playing = false;
-    this._holdTimer = null; // speaking hold — prevents jump between slow Chatterbox sentences
+    this._holdTimer = null; // speaking hold - prevents jump between slow Chatterbox sentences
   }
-  
+
   add(audioSource, metadata = {}) {
-    // Cancel any pending "speaking done" hold — more audio arrived
+    // Cancel any pending "speaking done" hold - more audio arrived
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
     }
     if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
       const dropped = this.queue.shift();
-      logger.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
+      logger.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached - dropping oldest item: ${dropped.audioSource}`);
       try { unlinkSync(dropped.audioSource); } catch {}
     }
     this.queue.push({ audioSource, metadata });
     if (!this.playing) this.playNext();
   }
-  
+
   clear() {
     if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
     this.queue = [];
@@ -661,10 +684,10 @@ class AudioQueue {
     }
     serverMuteOwner(false);
   }
-  
+
   async playNext() {
     if (this.queue.length === 0) {
-      // Hold state briefly — Chatterbox may still be generating the next sentence.
+      // Hold state briefly - Chatterbox may still be generating the next sentence.
       // If more audio arrives within the hold window, we resume without a jump/re-mute.
       const holdMs = parseInt(process.env.SPEAKING_HOLD_MS || '800');
       if (holdMs > 0 && this.playing) {
@@ -675,7 +698,7 @@ class AudioQueue {
             isSpeaking = false;
             serverMuteOwner(false);
           } else {
-            this.playNext(); // audio arrived during hold — continue seamlessly
+            this.playNext(); // audio arrived during hold - continue seamlessly
           }
         }, holdMs);
         return; // don't clear isSpeaking yet
@@ -689,9 +712,9 @@ class AudioQueue {
     if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
 
     // Mute-gated: hold response when others present + owner unmuted
-    // Skip mute-gating when wake word is active — wake word handles filtering
+    // Skip mute-gating when wake word is active - wake word handles filtering
     if (isOthersPresent() && !ownerMuted && !WAKE_WORD_ENABLED) {
-      logger.info(`🤫 Holding response — owner unmuted with others present (${this.queue.length} queued)`);
+      logger.info(`🤫 Holding response - owner unmuted with others present (${this.queue.length} queued)`);
       this.playing = false;
       isSpeaking = false;
       return; // Will resume when owner mutes (voiceStateUpdate fires playNext)
@@ -734,7 +757,7 @@ function getTimeAgo(timestamp) {
 async function briefPendingAlerts(userId) {
   const alerts = getPendingAlerts();
   if (alerts.length === 0) return;
-  
+
   let briefing = 'Welcome back. ';
   if (alerts.length === 1) {
     const alert = alerts[0];
@@ -745,7 +768,7 @@ async function briefPendingAlerts(userId) {
     if (urgentCount > 0) briefing += `${urgentCount} urgent. `;
     briefing += 'Want the briefing?';
   }
-  
+
   const audio = await synthesizeSpeech(briefing);
   if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   markBotResponse(userId, { followUpLikely: true }); // alerts always invite follow-up
@@ -754,7 +777,7 @@ async function briefPendingAlerts(userId) {
   if (!conversations.has(userId)) conversations.set(userId, { history: [], lastActive: Date.now() });
   const conv = conversations.get(userId);
   conv.lastActive = Date.now();
-  
+
   // Build detailed alert context for the agent
   let alertContext = `[SYSTEM] The following alerts were queued while user was away and just briefed via TTS:\n`;
   for (const alert of alerts) {
@@ -764,10 +787,10 @@ async function briefPendingAlerts(userId) {
     alertContext += '\n';
   }
   alertContext += `User was told: "${briefing}"\nIf they ask for details, provide the full alert information above.`;
-  
+
   conv.history.push({ role: 'assistant', content: alertContext });
   while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
-  
+
   clearAlerts();
 }
 
@@ -795,7 +818,7 @@ async function briefPendingHandoffs(userId) {
       briefing += `From ${h.channel}: ${h.summary.substring(0, 80)}. `;
     }
   }
-  
+
   const audio = await synthesizeSpeech(briefing);
   if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
   markBotResponse(userId, { followUpLikely: true }); // handoffs invite follow-up
@@ -804,8 +827,8 @@ async function briefPendingHandoffs(userId) {
   if (!conversations.has(userId)) conversations.set(userId, { history: [], lastActive: Date.now() });
   const conv = conversations.get(userId);
   conv.lastActive = Date.now();
-  
-  let context = `[SYSTEM] Voice handoff context — the following was queued from text channels:\n`;
+
+  let context = `[SYSTEM] Voice handoff context - the following was queued from text channels:\n`;
   for (const h of handoffs) {
     context += `\n--- Handoff from #${h.channel} (${getTimeAgo(h.timestamp)}) ---\n`;
     if (h.topic) context += `Topic: ${h.topic}\n`;
@@ -813,10 +836,10 @@ async function briefPendingHandoffs(userId) {
     if (h.instructions) context += `Instructions: ${h.instructions}\n`;
   }
   context += `\nUser has been briefed via TTS. Continue from this context.`;
-  
+
   conv.history.push({ role: 'assistant', content: context });
   while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
-  
+
   clearHandoffs();
 }
 
@@ -830,9 +853,9 @@ async function generateDynamicGreeting() {
   const now = new Date();
   const hour = now.getHours();
   const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
-  
+
   const prompt = `You are ${VOICE_NAME}, a British AI butler. Generate ONE short greeting (under 15 words) for ${timeOfDay}. Dry wit welcome. No quotes, just the text.`;
-  
+
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
       method: 'POST',
@@ -866,7 +889,7 @@ client.once('ready', async () => {
   const startupPersona = getActivePersona();
   setPersonaWakeWords(startupPersona.wakeWords || []);
   switchChatterboxVoice(startupPersona.voice).catch(e => logger.warn(`[startup] chatterbox voice seed error: ${e.message}`));
-  
+
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
 
   // ── Inject guild channel cache into focus-state for fallback resolution ──
@@ -899,7 +922,7 @@ client.once('ready', async () => {
   } catch (e) {
     logger.warn(`📋 Ledger reconciliation failed: ${e.message}`);
   }
-  
+
   // Wire up cross-path content deduplication (shared between messageCreate + /speak)
   setDedupCallback(_isDuplicateContent);
 
@@ -909,16 +932,18 @@ client.once('ready', async () => {
   // Wire follow-up detection into the TV noise filter (intent-classifier.js)
   // When a follow-up is expected, short phrases like "yes please" bypass the TV filter
   setFollowUpExpectedCallback(() => isFollowUpExpected());
-  
+
   // Wire up immediate TTS delivery for /speak endpoint
-  // If a task response is actively streaming to audioQueue, buffer the speak
-  // and flush it after the task finishes — no more mid-sentence interruptions.
+  // Buffer the speak if TTS is actively streaming OR if audio is currently playing.
+  // Flush only once the audioQueue fully drains - no more mid-sentence interruptions.
   setSpeakCallback(async (message, speakOpts = {}) => {
     try {
       if (!message || message.trim().length < 2) return;
-      if (isTTSDeliveryActive()) {
-        logger.info(`🔔 /speak buffered (task delivery active): "${message.substring(0, 60)}"`);
+      if (_shouldBufferSpeak()) {
+        const reason = _ttsDeliveryActive ? 'task delivery active' : 'audio playing';
+        logger.info(`🔔 /speak buffered (${reason}): "${message.substring(0, 60)}"`);
         _pendingSpeaks.push({ message, speakOpts });
+        scheduleFlushOnDrain();
         return;
       }
       await _deliverSpeak(message, speakOpts);
@@ -926,7 +951,7 @@ client.once('ready', async () => {
       logger.error('Speak callback TTS failed:', err.message);
     }
   });
-  
+
   // Wire up conversation window refresh for /speak callback responses
   setMarkBotResponseCallback((userId, opts) => markBotResponse(userId, opts));
 
@@ -938,8 +963,8 @@ client.once('ready', async () => {
     const cbChannelId = process.env.DISCORD_CIRCUIT_BREAKER_CHANNEL;
     if (!cbChannelId || !client.isReady()) return;
     const msg = type === 'open'
-      ? '⚠️ Gateway circuit breaker OPEN — gateway unreachable'
-      : '✅ Gateway circuit breaker CLOSED — gateway recovered';
+      ? '⚠️ Gateway circuit breaker OPEN - gateway unreachable'
+      : '✅ Gateway circuit breaker CLOSED - gateway recovered';
     client.channels.fetch(cbChannelId)
       .then(ch => ch.send(msg))
       .catch(() => {});
@@ -962,7 +987,7 @@ client.once('ready', async () => {
       logger.info(`[persona] switchPersonaFull: ${previous.name} → ${p.name} (voice: ${p.voice}) ✅`);
     } catch (e) {
       // Revert personality and wake words on voice switch failure
-      logger.warn(`[persona] voice switch failed (${e.message}) — reverting to ${previous.name}`);
+      logger.warn(`[persona] voice switch failed (${e.message}) - reverting to ${previous.name}`);
       switchPersona(previous.name.toLowerCase());
       setPersonaWakeWords(previous.wakeWords || []);
       const err = new Error(`Voice switch failed: ${e.message}`);
@@ -981,7 +1006,7 @@ client.once('ready', async () => {
   setPersonaCreateCallback(({ name, content, voice, ttsVoiceEdge, wakeWords, overwrite }) => {
     const filePath = join(__dirname, '..', 'personalities', `${name}.md`);
     if (!overwrite && existsSync(filePath)) {
-      const err = new Error(`Persona '${name}' already exists — set overwrite: true to replace`);
+      const err = new Error(`Persona '${name}' already exists - set overwrite: true to replace`);
       err.code = 'EEXIST';
       throw err;
     }
@@ -1008,10 +1033,10 @@ client.once('ready', async () => {
   // Pre-cache ack phrases for instant zero-latency playback
   preloadAckPhrases(synthesizeSpeech).catch(err => logger.warn('Ack preload failed:', err.message));
 
-  // Task ledger removed — voice bot is a thin pipe
-  
+  // Task ledger removed - voice bot is a thin pipe
+
   try {
-    // Check if owner is already in a voice channel — follow them
+    // Check if owner is already in a voice channel - follow them
     const guild = client.guilds.cache.get(GUILD_ID);
     let ownerChannel = null;
     try {
@@ -1022,14 +1047,14 @@ client.once('ready', async () => {
     } catch (e) {
       logger.info(`Could not fetch owner voice state: ${e.message}`);
     }
-    
+
     const targetChannel = ownerChannel || VOICE_CHANNEL_ID;
     if (targetChannel) {
       // Retry logic on startup join
       let attempt = 0;
       const maxAttempts = 3;
       let joined = false;
-      
+
       while (!joined && attempt < maxAttempts) {
         attempt++;
         try {
@@ -1043,7 +1068,7 @@ client.once('ready', async () => {
         } catch (err) {
           if (attempt < maxAttempts) {
             const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-            logger.error(`⚠️ Join attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`);
+            logger.error(`⚠️ Join attempt ${attempt} failed: ${err.message} - retrying in ${delay}ms`);
             await new Promise(resolve => setTimeout(resolve, delay));
           } else {
             logger.error('⚠️ Failed to join voice channel after 3 attempts:', err.message);
@@ -1052,7 +1077,7 @@ client.once('ready', async () => {
         }
       }
     } else {
-      logger.info('🔄 No default channel and owner not in voice — waiting for owner to join');
+      logger.info('🔄 No default channel and owner not in voice - waiting for owner to join');
     }
   } catch (err) {
     logger.error('⚠️ Failed to join voice channel:', err.message);
@@ -1069,9 +1094,9 @@ client.on('voiceStateUpdate', (oldState, newState) => {
     const wasOthers = isOthersPresent();
     const others = channel.members.filter(m => !m.user.bot && !ALLOWED_USERS.includes(m.id)).size;
     setOthersPresent(others > 0);
-    // Others just left — flush any held responses
+    // Others just left - flush any held responses
     if (wasOthers && others === 0 && audioQueue && audioQueue.queue.length > 0 && !audioQueue.playing) {
-      logger.info(`▶️  Others left channel — playing ${audioQueue.queue.length} held response(s)`);
+      logger.info(`▶️  Others left channel - playing ${audioQueue.queue.length} held response(s)`);
       audioQueue.playNext();
     }
   }
@@ -1079,7 +1104,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 
 client.on('voiceStateUpdate', async (oldState, newState) => {
   if (newState.id !== ALLOWED_USERS[0]) return;
-  
+
   // Track owner mute state for mute-gated output
   const wasMuted = ownerMuted;
   ownerMuted = !!newState.selfMute;
@@ -1089,15 +1114,15 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     if (ownerMuted) {
       // ── Owner just MUTED ──────────────────────────────────────────
       if (MUTE_QUEUE_ENABLED) {
-        // Activate mute queue — subsequent TTS will be captured, not spoken
+        // Activate mute queue - subsequent TTS will be captured, not spoken
         muteQueueActivate();
         // Clear audio already queued/playing (don't dump it while they're muted)
         audioQueue.clear();
-        logger.info(`🔇 Mute queue active — TTS will be queued until unmute`);
+        logger.info(`🔇 Mute queue active - TTS will be queued until unmute`);
       } else {
         // Legacy behaviour: flush held responses on mute (mute-gated output)
         if (audioQueue && audioQueue.queue.length > 0 && !audioQueue.playing) {
-          logger.info(`▶️  Owner muted — playing ${audioQueue.queue.length} held response(s)`);
+          logger.info(`▶️  Owner muted - playing ${audioQueue.queue.length} held response(s)`);
           audioQueue.playNext();
         }
       }
@@ -1107,10 +1132,10 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         muteQueueDeactivate();
         const count = muteQueueCount();
         if (count > 0) {
-          // Offer debrief — smart-collapsed summary
+          // Offer debrief - smart-collapsed summary
           const summary = muteQueueSummary();
           if (summary) {
-            logger.info(`🔊 Mute queue debrief: ${count} entries — offering summary`);
+            logger.info(`🔊 Mute queue debrief: ${count} entries - offering summary`);
 
             // Build conversation context so AI can answer follow-ups
             const ctxBlock = muteQueueContext();
@@ -1123,7 +1148,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
               conv.lastActive = Date.now();
             }
 
-            // FSM: force ACTIVE state — user just unmuted and we're talking to them
+            // FSM: force ACTIVE state - user just unmuted and we're talking to them
             // Without this, the idle timer (3min) may have pushed state to IDLE/SLEEP
             // while muted, and the debrief reply gets dropped by the FSM gate.
             if (getState() !== 'ACTIVE') {
@@ -1136,7 +1161,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             if (MUTE_QUEUE_WAKE_BYPASS) {
               const userId = ALLOWED_USERS[0];
               markBotResponse(userId, { followUpLikely: true });
-              logger.info(`🎙️  Wake bypass active — unmute response does not require wake word`);
+              logger.info(`🎙️  Wake bypass active - unmute response does not require wake word`);
             }
 
             // Speak the summary (fires immediately, won't re-queue)
@@ -1151,7 +1176,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             muteQueueClear();
           }
         } else {
-          // Nothing queued — deactivate and optionally open implicit wake window
+          // Nothing queued - deactivate and optionally open implicit wake window
           muteQueueDeactivate();
           if (UNMUTE_IMPLICIT_WAKE) {
             applyImplicitWakeOnUnmute(newState.id, (val) => { authenticatedSession = val; });
@@ -1163,20 +1188,20 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       }
     }
   }
-  
+
   // User joined a voice channel (any channel in the guild)
   const joinedChannel = newState.channelId;
   const leftChannel = oldState.channelId;
-  
-  // User switched or joined a voice channel — follow them
+
+  // User switched or joined a voice channel - follow them
   if (joinedChannel && joinedChannel !== currentVoiceChannelId) {
-    logger.info(`🔀 Owner moved to channel ${joinedChannel} — following`);
-    
+    logger.info(`🔀 Owner moved to channel ${joinedChannel} - following`);
+
     // Retry logic with exponential backoff
     let attempt = 0;
     const maxAttempts = 3;
     let joined = false;
-    
+
     while (!joined && attempt < maxAttempts) {
       attempt++;
       try {
@@ -1190,7 +1215,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       } catch (err) {
         if (attempt < maxAttempts) {
           const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-          logger.error(`⚠️ Follow attempt ${attempt} failed: ${err.message} — retrying in ${delay}ms`);
+          logger.error(`⚠️ Follow attempt ${attempt} failed: ${err.message} - retrying in ${delay}ms`);
           await new Promise(resolve => setTimeout(resolve, delay));
         } else {
           logger.error(`❌ Failed to follow owner after ${maxAttempts} attempts: ${err.message}`);
@@ -1198,17 +1223,17 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       }
     }
   }
-  
+
   if (joinedChannel && (!leftChannel || leftChannel !== joinedChannel)) {
     userDisconnected = false; // Reset disconnect flag on join
     logger.info(`👋 User joined voice channel ${joinedChannel}`);
-    // Auto-clear any stale server mute — can get stuck when user disconnects while muted.
+    // Auto-clear any stale server mute - can get stuck when user disconnects while muted.
     // Guild-level server mute persists across voice sessions, so clear it on join.
     if (newState.serverMute) {
       logger.info('🔊 Clearing stale server mute on owner join...');
       serverMuteOwner(false);
     }
-    // Apply implicit wake on join when owner is not muted — same as unmute flow.
+    // Apply implicit wake on join when owner is not muted - same as unmute flow.
     // Allows Lance to start talking immediately after joining without wake word,
     // as long as UNMUTE_IMPLICIT_WAKE is enabled. Voiceprint still required.
     if (UNMUTE_IMPLICIT_WAKE && !newState.selfMute) {
@@ -1222,7 +1247,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       if (!recordMode.active) startRecordMode(newState.id);
       return;
     }
-    // Quick "Jarvis online" on join — no waiting for AI-generated greeting
+    // Quick "Jarvis online" on join - no waiting for AI-generated greeting
     setTimeout(async () => {
       try {
         const rawModel = process.env.VOICE_MODEL || 'anthropic-console/claude-sonnet-4-6';
@@ -1241,7 +1266,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         const audio = await synthesizeSpeech(`${persona.name} online. Using ${modelLabel}.`);
         if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
       } catch {}
-      
+
       // ── Auto-Brief: Check for active context ──────────────────────
       // If there's an active handoff context, brief immediately
       try {
@@ -1252,7 +1277,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         if (res.ok) {
           const { context } = await res.json();
           if (context && context.summary) {
-            logger.info(`📋 Active context detected from ${context.surface} — briefing user`);
+            logger.info(`📋 Active context detected from ${context.surface} - briefing user`);
             const briefMsg = `${context.topic ? context.topic + '. ' : ''}${context.summary.substring(0, 300)}`;
             const briefAudio = await synthesizeSpeech(briefMsg);
             if (briefAudio) {
@@ -1269,7 +1294,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       } catch (err) {
         logger.error(`⚠️ Failed to check active context: ${err.message}`);
       }
-      
+
       // Brief pending alerts after greeting
       if (hasPendingAlerts()) {
         await briefPendingAlerts(newState.id);
@@ -1280,7 +1305,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       }
 
       // ── Proactive Join Briefing (Phase 3) ────────────────────────
-      // Calendar + active tasks + focus — spoken summary on voice join
+      // Calendar + active tasks + focus - spoken summary on voice join
       if (shouldBrief()) {
         try {
           const briefingText = await generateBriefing();
@@ -1292,14 +1317,14 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
               audioQueue.add(briefAudio);
             }
           } else {
-            logger.info(`[briefing] Nothing to report — skipping`);
+            logger.info(`[briefing] Nothing to report - skipping`);
             markBriefingDelivered(); // still mark to avoid rapid retries
           }
         } catch (err) {
           logger.error(`[briefing] Failed: ${err.message}`);
         }
       }
-      // Mute queue debrief on reconnect — handles device switch (iPad muted → phone join)
+      // Mute queue debrief on reconnect - handles device switch (iPad muted → phone join)
       // If user left while self-muted and rejoins on a different device (unmuted by default),
       // the selfMute toggle never fires. Check the queue here as a safety net.
       if (MUTE_QUEUE_ENABLED && muteQueueHasEntries()) {
@@ -1319,7 +1344,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
             conv.lastActive = Date.now();
           }
-          // Wake bypass — just reconnected, don't require wake word for reply
+          // Wake bypass - just reconnected, don't require wake word for reply
           if (MUTE_QUEUE_WAKE_BYPASS) {
             markBotResponse(newState.id, { followUpLikely: true });
           }
@@ -1337,7 +1362,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       }
     }, 500);
   }
-  
+
   // User left voice entirely (not just switching channels)
   if (leftChannel && !joinedChannel) {
     logger.info(`👋 User left voice entirely`);
@@ -1436,7 +1461,7 @@ export function markTaskSpokeInline(taskId) {
 
 export function didTaskSpeakInline(taskId) {
   const now = Date.now();
-  // Only suppress if we have a specific taskId match — never suppress based on
+  // Only suppress if we have a specific taskId match - never suppress based on
   // "some other task spoke recently". The old 10s ANY-task fallback was eating
   // legitimate sub-agent /speak callbacks. Sub-agents now include taskId in their
   // curl calls; if they don't, we let the speech through (better to double-speak
@@ -1462,47 +1487,47 @@ setInterval(() => {
 
 client.on('messageCreate', async (message) => {
   if (!WEBHOOK_CALLBACK_MODE) return;
-  
+
   // Only listen in the callback channel
   if (message.channelId !== VOICE_CALLBACK_CHANNEL_ID) return;
-  
+
   // Only process messages from the Clawdbot bot
   if (message.author.id !== CLAWDBOT_BOT_ID) return;
-  
+
   // Skip if it's a bot message from ourselves (voice bot)
   if (message.author.id === client.user.id) return;
-  
+
   // Skip empty or signal messages
   const text = message.content?.trim();
   if (!text) return;
   if (/^\s*(NO_REPLY|HEARTBEAT_OK)\s*$/i.test(text)) return;
-  
+
   // ── Deduplication: message ID ──
   if (_processedMsgIds.has(message.id)) {
     logger.info(`⏭️  Dedup: skipping duplicate message ID ${message.id}`);
     return;
   }
   _processedMsgIds.add(message.id);
-  
+
   // ── Deduplication: content hash (catches cross-path dupes from /speak) ──
   if (_isDuplicateContent(text)) {
     logger.info(`⏭️  Dedup: skipping duplicate content (${text.substring(0, 40)}...)`);
     return;
   }
-  
+
   logger.info(`📩 Callback received (${text.length} chars, id: ${message.id}): "${text.substring(0, 80)}..."`);
-  
+
   // Clean for voice
   const voiceText = trimForVoice(text);
   if (!voiceText || voiceText.length < 2) return;
-  
+
   // Add to conversation history
   const conv = conversations.get(ALLOWED_USERS[0]) || { history: [], lastActive: 0 };
   conv.history.push({ role: 'assistant', content: voiceText });
   if (conv.history.length > 20) conv.history.splice(0, conv.history.length - 20);
   conv.lastActive = Date.now();
   conversations.set(ALLOWED_USERS[0], conv);
-  
+
   // If user is in voice, speak it
   if (!userDisconnected) {
     // Split into sentences for streaming TTS
@@ -1520,12 +1545,12 @@ client.on('messageCreate', async (message) => {
         logger.error('Callback TTS failed:', err.message);
       }
     }
-    
+
     const duration = ((Date.now() - lastInteractionTime) / 1000).toFixed(1);
     logger.info(`💬 Callback spoken (${duration}s since request)`);
   } else {
-    // User not in voice — ping them in the text channel so they see it
-    logger.info(`📝 Callback received but user not in voice — pinging in text channel`);
+    // User not in voice - ping them in the text channel so they see it
+    logger.info(`📝 Callback received but user not in voice - pinging in text channel`);
     const userId = ALLOWED_USERS[0];
     await postToTextChannel(`<@${userId}> 🎙️ **Voice task complete:**\n${voiceText}`);
   }
@@ -1608,10 +1633,10 @@ client.on('messageCreate', async (message) => {
 // Allows setting voice focus from Discord text, without using voice.
 //
 // Triggers:
-//   /handoff                — focus voice on the current channel (where message was typed)
-//   /handoff #channel       — focus voice on a specific channel by mention or name
-//   /focus                  — same as /handoff
-//   /focus gibson           — focus by channel name (fuzzy matched)
+//   /handoff                - focus voice on the current channel (where message was typed)
+//   /handoff #channel       - focus voice on a specific channel by mention or name
+//   /focus                  - same as /handoff
+//   /focus gibson           - focus by channel name (fuzzy matched)
 //   Auto-focus: if Lance posts in a registered channel while NOT in voice,
 //               silently update focus (no confirmation). Only active channels
 //               (score ≥ 40 in resolveChannel) trigger auto-focus.
@@ -1654,7 +1679,7 @@ client.on('messageCreate', async (message) => {
         }
       }
     } else {
-      // No target specified — focus on the channel where the command was typed
+      // No target specified - focus on the channel where the command was typed
       targetChannelId = message.channelId;
       // If it's a thread, use parent channel id for focus but note thread
       const ch = message.channel;
@@ -1688,7 +1713,7 @@ client.on('messageCreate', async (message) => {
   // ── Auto-focus: silently update focus when Lance posts in a known channel ──
   // Only fires when NOT in voice (don't interrupt an active session's focus).
   // Only fires for registered channels (resolveChannel by channel name/id).
-  if (!userDisconnected) return; // in voice — don't auto-focus from text
+  if (!userDisconnected) return; // in voice - don't auto-focus from text
   if (content.startsWith('/')) return; // other slash commands, skip
 
   const { resolveChannel, setFocusById, isFocusFresh } = await import('./focus-state.js');
@@ -1702,7 +1727,7 @@ client.on('messageCreate', async (message) => {
 
   const channelEntry = registry.channels?.[message.channelId];
   if (channelEntry) {
-    // Known channel — update focus silently (no reply, no reaction)
+    // Known channel - update focus silently (no reply, no reaction)
     // Only if focus isn't already on this exact channel and fresh
     const { getFocus } = await import('./focus-state.js');
     const current = getFocus();
@@ -1747,14 +1772,14 @@ async function postToTextChannel(message) {
     logger.warn('⚠️  No text channel configured, skipping channel post');
     return false;
   }
-  
+
   try {
     const channel = client.channels.cache.get(TEXT_CHANNEL_ID);
     if (!channel) {
       logger.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
       return false;
     }
-    
+
     logger.info(`📤 Posting to ${channel.name} (${TEXT_CHANNEL_ID})...`);
     await channel.send(message);
     logger.info(`✅ Posted to ${channel.name} successfully`);
@@ -1772,34 +1797,34 @@ async function postTranscriptThread(taskId, userTranscript, jarvisResponse, dura
   // Use VOICE_REPORT_CHANNEL_ID (#hud) instead of TEXT_CHANNEL_ID (#jarvis-voice).
   // Posting to #jarvis-voice (which is also VOICE_CALLBACK_CHANNEL_ID) created a feedback
   // loop: the transcript message landed in the callback channel and could trigger a second
-  // /speak path, causing jobs to be spoken twice. #hud is the correct target — it's already
+  // /speak path, causing jobs to be spoken twice. #hud is the correct target - it's already
   // used by postTaskToThread (thread-router) for all other voice task output.
   const targetChannelId = VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
   if (!targetChannelId) {
     logger.warn('⚠️  No text channel configured, skipping transcript thread');
     return false;
   }
-  
+
   try {
     const channel = client.channels.cache.get(targetChannelId);
     if (!channel) {
       logger.error(`❌ Channel ${targetChannelId} not found in cache`);
       return false;
     }
-    
+
     // Post the initial message with task ID and user's question
     logger.info(`📤 Posting voice transcript thread (task #${taskId}) to ${channel.name} (#hud)...`);
     const initialMsg = await channel.send(`🎙️ **Task #${taskId}** | You: ${userTranscript}`);
-    
+
     // Create a thread on that message with task ID in the name
     const thread = await initialMsg.startThread({
       name: `Task #${taskId}: ${userTranscript.substring(0, 40)}${userTranscript.length > 40 ? '...' : ''}`,
       autoArchiveDuration: 1440, // 24 hours
     });
-    
+
     // Post Jarvis's full response with timing in the thread
     await thread.send(`**Jarvis Response:**\n${jarvisResponse}\n\n_Task completed in ${duration}s_`);
-    
+
     logger.info(`✅ Posted voice transcript thread (task #${taskId}) to ${channel.name}`);
     return true;
   } catch (err) {
@@ -1916,7 +1941,7 @@ function handleRecordModeSpeech(userId, sttResult) {
 async function handleVoiceDisconnect(userId) {
   const timeSinceLastInteraction = Date.now() - lastInteractionTime;
   const wasRecentlyActive = timeSinceLastInteraction < ACTIVE_CONVERSATION_WINDOW_MS;
-  
+
   // Auto-clear all pending tasks on voice disconnect
   if (activeTasks.size > 0) {
     logger.info(`🧹 Auto-clearing ${activeTasks.size} pending task(s) on voice disconnect`);
@@ -1925,18 +1950,18 @@ async function handleVoiceDisconnect(userId) {
     }
     activeTasks.clear();
   }
-  
+
   // Handle recent conversation handoff
   if (wasRecentlyActive && lastUserMessage) {
-    logger.info(`📤 Active conversation detected — posting handoff note to text channel`);
+    logger.info(`📤 Active conversation detected - posting handoff note to text channel`);
     const handoffMsg = `🎙️ Voice session ended. Last topic: "${lastUserMessage}". Continuing in text.`;
     await postToTextChannel(handoffMsg);
     return;
   }
-  
-  // Idle disconnect — silent exit, ensure owner is not left server-muted
+
+  // Idle disconnect - silent exit, ensure owner is not left server-muted
   serverMuteOwner(false);
-  logger.info(`🔇 Idle disconnect (${Math.round(timeSinceLastInteraction / 1000)}s since last interaction) — no handoff`);
+  logger.info(`🔇 Idle disconnect (${Math.round(timeSinceLastInteraction / 1000)}s since last interaction) - no handoff`);
 }
 
 async function joinChannel(voiceChannelId, options = {}) {
@@ -1949,14 +1974,14 @@ async function joinChannel(voiceChannelId, options = {}) {
   }
   if (!channel) throw new Error(`Voice channel ${voiceChannelId} not found`);
   logger.info(`🔗 Joining voice channel: ${channel.name} (${voiceChannelId})`);
-  
+
   // Destroy existing connection if switching channels
   if (currentConnection) {
     try { currentConnection.destroy(); } catch {}
     currentConnection = null;
     setVoiceConnection(null);
   }
-  
+
   const connection = joinVoiceChannel({
     channelId: voiceChannelId,
     guildId: GUILD_ID,
@@ -1964,40 +1989,40 @@ async function joinChannel(voiceChannelId, options = {}) {
     selfDeaf: false,
     selfMute: false,
   });
-  
+
   // Catch voice connection errors (UDP/networking) to prevent process crash
   connection.on('error', (err) => {
     logger.error('🔴 Voice connection error:', err.message);
   });
-  
+
   // Log state transitions for debugging
   connection.on('stateChange', (oldState, newState) => {
     logger.info(`🔊 Voice state: ${oldState.status} → ${newState.status}`);
   });
 
-  // Wait for Ready state with timeout — destroy and retry if stuck
+  // Wait for Ready state with timeout - destroy and retry if stuck
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
   } catch (err) {
-    logger.error(`⚠️ Connection timeout (stuck in ${connection.state.status}) — destroying and retrying`);
+    logger.error(`⚠️ Connection timeout (stuck in ${connection.state.status}) - destroying and retrying`);
     try { connection.destroy(); } catch {}
     throw err; // Let caller handle retry
   }
-  
+
   connection.subscribe(player);
   currentConnection = connection;
   setVoiceConnection(connection); // Wire speech-output.js connection validation
   currentVoiceChannelId = voiceChannelId;
   setCurrentVoiceChannelId(voiceChannelId);
-  
-  // Reconnect on disconnect — exponential backoff with text-mode fallback
+
+  // Reconnect on disconnect - exponential backoff with text-mode fallback
   const handleDisconnect = async () => {
     try {
       await Promise.race([
         entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
       ]);
-      // Successful reconnect — reset backoff
+      // Successful reconnect - reset backoff
       reconnectState.reset();
       // Re-attach disconnect handler after successful reconnect
       connection.once(VoiceConnectionStatus.Disconnected, handleDisconnect);
@@ -2005,14 +2030,14 @@ async function joinChannel(voiceChannelId, options = {}) {
       try { connection.destroy(); } catch {} // Guard against double-destroy race condition
       const delay = reconnectState.nextDelay();
       logger.info(`⚠️  Disconnected (attempt #${reconnectState.attempts}), rejoining in ${delay / 1000}s...`);
-      
+
       // After 5 failed reconnects, notify text channel and stand by
       if (reconnectState.attempts >= 5 && !reconnectState.textModeNotified) {
         reconnectState.textModeNotified = true;
         logger.error('🔴 Voice connection unstable after 5 reconnect attempts');
         postToTextChannel('⚠️ **Voice connection unstable.** Standing by in text mode. Will keep retrying.');
       }
-      
+
       setTimeout(async () => {
         try {
           await joinChannel(voiceChannelId);
@@ -2025,31 +2050,31 @@ async function joinChannel(voiceChannelId, options = {}) {
     }
   };
   connection.once(VoiceConnectionStatus.Disconnected, handleDisconnect);
-  
+
   // Listen to incoming audio
   const receiver = connection.receiver;
   // Clear any stale barge-in timers from previous connection
   for (const [uid, timer] of bargeInTimers) { clearTimeout(timer); }
   bargeInTimers.clear();
   const BARGE_IN_THRESHOLD_MS = 600;
-  
+
   receiver.speaking.on('end', (userId) => {
     if (bargeInTimers.has(userId)) {
       clearTimeout(bargeInTimers.get(userId));
       bargeInTimers.delete(userId);
     }
   });
-  
+
   receiver.speaking.on('start', (userId) => {
     // Multi-user: listen to everyone; Single-user: only ALLOWED_USERS
     if (!MULTI_USER_ENABLED && !ALLOWED_USERS.includes(userId)) return;
-    
-    // Barge-in detection — only primary users (ALLOWED_USERS) can barge-in
+
+    // Barge-in detection - only primary users (ALLOWED_USERS) can barge-in
     if (isSpeaking && ALLOWED_USERS.includes(userId)) {
       if (!bargeInTimers.has(userId)) {
         const timer = setTimeout(() => {
           if (isSpeaking) {
-            logger.info(`⚡ Barge-in — stopping playback`);
+            logger.info(`⚡ Barge-in - stopping playback`);
             bargeInEvents.add(userId);
             player.stop(true);
             audioQueue.clear();
@@ -2060,20 +2085,20 @@ async function joinChannel(voiceChannelId, options = {}) {
         bargeInTimers.set(userId, timer);
       }
     }
-    
+
     // Collect audio
     if (!userSpeaking.has(userId)) {
       const audioStream = receiver.subscribe(userId, {
         end: { behavior: EndBehaviorType.AfterSilence, duration: SILENCE_THRESHOLD_MS },
       });
-      
+
       const chunks = [];
       const decoder = new OpusDecoder();
       audioStream.pipe(decoder);
 
       decoder.on('data', (chunk) => chunks.push(chunk));
 
-      // SimulStreaming STT — stream chunks to WhisperLiveKit WS as they arrive
+      // SimulStreaming STT - stream chunks to WhisperLiveKit WS as they arrive
       const streamingEnabled = process.env.STT_STREAMING_ENABLED !== 'false';
       let streamSession = null;
       if (streamingEnabled) {
@@ -2089,7 +2114,7 @@ async function joinChannel(voiceChannelId, options = {}) {
         logger.debug(`[SimulStream] session started for ${userId}`);
       }
 
-      // Second listener — stream chunks to WK (chunks[] push above is unchanged)
+      // Second listener - stream chunks to WK (chunks[] push above is unchanged)
       decoder.on('data', (chunk) => {
         streamSession?.sendChunk(chunk);
       });
@@ -2114,7 +2139,7 @@ async function joinChannel(voiceChannelId, options = {}) {
           return;
         }
 
-        // Finalize streaming session — sends EOF, waits up to 3s for last words
+        // Finalize streaming session - sends EOF, waits up to 3s for last words
         let streamTranscript = null;
         if (streamSession) {
           try {
@@ -2145,8 +2170,8 @@ async function joinChannel(voiceChannelId, options = {}) {
       userSpeaking.set(userId, { startTime: Date.now() });
     }
   });
-  
-  // Safety unmute on startup — previous instance may have left owner server-muted
+
+  // Safety unmute on startup - previous instance may have left owner server-muted
   serverMuteOwner(false);
 
   if (options.greeting) await playGreeting();
@@ -2163,13 +2188,13 @@ async function playGreeting() {
   }
 }
 
-// ── Speech Processing Pipeline (Async — non-blocking) ────────────────
+// ── Speech Processing Pipeline (Async - non-blocking) ────────────────
 //
 // Flow: User speaks → transcribe → dispatch background task → immediately ready
 //       Background task completes → queue response → TTS when speaker is free
 //
 // Quick commands (focus, wake word only, alerts) are handled synchronously.
-// Brain calls are fully async — multiple can run concurrently.
+// Brain calls are fully async - multiple can run concurrently.
 
 async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
   const startTime = Date.now();
@@ -2350,7 +2375,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
   }
 
   try {
-    // Per-request auth context — isolates auth state from concurrent handleSpeech calls.
+    // Per-request auth context - isolates auth state from concurrent handleSpeech calls.
     // Reading global authenticatedSession here gives us the session state at the moment
     // this specific speech event started processing, preventing races where a concurrent
     // request's auth write bleeds into this request's decision logic.
@@ -2406,7 +2431,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // ── Per-utterance speaker filter: reject non-owner audio (TV, ambient) ──
     // Even in ACTIVE sessions, drop audio where speaker verification says "not owner".
     // Long transcripts (>80 chars) from non-owner are almost certainly TV dialogue.
-    // Exception: wake word at transcript start bypasses filter — "Jarvis" is uncommon
+    // Exception: wake word at transcript start bypasses filter - "Jarvis" is uncommon
     // enough that TV rarely produces it, and owner's embedding gets corrupted by
     // TV background noise (scoring 0.30-0.33, same as pure TV).
     const spkr = sttResult?.speakerInfo;
@@ -2417,8 +2442,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const startsWithWakeWord = _wakeWordRe.test(trimmed)
         || WAKE_WORD_PHRASES.some(p => trimmed.toLowerCase().startsWith(p));
       if (startsWithWakeWord) {
-        logger.info(`🎯 Wake word from non-owner embedding (confidence=${spkr.confidence} norm=${spkr.norm_score}) — passing to FSM gate`);
-        // Let it through — FSM gate will handle wake-up with unauthenticated session
+        logger.info(`🎯 Wake word from non-owner embedding (confidence=${spkr.confidence} norm=${spkr.norm_score}) - passing to FSM gate`);
+        // Let it through - FSM gate will handle wake-up with unauthenticated session
       } else {
         const isLong = rawTranscript.length > 80;
         if (spkr.confidence_tier === 'low' || spkr.norm_score < 0.5 || isLong) {
@@ -2466,8 +2491,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const spkrIsOwner = isVerifiedOwner(spkr, 'high');
     if (currentState === 'SLEEP') {
       // SLEEP wake logic:
-      // 1. Explicit "Jarvis" patterns (WAKE_UP_PATTERNS) — always allowed
-      // 2. Fuzzy wake (Whisper mishears: "Gerri's", "Gargis", "hey you") — only when HIGH confidence speaker
+      // 1. Explicit "Jarvis" patterns (WAKE_UP_PATTERNS) - always allowed
+      // 2. Fuzzy wake (Whisper mishears: "Gerri's", "Gargis", "hey you") - only when HIGH confidence speaker
       //    Medium confidence was getting is_owner=true (benefit-of-the-doubt) which let any
       //    vocative prefix ("thank", "yeah", etc.) match. Require HIGH tier in SLEEP only.
       // 3. Everything else → drop silently.
@@ -2478,7 +2503,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const sleepWakeMatch = strictWakeMatch || isWakeUpCommand(cleanTranscript, sleepSpkrVerified);
       if (sleepWakeMatch) {
         const wakeSpkr = sttResult?.speakerInfo;
-        // Allow wake word even with TV-corrupted embeddings — "Jarvis" is rare on TV.
+        // Allow wake word even with TV-corrupted embeddings - "Jarvis" is rare on TV.
         // Session stays unauthenticated so follow-up commands need clean speaker verify.
         transition('ACTIVE', 'wake-word');
         authCtx.isOwner = isVerifiedOwner(wakeSpkr, 'high');
@@ -2490,7 +2515,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const _wakeStripRe = new RegExp(`^(hey\\s+)?(${_wwStripEsc}|jarvis)[,.]?\\s*`, 'i');
         let stripped = rawTranscript.replace(_wakeStripRe, '').trim();
         if (stripped === rawTranscript.trim()) {
-          // Standard strip didn't match — try WAKE_WORD_PHRASES prefixes
+          // Standard strip didn't match - try WAKE_WORD_PHRASES prefixes
           const _matchedPhrase = WAKE_WORD_PHRASES.find(p => rawTranscript.toLowerCase().startsWith(p));
           if (_matchedPhrase) {
             stripped = rawTranscript.substring(_matchedPhrase.length).replace(/^[,.\s]+/, '').trim();
@@ -2511,14 +2536,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         }
       } else if (isAttentionWindowActive()) {
         // Post-speak attention window: Jarvis just reported a task result while in SLEEP.
-        // Routes through the central auth gate (context='attention') — same strictness as
+        // Routes through the central auth gate (context='attention') - same strictness as
         // a wake word. Any future auth changes in passesAuthGate apply here automatically.
         const { authorized: attentionAuth } = passesAuthGate(spkr, { context: 'attention' });
         if (!attentionAuth) {
-          logger.info(`👂 Post-speak attention window: auth gate rejected speaker (${spkrTag}) — keeping window open`);
-          return; // not the owner — drop silently, keep window open for the real user
+          logger.info(`👂 Post-speak attention window: auth gate rejected speaker (${spkrTag}) - keeping window open`);
+          return; // not the owner - drop silently, keep window open for the real user
         }
-        logger.info(`👂 Post-speak attention window: auth gate passed (${spkrTag}) — "${rawTranscript.substring(0, 60)}"`);
+        logger.info(`👂 Post-speak attention window: auth gate passed (${spkrTag}) - "${rawTranscript.substring(0, 60)}"`);
         transition('ACTIVE', 'post-speak-attention');
         authCtx.isOwner = true;
         authenticatedSession = true;
@@ -2561,7 +2586,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       }
     }
 
-    // Filter Whisper hallucinations — phantom phrases from silence/ambient
+    // Filter Whisper hallucinations - phantom phrases from silence/ambient
     if (isHallucination(rawTranscript)) {
       logger.info(`Whisper hallucination filtered: "${rawTranscript}"`);
       return;
@@ -2571,8 +2596,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     postToCC('🎤', rawTranscript);
 
     // ── Pre-wake-word sleep check (two-tier) ──
-    // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
-    // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
+    // Tier 1: Standalone sleep - pure sleep command, no task content → immediate sleep
+    // Tier 2: Sign-off + task - "we're good, check my email" → dispatch task, auto-sleep after
     const _wwPreSleepEsc = VOICE_WAKE_WORD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const _preSleepWakeRe = new RegExp(`\\b(jarvis|${_wwPreSleepEsc})\\b`, 'gi');
     const preSleepCheck = rawTranscript.toLowerCase().replace(/[.,!?]/g, '').replace(_preSleepWakeRe, '').trim();
@@ -2587,7 +2612,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     }
 
     // 2. Wake word check
-    // For fuzzy wake word: accept medium confidence tier too — Whisper mishears "Jarvis" as
+    // For fuzzy wake word: accept medium confidence tier too - Whisper mishears "Jarvis" as
     // phonetically similar words (Curtis, Gervas, jargos) which score medium, not high.
     // High confidence = strong match; medium = likely owner with codec degradation.
     const speakerLikelyOwner = isVerifiedOwner(spkr, 'medium');
@@ -2615,7 +2640,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           authenticatedSession = true;
           logger.info(`🔓 Session authenticated (passphrase override, confidence=${speakerInfo.confidence})`);
         } else {
-          // Speaker doesn't match on wake word — reject with throttled rebuff
+          // Speaker doesn't match on wake word - reject with throttled rebuff
           const now = Date.now();
           if (!handleSpeech._lastRebuff || now - handleSpeech._lastRebuff > REBUFF_COOLDOWN_MS) {
             handleSpeech._lastRebuff = now;
@@ -2664,8 +2689,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     resetIdleSleepTimer();
 
     // ── Sleep Mode (two-tier): Stop listening entirely until wake-up command ──
-    // Tier 1: Standalone sleep — pure sleep command, no task content → immediate sleep
-    // Tier 2: Sign-off + task — "we're good, check my email" → dispatch task, auto-sleep after
+    // Tier 1: Standalone sleep - pure sleep command, no task content → immediate sleep
+    // Tier 2: Sign-off + task - "we're good, check my email" → dispatch task, auto-sleep after
     const cleanLower = cleanedTranscript.toLowerCase().replace(/[.,!?]/g, '').trim();
     if (await fsmHandleSleepCheck(cleanLower, 'voice-command', userId, _pendingUtterance, synthesizeSpeech, audioQueue)) return;
     // If fsmHandleSleepCheck returned false with autoSleepAfterTask set, fall through to task dispatch
@@ -2687,14 +2712,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       }
     }
 
-    // 3. Stop words — dismiss phrases that don't need a response (length-gated)
+    // 3. Stop words - dismiss phrases that don't need a response (length-gated)
     const dismissResult = shouldDismiss(cleanedTranscript);
     if (dismissResult.dismiss) {
       logger.info(`🤚 Stop word dismissed (${dismissResult.reason}): "${cleanedTranscript}"`);
       return;
     }
 
-    // 3b. Side-talk — short non-directed speech in conversation window
+    // 3b. Side-talk - short non-directed speech in conversation window
     // Pass inConversationWindow so coherence gate doesn't drop short follow-up replies
     const inConvWindow = hasRecentContext(userId);
     if (isSideTalk(cleanedTranscript, wakeWordUsed, inConvWindow)) {
@@ -2702,7 +2727,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // 3c. Truncated fragment — VAD fired mid-sentence (pause > VAD_TIMEOUT).
+    // 3c. Truncated fragment - VAD fired mid-sentence (pause > VAD_TIMEOUT).
     // Silently drop rather than responding with "sounds like that got clipped."
     // Only applies when no wake word was used (wake-word utterances proceed regardless).
     if (!wakeWordUsed && isTruncatedFragment(rawTranscript)) {
@@ -2710,13 +2735,13 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // 3d. Low-confidence STT — Whisper produced a transcript but confidence is borderline.
+    // 3d. Low-confidence STT - Whisper produced a transcript but confidence is borderline.
     // Handle locally with a "say that again" prompt rather than passing to the LLM.
     // The LLM prompt previously said "LOW: ask once" which burned 10+ seconds and a full task cycle.
     const BORDERLINE_CONFIDENCE = parseFloat(process.env.BORDERLINE_CONFIDENCE || '0.55');
     const sttConfidence = sttResult?.sttMeta?.confidence;
     if (sttConfidence != null && sttConfidence < BORDERLINE_CONFIDENCE) {
-      logger.info(`🔇 Borderline STT confidence (${sttConfidence.toFixed(3)} < ${BORDERLINE_CONFIDENCE}) — local repeat prompt: "${rawTranscript.substring(0, 50)}"`);
+      logger.info(`🔇 Borderline STT confidence (${sttConfidence.toFixed(3)} < ${BORDERLINE_CONFIDENCE}) - local repeat prompt: "${rawTranscript.substring(0, 50)}"`);
       const repeatPhrases = ["Say that again?", "Come again?", "Didn't catch that, sir.", "Once more?", "Sorry, say again."];
       const phrase = repeatPhrases[Math.floor(Math.random() * repeatPhrases.length)];
       const audio = await synthesizeSpeech(phrase);
@@ -2725,10 +2750,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // 4. Bare wake word — just "Jarvis" / "Jarvis." / "Jarvis?" with no real command.
+    // 4. Bare wake word - just "Jarvis" / "Jarvis." / "Jarvis?" with no real command.
     const bareCheck = cleanedTranscript.replace(/[.,!?;:\-'"]/g, '').trim();
     if (!bareCheck || bareCheck.length === 0) {
-      logger.info(`🎯 Bare wake word — acknowledging`);
+      logger.info(`🎯 Bare wake word - acknowledging`);
       const acks = ['Sir?', 'At your service.', 'Yes, sir?', 'How can I help?', 'Listening.'];
       const ack = acks[Math.floor(Math.random() * acks.length)];
       const audio = await synthesizeSpeech(ack);
@@ -2741,7 +2766,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     lastInteractionTime = Date.now();
     lastUserMessage = cleanedTranscript.substring(0, 100);
 
-    // ── Command dispatch — routes mode toggles, enrollment, interrupts, shortcuts, or brain call ──
+    // ── Command dispatch - routes mode toggles, enrollment, interrupts, shortcuts, or brain call ──
     const dispatchResult = await dispatchCommand(rawTranscript, cleanedTranscript, userId, ALLOWED_USERS, enrollmentState);
 
     if (dispatchResult.type === 'mode_toggle') {
@@ -2920,13 +2945,13 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           try { ul(vp1); } catch {}
           try { ul(vp2); } catch {}
           await fetch(`${process.env.SPEAKER_VERIFY_URL?.replace('/verify', '') || 'http://localhost:8767'}/enroll/reset`, { method: 'POST' }).catch(() => {});
-          logger.info('Voiceprints wiped — starting fresh enrollment');
+          logger.info('Voiceprints wiped - starting fresh enrollment');
         } catch (e) { logger.error('Voiceprint wipe error:', e.message); }
         // Fall through to start enrollment below
       }
       if (dispatchResult.action === 'learn') {
         enrollmentState.start(userId, true);
-        logger.info('Learn mode started — adding samples to voiceprint');
+        logger.info('Learn mode started - adding samples to voiceprint');
         postToCC('🎙️ Learn Mode', 'Speak naturally. Each clip improves your voiceprint. Say **"done"** to save.');
         const audio = await synthesizeSpeech('Learn mode on. Just talk naturally and I\'ll add each clip to your voiceprint. Say done when finished.');
         if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
@@ -2938,12 +2963,12 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         logger.info(`Voice enrollment started -- ${enrollmentState.clipsNeeded} guided phrases`);
         postToCC('🎙️ Enrollment', [
           `Starting voice enrollment (${enrollmentState.clipsNeeded} phrases).`,
-          `**"retry"** — repeat the current phrase`,
-          `**"retry 5"** — jump back to phrase #5`,
-          `**"start over"** — restart from #1`,
-          `**"done"** — save early (min 3 clips)`,
-          `**"more"** — switch to learn mode after finishing`,
-          `**"cancel enrollment"** — abort`,
+          `**"retry"** - repeat the current phrase`,
+          `**"retry 5"** - jump back to phrase #5`,
+          `**"start over"** - restart from #1`,
+          `**"done"** - save early (min 3 clips)`,
+          `**"more"** - switch to learn mode after finishing`,
+          `**"cancel enrollment"** - abort`,
           `[1/${enrollmentState.clipsNeeded}] Repeat: **${firstPrompt}**`,
         ].join('\n'));
         const audio = await synthesizeSpeech(`Voice enrollment. ${enrollmentState.clipsNeeded} phrases. First: ${firstPrompt}`);
@@ -2971,7 +2996,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // ── Shortcut fast-path — handled without LLM ─────────────────────
+    // ── Shortcut fast-path - handled without LLM ─────────────────────
     if (dispatchResult.type === 'shortcut') {
       markBotResponse(userId);
       if (!dispatchResult.silent && dispatchResult.speech) {
@@ -2981,19 +3006,19 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
-    // dispatchResult.type === 'brain' — fall through to background brain call
+    // dispatchResult.type === 'brain' - fall through to background brain call
     const transcript = dispatchResult.transcript || cleanedTranscript;
 
-    // ── Background brain call (async — non-blocking) ──
-    
+    // ── Background brain call (async - non-blocking) ──
+
     if (!conversations.has(userId)) conversations.set(userId, { history: [], lastActive: Date.now() });
     const conv = conversations.get(userId);
     conv.lastActive = Date.now();
-    
+
     // Add user message to history immediately
     conv.history.push({ role: 'user', content: transcript });
     while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
-    
+
     // Resolve speaker display name for multi-user identification
     let speakerName = null;
     if (MULTI_USER_ENABLED) {
@@ -3003,7 +3028,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         speakerName = member?.displayName || member?.user?.username || null;
       } catch {}
     }
-    
+
     // ── Transcript deduplication (prevent duplicate answers) ──
     // If the same (or very similar) transcript was dispatched within the last 15s, skip it.
     const transcriptKey = transcript.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 80);
@@ -3021,10 +3046,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         if (now - t > 30000) handleSpeech._recentTranscripts.delete(k);
       }
     }
-    
+
     // Dispatch via utterance grouping (debounce rapid fragments into one task)
     queueUtterance(userId, transcript, conv, speakerName, sentiment);
-    
+
   } catch (err) {
     logger.error({ err }, `❌ Speech dispatch error: ${err.message}`);
     // Only give audio feedback for real STT service failures (not empty/ambient noise)
@@ -3041,7 +3066,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 }
 
 /**
- * Background brain task — runs concurrently, queues result for TTS
+ * Background brain task - runs concurrently, queues result for TTS
  * @param {number} taskId
  * @param {string} userId
  * @param {string} transcript
@@ -3059,25 +3084,25 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   // Phase 1: Generate a fast 1-sentence ack (haiku, no tools, ~1-2s)
   // Phase 2: Fire the real task via webhook (fire-and-forget, result via /speak)
   // This keeps the voice queue non-blocking regardless of tool call duration.
-  // No timeouts needed — phase 1 always returns, phase 2 runs until done.
+  // No timeouts needed - phase 1 always returns, phase 2 runs until done.
   // ─────────────────────────────────────────────────────────────────────
-  
+
   try {
     // Graceful degradation: if gateway is down, tell the user instead of failing silently
     if (isGatewayCircuitOpen()) {
-      logger.warn(`🔴 Task #${taskId} — gateway circuit breaker is open, informing user`);
+      logger.warn(`🔴 Task #${taskId} - gateway circuit breaker is open, informing user`);
       const degradedMsg = "I'm having trouble reaching my brain at the moment. Give me a moment to recover.";
       try {
         const audio = await synthesizeSpeech(degradedMsg);
         if (audio) audioQueue.add(audio);
       } catch (_) { /* TTS failure is non-fatal */ }
       await postToTextChannel(`⚠️ ${degradedMsg}`);
-      postActivity(`🔴 **Task #${taskId}** skipped — gateway circuit breaker open`);
+      postActivity(`🔴 **Task #${taskId}** skipped - gateway circuit breaker open`);
       return;
     }
 
     if (!isGatewayHealthy()) {
-      logger.warn(`🟡 Task #${taskId} — gateway unhealthy, proceeding with caution`);
+      logger.warn(`🟡 Task #${taskId} - gateway unhealthy, proceeding with caution`);
     }
 
     logger.info({ taskId, transcript: transcript.substring(0, 60), gatewayHealthy: isGatewayHealthy() }, '🧠 brain task processing');
@@ -3111,7 +3136,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     }
 
     // ── ACTION Intent → Webhook Dispatch (with tools) ─────────────────
-    // /v1/chat/completions has NO tool access — the model can't call sessions_spawn.
+    // /v1/chat/completions has NO tool access - the model can't call sessions_spawn.
     // For ACTION intents, dispatch via /hooks/agent which triggers a full agent turn
     // with tools. The result comes back via /speak callback. This is the ONLY path
     // that can actually execute actions.
@@ -3119,7 +3144,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     const intentType = brainOptions.intentType || 'QUERY';
     if (actionIntents.has(intentType)) {
       logger.info(`🚀 Task #${taskId} intent=${intentType} → webhook dispatch (full tools)`);
-      
+
       // Speak contextual ack while webhook processes
       if (contextualAckPromise) {
         try {
@@ -3142,8 +3167,8 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       if (webhookResult.dispatched) {
         markWorking(taskId);  // Ledger: task is now working via webhook
         hudTaskUpdate(taskId, 'working');
-        postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) — awaiting /speak callback`);
-        logger.info(`📨 Task #${taskId} dispatched successfully — result will arrive via /speak`);
+        postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) - awaiting /speak callback`);
+        logger.info(`📨 Task #${taskId} dispatched successfully - result will arrive via /speak`);
       } else {
         markFailed(taskId, webhookResult.error);  // Ledger: dispatch failed
         hudTaskUpdate(taskId, 'failed');
@@ -3165,7 +3190,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       onError: (err) => logger.error(`TTS pipeline error for task #${taskId}:`, err.message),
     });
     setTTSDeliveryActive(true);
-    
+
     // ── Streaming TTS with pipelined delivery ──────────────────────────
     // Strategy: accumulate text into moderate chunks (~80-200 chars) and
     // feed them to the TtsPipeline which pre-generates 3 sentences ahead.
@@ -3176,12 +3201,12 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // 2. Non-blocking: pipeline.add() returns immediately
     // 3. Smaller chunks flush sooner → first audio arrives faster
     // 4. <p> markers still create natural pauses between paragraphs
-    
+
     const BATCH_FLUSH_MIN = BATCH_FLUSH_MIN_CHARS;   // Min chars before flushing -- lower for faster first-audio
     const BATCH_FLUSH_MAX = BATCH_FLUSH_MAX_CHARS;  // Max chars before forced flush (keeps chunks digestible)
     let batchText = '';
     let batchNum = 0;
-    
+
     // Feed a chunk to the TTS pipeline (non-blocking)
     let lastFlushedText = '';
     const flushToPipeline = (text) => {
@@ -3203,7 +3228,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       }
       lastFlushedText = text;
 
-      // Self-mute queue intercept — capture text instead of synthesizing
+      // Self-mute queue intercept - capture text instead of synthesizing
       if (MUTE_QUEUE_ENABLED && isMuteQueueActive()) {
         muteQueueAdd(text, 'task', 3);
         logger.info(`🔇 Chunk intercepted → mute queue (${text.length} chars)`);
@@ -3212,13 +3237,13 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       batchNum++;
       logger.info(`🔊 Chunk #${batchNum}: ${text.length} chars → pipeline`);
-      // Mark this task as having spoken inline — suppresses redundant /speak task-progress voice
+      // Mark this task as having spoken inline - suppresses redundant /speak task-progress voice
       if (batchNum === 1) markTaskSpokeInline(taskId);
-      // Record in semantic dedup as we speak — prevents /speak task-progress from repeating
+      // Record in semantic dedup as we speak - prevents /speak task-progress from repeating
       recordInlineSpoken(text);
       ttsPipeline.add(text);
     };
-    
+
     const onScreenMode = process.env.ON_SCREEN || 'no_ack';
     const result = await generateResponseStreaming(transcript, history, signal, (sentence) => {
       sentence = trimForVoice(sentence);
@@ -3227,7 +3252,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       if (/^\s*_?(NO_?R?E?P?L?Y?|HEARTBEAT_?O?K?|NO)\s*[.!?]*\s*$/i.test(sentence)) return;
       // ON_SCREEN: suppress voice for screen-open confirmations
       if ((onScreenMode === 'no_ack' || onScreenMode === 'ack_post') && _isScreenSentence(sentence)) {
-        logger.info(`🔇 ON_SCREEN=${onScreenMode} — suppressing inline: "${sentence.substring(0, 60)}"`);
+        logger.info(`🔇 ON_SCREEN=${onScreenMode} - suppressing inline: "${sentence.substring(0, 60)}"`);
         fullResponse += sentence + ' ';
         return; // skip TTS, still accumulate text for logging
       }
@@ -3236,7 +3261,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       if (!firstAudioLogged) {
         firstAudioLogged = true;
-        cancelTaskAutoSleep(); // Result arriving — cancel auto-sleep
+        cancelTaskAutoSleep(); // Result arriving - cancel auto-sleep
         markStreaming(taskId);  // Ledger: first tokens received
         hudTaskUpdate(taskId, 'streaming');
         logger.info(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
@@ -3250,7 +3275,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         } else if (!isTTSAvailable()) {
           postToTextChannel(`🔇 ${sentence}`);
         } else {
-          // Handle <p> paragraph markers — flush before the break
+          // Handle <p> paragraph markers - flush before the break
           if (sentence.includes('<p>')) {
             const parts = sentence.split('<p>');
             batchText += parts[0] + ' ';
@@ -3271,11 +3296,11 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
                 flushToPipeline(batchText);
                 batchText = '';
               } else if (batchText.length > BATCH_FLUSH_MAX * 1.5) {
-                // Hard safety limit — flush even mid-sentence if way too long
+                // Hard safety limit - flush even mid-sentence if way too long
                 flushToPipeline(batchText);
                 batchText = '';
               }
-              // else: keep accumulating — text doesn't look like a complete sentence yet
+              // else: keep accumulating - text doesn't look like a complete sentence yet
             }
             batchText += sentence + ' ';
             // Also flush if batch already hit min and the BATCH ends on a sentence boundary
@@ -3288,7 +3313,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         }
       }
     }, brainOptions);
-    
+
     // Task was cancelled
     if (result.aborted) {
       markFailed(taskId, 'aborted');  // Ledger: task aborted
@@ -3297,15 +3322,16 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       ttsPipeline.clear();
       audioQueue.clear();
       setTTSDeliveryActive(false);
-      flushPendingSpeaks().catch(() => {});
+      // audioQueue.clear() fires onDrained immediately; scheduleFlushOnDrain handles any remainder
+      scheduleFlushOnDrain();
       postActivity(`**Task #${taskId}** cancelled after ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
       return;
     }
 
-    // Agent signal (NO_REPLY / HEARTBEAT_OK) — nothing to say, silent drop
+    // Agent signal (NO_REPLY / HEARTBEAT_OK) - nothing to say, silent drop
     // This is the primary indicator that a sub-agent was spawned.
     if (result.silent) {
-      logger.info(`🤫 Task #${taskId} silent/NO_REPLY (${((Date.now() - startTime) / 1000).toFixed(1)}s) — sub-agent likely spawned`);
+      logger.info(`🤫 Task #${taskId} silent/NO_REPLY (${((Date.now() - startTime) / 1000).toFixed(1)}s) - sub-agent likely spawned`);
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
@@ -3326,7 +3352,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // Empty response from gateway -- sub-agent spawned, callback expected via /speak
     if (result.empty) {
-      logger.info(`📭 Task #${taskId} empty response (${((Date.now() - startTime) / 1000).toFixed(1)}s) — sub-agent spawned, awaiting /speak callback`);
+      logger.info(`📭 Task #${taskId} empty response (${((Date.now() - startTime) / 1000).toFixed(1)}s) - sub-agent spawned, awaiting /speak callback`);
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
@@ -3349,10 +3375,11 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       }
       await ttsPipeline.drain();
       setTTSDeliveryActive(false);
-      await flushPendingSpeaks();
+      // Wait for audio playback to finish before flushing buffered /speak calls
+      scheduleFlushOnDrain();
       return;
     }
-    
+
     // ── Hallucination Detection ──────────────────────────────────────
     // If intent was ACTION but gateway returned spoken text (not NO_REPLY),
     // it likely hallucinated a response instead of calling sessions_spawn.
@@ -3363,7 +3390,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     const gatewayActuallySpoke = batchNum > 0; // at least one chunk went to TTS
     if (isActionIntent && gatewayActuallySpoke && !result.silent && !result.empty) {
       logger.warn(`⚠️  HALLUCINATION DETECTED: Task #${taskId} intent=${intentCategory} but gateway returned text instead of spawning. User heard: "${fullResponse.substring(0, 100)}..."`);
-      postActivity(`⚠️ **Task #${taskId}** possible hallucination — intent was ${intentCategory} but gateway spoke text instead of spawning a sub-agent.`);
+      postActivity(`⚠️ **Task #${taskId}** possible hallucination - intent was ${intentCategory} but gateway spoke text instead of spawning a sub-agent.`);
     }
 
     // Flush remaining text and wait for pipeline to finish
@@ -3372,11 +3399,12 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       flushToPipeline(batchText);
       batchText = '';
     }
-    // Wait for all queued TTS to finish generating and playing
+    // Wait for all TTS to finish generating; schedule flush once audio finishes playing
     await ttsPipeline.drain();
     setTTSDeliveryActive(false);
-    await flushPendingSpeaks();
-    
+    // Schedule /speak queue flush after audio fully drains — prevents interleaving
+    scheduleFlushOnDrain();
+
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     // Strip any leaked signal fragments from the final text
     const fullText = (result.text || fullResponse || '')
@@ -3384,7 +3412,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
       .trim();
     logger.info(`💬 Task #${taskId} done (${Date.now() - startTime}ms): "${fullText.substring(0, 80)}..."`);
-    // Post Jarvis response to CC — split if over 2000 chars
+    // Post Jarvis response to CC - split if over 2000 chars
     if (fullText) {
       const cleanCC = fullText
         .replace(/<p>/g, '\n\n')
@@ -3397,18 +3425,18 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         postToCC('🤖', cleanCC.substring(i, i + 1990));
       }
     }
-    
-    // enforceOutputLength retained for TL;DR mode only — no channel posting needed here
+
+    // enforceOutputLength retained for TL;DR mode only - no channel posting needed here
     // Full response is already in the task thread; streaming pipeline spoke everything.
     if (tldrModeEnabled) enforceOutputLength(fullText, true);
 
     // ── Smart Thread Routing: Always post to #hud as a thread when configured ──
-    // Groups results by intent category — same category within TTL continues the thread.
+    // Groups results by intent category - same category within TTL continues the thread.
     // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
     // When transcript mode is on, it replaces postTaskToThread to avoid double-posting.
     const transcriptModeEnabled = isTranscriptModeEnabled();
     if (transcriptModeEnabled && !userDisconnected) {
-      logger.info(`📝 Full transcript mode enabled — posting conversation as thread (task #${taskId})`);
+      logger.info(`📝 Full transcript mode enabled - posting conversation as thread (task #${taskId})`);
       await postTranscriptThread(taskId, transcript, fullText, duration);
     } else if (VOICE_REPORT_CHANNEL_ID && fullText && VOICE_THREAD_REPORTS_ENABLED) {
       const taskMeta = activeTasks.get(taskId);
@@ -3417,13 +3445,13 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       postTaskToThread(client, VOICE_REPORT_CHANNEL_ID, intentCategory, taskId, transcript, fullText, duration)
         .catch(err => logger.error(`[ThreadRouter] postTaskToThread failed for task #${taskId}: ${err.message}`));
     }
-    
+
     // ── Task Ledger: mark completion ──
     // Check if the response was just an ack (sub-agent spawned, real work pending)
     if (isJustAck(fullText)) {
       markWorking(taskId);
       hudTaskUpdate(taskId, 'working');
-      logger.info(`📋 Task #${taskId} response was just an ack — marked WORKING, awaiting /speak callback`);
+      logger.info(`📋 Task #${taskId} response was just an ack - marked WORKING, awaiting /speak callback`);
     } else {
       ledgerMarkCompleted(taskId, 'voice-streaming', fullText?.substring(0, 300));
       hudTaskUpdate(taskId, 'completed');
@@ -3432,7 +3460,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Post completion to activity feed
     postActivity(`✅ **Task #${taskId}** complete (${duration}s)\n> ${truncate(fullText, 120)}`);
 
-    // Keep focus fresh — touch timestamp so join briefing knows we were recently active.
+    // Keep focus fresh - touch timestamp so join briefing knows we were recently active.
     // Focus goes stale after 4h of inactivity and stops being announced on rejoin.
     touchFocus();
 
@@ -3448,15 +3476,15 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // Detect if response invites follow-up (extends conversation window)
     const followUp = detectFollowUpLikely(fullText);
-    if (followUp) logger.info(`📋 Response invites follow-up — extending conversation window`);
+    if (followUp) logger.info(`📋 Response invites follow-up - extending conversation window`);
     markBotResponse(userId, { followUpLikely: followUp });
 
     // ── Two-tier auto-sleep: sign-off phrase was embedded in a task request ──
     // The task is done, now transition to SLEEP as the user intended.
-    // No farewell — the task response itself was the last thing spoken.
+    // No farewell - the task response itself was the last thing spoken.
     const taskMeta = activeTasks.get(taskId);
     if (brainOptions.autoSleepAfterTask || taskMeta?.autoSleepAfterTask) {
-      logger.info(`Auto-sleep: task #${taskId} complete with sign-off — transitioning to SLEEP`);
+      logger.info(`Auto-sleep: task #${taskId} complete with sign-off - transitioning to SLEEP`);
       transition('SLEEP', 'auto-sleep-after-task');
       authenticatedSession = false;
       endConversationWindow(userId);
@@ -3469,7 +3497,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       pendingAlertBriefingForUser = null;
       setImmediate(() => briefPendingAlerts(uid));
     }
-    
+
   } catch (err) {
     if (err.name !== 'AbortError') {
       markFailed(taskId, err.message);  // Ledger: task failed
@@ -3542,7 +3570,7 @@ function prependSilence(audioPath, durationMs) {
     const channels = buf.readUInt16LE(22);
     const sampleRate = buf.readUInt32LE(24);
     const bitsPerSample = buf.readUInt16LE(34);
-    // Find 'data' chunk — not always at offset 36
+    // Find 'data' chunk - not always at offset 36
     let dataOffset = 12;
     while (dataOffset < buf.length - 8) {
       const chunkId = buf.toString('ascii', dataOffset, dataOffset + 4);
@@ -3602,7 +3630,7 @@ async function playAudioEnhanced(audioPath) {
   const { createReadStream: crs, statSync: fstatSync } = await import('fs');
   const fileStat = fstatSync(audioPath);
   // WAV at 24000 Hz, 16-bit mono = 48000 bytes/sec (Chatterbox TTS native format).
-  // Previous formula used 22050 Hz (44100 bytes/sec) — off by 8.5%; corrected to 24000 Hz.
+  // Previous formula used 22050 Hz (44100 bytes/sec) - off by 8.5%; corrected to 24000 Hz.
   const isWav = audioPath.endsWith('.wav');
   const bytesPerSec = isWav ? 48000 : 16000; // WAV 24000Hz mono 16-bit (Chatterbox) : MP3 ~128kbps
   const estimatedDurationMs = Math.max(1500, (fileStat.size / bytesPerSec) * 1000);
@@ -3620,7 +3648,7 @@ async function playAudioEnhanced(audioPath) {
     const finish = (reason) => {
       if (resolved) return;
       resolved = true;
-      // Remove ALL listeners we attached — prevents accumulation
+      // Remove ALL listeners we attached - prevents accumulation
       player.removeListener(AudioPlayerStatus.Idle, onIdle);
       player.removeListener('error', onError);
       if (timeoutId) clearTimeout(timeoutId);
@@ -3629,11 +3657,11 @@ async function playAudioEnhanced(audioPath) {
       if (standalonePlay) serverMuteOwner(false);
       resolve();
     };
-    
+
     onIdle = () => {
       const elapsed = Date.now() - playStart;
       // Guard against spurious Idle before audio actually starts playing.
-      // 500ms is enough — no real audio completes faster than that.
+      // 500ms is enough - no real audio completes faster than that.
       if (elapsed < 500) {
         player.once(AudioPlayerStatus.Idle, onIdle);
         return;
@@ -3641,12 +3669,12 @@ async function playAudioEnhanced(audioPath) {
       bargeInEvents.clear();
       finish('idle');
     };
-    
+
     player.once(AudioPlayerStatus.Idle, onIdle);
     onError = () => finish('error');
     player.once('error', onError);
-    
-    // Safety timeout: 2x estimated but cap at 15s — no single TTS sentence should take longer
+
+    // Safety timeout: 2x estimated but cap at 15s - no single TTS sentence should take longer
     timeoutId = setTimeout(() => finish('timeout'), Math.min(estimatedDurationMs * 2, 15000));
     checkInterval = setInterval(() => {
       if (Date.now() - playStart >= estimatedDurationMs && player.state.status === AudioPlayerStatus.Idle) {
@@ -3696,7 +3724,7 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error('❌ Unhandled Promise Rejection:');
   logger.error('Promise:', promise);
   logger.error('Reason:', reason instanceof Error ? reason.stack : reason);
-  logger.error('⚠️  Attempting graceful degradation — bot remains running');
+  logger.error('⚠️  Attempting graceful degradation - bot remains running');
 });
 
 process.on('uncaughtException', (err) => {
@@ -3744,7 +3772,7 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-// STT provider health check — warns if local provider unreachable, never exits
+// STT provider health check - warns if local provider unreachable, never exits
 checkSttHealth().catch(() => {});
 
 client.login(process.env.DISCORD_TOKEN);
