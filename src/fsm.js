@@ -267,13 +267,19 @@ export async function handleSleepCheck(transcript, transitionReason, userId, pen
   _clearPendingUtterance();
   _setAuthenticatedSession(false);
   endConversationWindow(userId);
-  const isConversational = /\b(sounds?\s*good|thanks?|thank\s*you|cheers|talk\s*to\s*you|catch\s*you|have\s*a\s*good|appreciate|later|all\s*set|im\s*(good|done|all set))\b/i.test(transcript);
-  const farewells = isConversational
-    ? ['Anytime, sir.', 'Of course.', 'Very good, sir.', 'Cheers.']
-    : ['Going quiet. Just say my name when you need me.'];
-  const farewell = farewells[Math.floor(Math.random() * farewells.length)];
-  const ack = await synthesizeSpeech(farewell);
-  if (ack) { audioQueue.add(ack); }
+
+  // "talking to myself" — user was not addressing Jarvis; go silent with NO_REPLY.
+  // Any other sleep trigger gets a brief farewell acknowledgment.
+  const isSelfTalk = /\btalking\s+to\s+myself\b/i.test(transcript);
+  if (!isSelfTalk) {
+    const isConversational = /\b(sounds?\s*good|thanks?|thank\s*you|cheers|talk\s*to\s*you|catch\s*you|have\s*a\s*good|appreciate|later|all\s*set|im\s*(good|done|all set))\b/i.test(transcript);
+    const farewells = isConversational
+      ? ['Anytime, sir.', 'Of course.', 'Very good, sir.', 'Cheers.']
+      : ['Going quiet. Just say my name when you need me.'];
+    const farewell = farewells[Math.floor(Math.random() * farewells.length)];
+    const ack = await synthesizeSpeech(farewell);
+    if (ack) { audioQueue.add(ack); }
+  }
   return true;
 }
 

@@ -178,6 +178,10 @@ const SLEEP_PATTERNS = [
   // "Thank you Jarvis" / "Jarvis, thank you" / "Thanks Jarvis" — direct sleep
   /\b(thanks?(\s*you)?)\s*(very\s*much\s*)?jarvis\b/i,
   /\bjarvis\s*,?\s*(thanks?(\s*you)?)\b/i,
+  // "talking to myself" — sleep word: user was not addressing Jarvis.
+  // Matches: "talking to myself", "I'm talking to myself", "I was talking to myself",
+  //          "just talking to myself", "sorry, talking to myself", etc.
+  /\btalking\s+to\s+myself\b/i,
 ];
 
 // Compound sign-offs: "sounds good" / "thank you" / "thanks" + jarvis or sign-off word.

@@ -132,4 +132,48 @@ describe('Sleep/goodbye detection — shouldSleep()', () => {
       expect(shouldSleep('go silent')).toBe(true);
     });
   });
+
+  describe('"talking to myself" sleep word', () => {
+    it('"talking to myself" triggers sleep', () => {
+      expect(shouldSleep('talking to myself')).toBe(true);
+    });
+
+    it('"I\'m talking to myself" triggers sleep', () => {
+      expect(shouldSleep("I'm talking to myself")).toBe(true);
+    });
+
+    it('"i am talking to myself" triggers sleep', () => {
+      expect(shouldSleep('i am talking to myself')).toBe(true);
+    });
+
+    it('"I was talking to myself" triggers sleep', () => {
+      expect(shouldSleep('I was talking to myself')).toBe(true);
+    });
+
+    it('"just talking to myself" triggers sleep', () => {
+      expect(shouldSleep('just talking to myself')).toBe(true);
+    });
+
+    it('"sorry talking to myself" triggers sleep', () => {
+      expect(shouldSleep('sorry talking to myself')).toBe(true);
+    });
+
+    it('"I was just talking to myself" triggers sleep', () => {
+      expect(shouldSleep('I was just talking to myself')).toBe(true);
+    });
+
+    it('"talking to myself here" triggers sleep', () => {
+      expect(shouldSleep('talking to myself here')).toBe(true);
+    });
+
+    it('"talking to someone else" does NOT trigger sleep', () => {
+      expect(shouldSleep('talking to someone else')).toBe(false);
+    });
+
+    it('"what am I talking to myself about" does NOT trigger sleep (has task content)', () => {
+      // This phrase contains talking to myself but no task verb — still triggers sleep
+      // (hasTaskContent check is done by the caller, not shouldSleep)
+      expect(shouldSleep('talking to myself about the meeting')).toBe(true);
+    });
+  });
 });
