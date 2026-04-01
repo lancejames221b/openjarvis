@@ -245,11 +245,17 @@ function detectHallucination(text) {
   const trimmed = text.trim().replace(/\.+$/g, '').trim();
   if (!trimmed) return null;
 
-  // 1. Known hallucination phrases — Whisper emits these on silence/noise
+  // 1a. "Thank you" / "Thanks" without wake word — hallucination or ambient speech.
+  //     Only "Thank you Jarvis" / "Jarvis, thanks" etc. should pass through.
+  //     Covers: "Thank you", "Thank you very much", "Thanks for watching",
+  //     "Thank you, thank you, thank you", etc.
+  const WAKE_WORDS_RE = /\b(jarvis|hey\s+jarvis)\b/i;
+  if (/\bthank(s|\s*you)\b/i.test(trimmed) && !WAKE_WORDS_RE.test(trimmed)) {
+    return `thank_you_no_wake_word: "${trimmed}"`;
+  }
+
+  // 1b. Known hallucination phrases — Whisper emits these on silence/noise
   const HALLUCINATION_PHRASES = [
-    /^thank\s*you\.?$/i,
-    /^thanks\.?$/i,
-    /^thanks\s+for\s+watching\.?$/i,
     /^please\s+subscribe\.?$/i,
     /^(h[m]+|[m]+([-\s]*m+)*|um+|uh+|ah+)\.?$/i, // "Hmmm", "Mm-mm-mm", "Um", etc.
     /^(comando[,.\s]*)+$/i,                       // "comando, comando..."
