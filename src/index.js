@@ -2215,8 +2215,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       sentiment = sttResult.sentiment;
       needsEnrollment = !!sttResult.needsEnrollment;
 
-      // no_speech / low_confidence are silent drops (from Silero VAD / Whisper confidence)
+      // no_speech / low_confidence / hallucination are silent drops
       if (sttResult.rejected) {
+        // Log filtered transcripts to CC channel for debugging
+        if (CC_CHANNEL_ID && (sttResult.rejected !== 'no_speech')) {
+          const reason = sttResult.hallucinationReason || sttResult.rejected;
+          const ccChannel = client.channels.cache.get(CC_CHANNEL_ID);
+          if (ccChannel) ccChannel.send(`\`[FILTERED]\` ${reason}`).catch(() => {});
+        }
         try { unlinkSync(wavPath); } catch {}
         return;
       }

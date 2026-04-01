@@ -266,9 +266,59 @@ function detectHallucination(text) {
     /^good\s*bye\.?$/i,
     /^so[,.\s]*$/i,
     /^\s*\.\s*$/,
+    /^yes\.?$/i,
+    /^no\.?$/i,
+    /^hey\.?$/i,
+    /^hi\.?$/i,
+    /^hello\.?$/i,
+    /^oh\.?$/i,
+    /^right\.?$/i,
+    /^well\.?$/i,
+    /^what\.?$/i,
+    /^the\.?$/i,
+    /^a\.?$/i,
+    /^I\.?$/i,
+    /^it\.?$/i,
+    /^and\.?$/i,
+    /^or\.?$/i,
+    /^but\.?$/i,
+    /^for\.?$/i,
+    /^that\.?$/i,
+    /^this\.?$/i,
+    /^is\.?$/i,
+    /^was\.?$/i,
+    /^not\.?$/i,
+    /^do\.?$/i,
+    /^go\.?$/i,
+    /^here\.?$/i,
+    /^there\.?$/i,
+    /^one\.?$/i,
+    /^all right\.?$/i,
+    /^alright\.?$/i,
+    /^yeah\.?$/i,
+    /^yep\.?$/i,
+    /^nah\.?$/i,
+    /^nope\.?$/i,
+    /^huh\.?$/i,
+    /^(la[, ]*)+$/i,                               // "la la la la"
+    /^(na[, ]*)+$/i,                               // "na na na"
+    /^(da[, ]*)+$/i,                               // "da da da"
+    /^music\s*playing\.?$/i,                        // "[music playing]" type captions
+    /^\[.*\]$/,                                     // anything in brackets (subtitle notation)
+    /^subtitle/i,                                   // "subtitles by..."
+    /^transcript/i,                                 // "transcribed by..."
   ];
   for (const re of HALLUCINATION_PHRASES) {
     if (re.test(trimmed)) return `hallucination_phrase: "${trimmed}"`;
+  }
+
+  // 1c. Single-word gate — a lone word that isn't the wake word is almost never a real command
+  //     Only "Jarvis" by itself should pass (wake word activation)
+  {
+    const words = trimmed.split(/\s+/);
+    if (words.length === 1 && !/^jarvis$/i.test(words[0])) {
+      return `single_word_not_wake: "${trimmed}"`;
+    }
   }
 
   // 2. Counting/numbering hallucination — "1. 2. 3. 4. 5." or "1, 2, 3, 4, 5"
