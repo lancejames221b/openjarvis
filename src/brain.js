@@ -1133,10 +1133,11 @@ export async function dispatchViaWebhook(userMessage, history = [], options = {}
   // Wrap the voice message with delivery instructions
   const hookMessage = `${voiceMessage}
 
-IMPORTANT: After generating your response, deliver it by running this command:
-curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_RESPONSE_HERE","source":"voice-callback"}'
-
-Replace YOUR_RESPONSE_HERE with your actual spoken response (escaped for JSON). This is how the voice bot receives your answer.`;
+DELIVERY INSTRUCTIONS:
+1. Post detailed results to Discord #hud (channel: discord, target: channel:${_voiceReportChannel}).
+2. Then speak a 1-2 sentence TL;DR summary via this curl:
+curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_TLDR_HERE","source":"task-progress"}'
+Replace YOUR_TLDR_HERE with a brief spoken summary (escaped for JSON).`;
 
   try {
     const res = await fetch(HOOKS_AGENT_URL, {
