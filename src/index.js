@@ -305,15 +305,20 @@ setInterval(() => {
 // Speaks "I seem to have lost track of that one" for tasks stalled >30s with no result.
 // Caps activeTasks at 5 - clears oldest with "Clearing backlog" speak if exceeded.
 const _spokeLostTrackFor = new Set();
+// Tasks whose inline response arrived too late (>STALE_INLINE_MS) — subsequent
+// onSentence calls are silently dropped.  /speak callback still delivers.
+const _staleInlineTasks = new Set();
 setInterval(() => {
   try {
     const now = Date.now();
-    // Stall detection: speak if task has been in-flight >30s without completion
+    // Stall detection: log if task has been in-flight >30s without completion.
+    // No longer speaks "lost track" — it was firing on slow-but-valid gateway
+    // responses, adding TTS noise and delaying real answers. The stale inline
+    // gate (STALE_INLINE_MS) handles dropping responses that arrive too late.
     for (const [taskId, taskMeta] of activeTasks) {
       if (now - taskMeta.startTime > 30000 && !_spokeLostTrackFor.has(taskId)) {
         _spokeLostTrackFor.add(taskId);
-        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round((now - taskMeta.startTime)/1000)}s - speaking lost-track`);
-        speakPhrase('I seem to have lost track of that one, sir.').catch(() => {});
+        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round((now - taskMeta.startTime)/1000)}s (silent — stale gate will handle)`);
       }
     }
     // Backlog cap: if >5 pending tasks, clear oldest and speak
@@ -324,6 +329,7 @@ setInterval(() => {
         markFailed(id, 'backlog-cleared');
         activeTasks.delete(id);
         _spokeLostTrackFor.delete(id);
+        _staleInlineTasks.delete(id);
       }
       speakPhrase('Clearing backlog, sir.').catch(() => {});
       logger.warn(`📋 Cleared ${toClear.length} oldest task(s) from backlog (cap=5)`);
@@ -3261,11 +3267,26 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       if (!firstAudioLogged) {
         firstAudioLogged = true;
+        const taskAgeMs = Date.now() - startTime;
         cancelTaskAutoSleep(); // Result arriving - cancel auto-sleep
         markStreaming(taskId);  // Ledger: first tokens received
         hudTaskUpdate(taskId, 'streaming');
-        logger.info(`⏱️  Task #${taskId} first sentence: ${Date.now() - startTime}ms`);
+        logger.info(`⏱️  Task #${taskId} first sentence: ${taskAgeMs}ms`);
+
+        // ── Staleness gate: drop inline responses that arrive way too late ──
+        // If the gateway took >45s to produce the first sentence, the user has
+        // moved on.  The /speak callback from sub-agents will deliver the real
+        // answer; speaking a stale inline response now just confuses things.
+        const STALE_INLINE_MS = parseInt(process.env.STALE_INLINE_MS ?? '45000');
+        if (taskAgeMs > STALE_INLINE_MS) {
+          logger.warn(`⏭️  Task #${taskId} inline response STALE (${Math.round(taskAgeMs/1000)}s > ${STALE_INLINE_MS/1000}s threshold) — dropping TTS, /speak callback will deliver`);
+          _staleInlineTasks.add(taskId);
+          return;
+        }
       }
+
+      // Skip TTS for tasks already marked stale (subsequent sentences after the first)
+      if (_staleInlineTasks.has(taskId)) return;
 
       logger.info(`📨 Task #${taskId} onSentence: "${sentence.substring(0, 60)}..." (${sentence.length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected}, ttsAvail=${isTTSAvailable()})`);
 
@@ -3512,6 +3533,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   } finally {
     // Guarantee task cleanup regardless of success/failure/abort
     activeTasks.delete(taskId);
+    _staleInlineTasks.delete(taskId);
   }
 }
 
