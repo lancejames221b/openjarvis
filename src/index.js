@@ -2569,8 +2569,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     lastInteractionTime = Date.now();
     lastUserMessage = cleanedTranscript.substring(0, 100);
 
-    // ── Command dispatch — routes mode toggles, enrollment, interrupts, or brain call ──
-    const dispatchResult = dispatchCommand(rawTranscript, cleanedTranscript, userId, ALLOWED_USERS, enrollmentState);
+    // ── Command dispatch — routes mode toggles, enrollment, interrupts, shortcuts, or brain call ──
+    const dispatchResult = await dispatchCommand(rawTranscript, cleanedTranscript, userId, ALLOWED_USERS, enrollmentState);
 
     if (dispatchResult.type === 'mode_toggle') {
       if (dispatchResult.mode === 'tldr' && dispatchResult.success) {
@@ -2753,6 +2753,16 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       markBotResponse(userId);
       const chime = await synthesizeSpeech('Yes?');
       if (chime) { playAudioEnhanced(chime).then(() => { try { unlinkSync(chime); } catch {} }).catch(() => {}); }
+      return;
+    }
+
+    // ── Shortcut fast-path — handled without LLM ─────────────────────
+    if (dispatchResult.type === 'shortcut') {
+      markBotResponse(userId);
+      if (!dispatchResult.silent && dispatchResult.speech) {
+        const ack = await synthesizeSpeech(dispatchResult.speech);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
       return;
     }
 

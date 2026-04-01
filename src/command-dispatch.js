@@ -5,6 +5,7 @@
  */
 
 import logger from './logger.js';
+import { tryShortcut } from './shortcut-engine.js';
 import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from './tldr-mode.js';
 import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
@@ -40,7 +41,7 @@ const STOP_WORDS = ['sounds good', 'thank you', 'thanks', 'obviously', 'ok', 'ok
  * @returns {object} dispatch result:
  *   { type: 'mode_toggle' | 'enrollment' | 'interrupt' | 'stop_word' | 'side_talk' | 'bare_wake' | 'brain', ... }
  */
-export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowedUsers, enrollmentState) {
+export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowedUsers, enrollmentState) {
   const isAdmin = allowedUsers.includes(userId);
 
   // ── TL;DR mode toggle ──────────────────────────────────────────────
@@ -191,6 +192,12 @@ export function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowe
   // Note: wakeWordUsed must be passed in; extracted from checkWakeWord result upstream
   // We can't call checkWakeWord here without the full pipeline context.
   // Callers must check isSideTalk separately if needed.
+
+  // ── Shortcut fast-path (bypasses LLM for known commands) ────────────
+  const shortcutResult = await tryShortcut(cleanedTranscript, null);
+  if (shortcutResult.handled) {
+    return { type: 'shortcut', speech: shortcutResult.speech, silent: shortcutResult.silent };
+  }
 
   // ── Brain call ────────────────────────────────────────────────────
   return { type: 'brain', transcript: cleanedTranscript };
