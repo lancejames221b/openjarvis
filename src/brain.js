@@ -1150,6 +1150,7 @@ Replace YOUR_RESPONSE_HERE with your actual spoken response (escaped for JSON). 
         message: hookMessage,
         sessionKey: getActiveSessionUser(),
         wakeMode: 'now',
+        model: voiceModel || undefined,  // Use same model as voice (max/claude-sonnet-4-6)
       }),
     });
 
