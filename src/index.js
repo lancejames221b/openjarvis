@@ -3435,7 +3435,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // ── Full Transcript Mode: Post complete back-and-forth conversation as thread ──
     // When transcript mode is on, it replaces postTaskToThread to avoid double-posting.
     const transcriptModeEnabled = isTranscriptModeEnabled();
-    if (transcriptModeEnabled && !userDisconnected) {
+    if (transcriptModeEnabled && !userDisconnected && VOICE_THREAD_REPORTS_ENABLED) {
       logger.info(`📝 Full transcript mode enabled - posting conversation as thread (task #${taskId})`);
       await postTranscriptThread(taskId, transcript, fullText, duration);
     } else if (VOICE_REPORT_CHANNEL_ID && fullText && VOICE_THREAD_REPORTS_ENABLED) {
