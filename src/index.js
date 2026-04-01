@@ -1300,17 +1300,14 @@ export function markTaskSpokeInline(taskId) {
 
 export function didTaskSpeakInline(taskId) {
   const now = Date.now();
-  // If taskId given, check specific task first
+  // Only suppress if we have a specific taskId match — never suppress based on
+  // "some other task spoke recently". The old 10s ANY-task fallback was eating
+  // legitimate sub-agent /speak callbacks. Sub-agents now include taskId in their
+  // curl calls; if they don't, we let the speech through (better to double-speak
+  // than to silently swallow a result).
   if (taskId) {
     const ts = _taskSpokeInline.get(taskId);
     if (ts && (now - ts) < TASK_SPOKE_TTL_MS) return true;
-  }
-  // Fallback: if no taskId (sub-agent /speak curl doesn't include it), check if ANY
-  // task spoke inline in the last 10s. This prevents sub-agent kickoff /speak from
-  // double-speaking when the main task already emitted an inline TTS response.
-  const RECENT_WINDOW_MS = 10_000;
-  for (const ts of _taskSpokeInline.values()) {
-    if (now - ts < RECENT_WINDOW_MS) return true;
   }
   return false;
 }
@@ -2971,6 +2968,19 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       return;
     }
     
+    // ── Hallucination Detection ──────────────────────────────────────
+    // If intent was ACTION but gateway returned spoken text (not NO_REPLY),
+    // it likely hallucinated a response instead of calling sessions_spawn.
+    // Log a warning so we can track this. The text still plays (better than
+    // silence), but this makes the failure visible.
+    const intentCategory = brainOptions.intentType || 'QUERY';
+    const isActionIntent = ['ACTION', 'EMAIL_ACTION', 'CALENDAR_ACTION'].includes(intentCategory);
+    const gatewayActuallySpoke = batchNum > 0; // at least one chunk went to TTS
+    if (isActionIntent && gatewayActuallySpoke && !result.silent && !result.empty) {
+      logger.warn(`⚠️  HALLUCINATION DETECTED: Task #${taskId} intent=${intentCategory} but gateway returned text instead of spawning. User heard: "${fullResponse.substring(0, 100)}..."`);
+      postActivity(`⚠️ **Task #${taskId}** possible hallucination — intent was ${intentCategory} but gateway spoke text instead of spawning a sub-agent.`);
+    }
+
     // Flush remaining text and wait for pipeline to finish
     logger.info(`📊 Task #${taskId} final flush check: batchText="${batchText.substring(0, 40)}..." (${batchText.trim().length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected})`);
     if (batchText.trim().length > 0 && !tldrModeEnabled && !userDisconnected) {
