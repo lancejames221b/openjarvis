@@ -175,6 +175,9 @@ const SLEEP_PATTERNS = [
   /\ball\s*set\b/i, /\bwe\s*re\s*(good|done|all set)\b/i,
   /\bim\s*all\s*(good|set|done)\b/i,
   /\bhave\s*a\s*good\s*(one|night|evening|day|morning)/i,
+  // "Thank you Jarvis" / "Jarvis, thank you" / "Thanks Jarvis" — direct sleep
+  /\b(thanks?(\s*you)?)\s*(very\s*much\s*)?jarvis\b/i,
+  /\bjarvis\s*,?\s*(thanks?(\s*you)?)\b/i,
 ];
 
 // Compound sign-offs: "sounds good" / "thank you" / "thanks" + jarvis or sign-off word.
