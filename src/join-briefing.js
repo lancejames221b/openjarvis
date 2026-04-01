@@ -22,7 +22,7 @@
 import { exec as _exec } from 'child_process';
 import { promisify } from 'util';
 import logger from './logger.js';
-import { getFocus } from './focus-state.js';
+import { getFocus, isFocusFresh } from './focus-state.js';
 
 const execAsync = promisify(_exec);
 
@@ -112,9 +112,12 @@ export async function generateBriefing() {
     }
   }
 
-  // 3. Current focus
+  // 3. Current focus — only announce if set within the last 4 hours.
+  // Stale focus (e.g. "plex" from days ago) is restored silently for context
+  // injection but not spoken on join. "Focus follows last task" — if focus is
+  // old, it's no longer the active context and shouldn't be announced.
   const focus = getFocus();
-  if (focus) {
+  if (focus && isFocusFresh(4)) {
     parts.push(`Currently focused on ${focus.channelName}`);
   }
 

@@ -41,6 +41,7 @@ import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
+import { touchFocus } from './focus-state.js';
 import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped — voice bot is a thin pipe, no ack tracking needed
@@ -3231,6 +3232,10 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
     // Post completion to activity feed
     postActivity(`✅ **Task #${taskId}** complete (${duration}s)\n> ${truncate(fullText, 120)}`);
+
+    // Keep focus fresh — touch timestamp so join briefing knows we were recently active.
+    // Focus goes stale after 4h of inactivity and stops being announced on rejoin.
+    touchFocus();
 
     // Record in semantic dedup so /speak task-progress won't double-speak similar content
     if (fullText && fullText.length > 10) recordInlineSpoken(fullText);

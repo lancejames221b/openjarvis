@@ -129,6 +129,31 @@ export function hasFocus() {
 }
 
 /**
+ * Check if the current focus was set recently enough to be considered fresh.
+ * "Fresh" means it was set within the last `maxAgeHours` hours (default 4h).
+ * Used to suppress stale focus announcements on join — e.g. "focused on plex"
+ * from a session that ended days ago.
+ * @param {number} [maxAgeHours=4]
+ * @returns {boolean}
+ */
+export function isFocusFresh(maxAgeHours = 4) {
+  if (!_focus?.setAt) return false;
+  const ageMs = Date.now() - new Date(_focus.setAt).getTime();
+  return ageMs < maxAgeHours * 60 * 60 * 1000;
+}
+
+/**
+ * Refresh the focus timestamp to "now" without changing the channel.
+ * Called on each voice task completion so active focus stays fresh.
+ * Focus goes stale (and stops announcing on join) after 4h of inactivity.
+ */
+export function touchFocus() {
+  if (!_focus) return;
+  _focus.setAt = new Date().toISOString();
+  _saveState(_focus);
+}
+
+/**
  * Build structured references for a channel — actionable paths, tools, commands.
  * @param {string} channelId
  * @param {object} channelData — registry entry
