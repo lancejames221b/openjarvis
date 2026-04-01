@@ -273,9 +273,16 @@ const STOP_PREFIXES = [
  * @param {string} text - Cleaned transcript (post wake-word strip)
  * @returns {{ dismiss: boolean, reason?: string }}
  */
+
+// Phrases that explicitly signal the speaker was talking to themselves — not directing Jarvis.
+// Silently dropped regardless of utterance length or whether a wake word was used.
+const SELF_TALK_RE = /\b(i(?:'m| am| was)(?: just)? talking to (my|our)self|talking to (my|our)self|never mind[, ]+i was talking to myself|sorry[, ]+i was talking to myself|i(?:'m| am) just talking to myself)\b/i;
+
 export function shouldDismiss(text) {
   const clean = text.toLowerCase().replace(/[.,!?']/g, '').trim();
   const words = clean.split(/\s+/);
+  // Self-talk: speaker was not addressing Jarvis — always silent, no word-count gate
+  if (SELF_TALK_RE.test(clean)) return { dismiss: true, reason: 'self-talk' };
   if (STOP_WORDS_EXACT.has(clean)) return { dismiss: true, reason: 'stop-word' };
   if (getExtraStopWords().includes(clean)) return { dismiss: true, reason: 'stop-word-extra' };
   if (words.length <= 5 && STOP_PREFIXES.some(p => clean.startsWith(p))) {
