@@ -265,7 +265,22 @@ function detectHallucination(text) {
     if (re.test(trimmed)) return `hallucination_phrase: "${trimmed}"`;
   }
 
-  // 2. Repetitive sequence detector — catches "A, B, C, A, B, C" loops
+  // 2. Counting/numbering hallucination — "1. 2. 3. 4. 5." or "1, 2, 3, 4, 5"
+  //    Whisper hallucinates sequential numbers on silence/noise
+  {
+    // Strip all non-alphanumeric except spaces, check if it's mostly numbers
+    const stripped = trimmed.replace(/[.,;:!\s]+/g, ' ').trim();
+    const tokens2 = stripped.split(/\s+/);
+    if (tokens2.length >= 4) {
+      const numCount = tokens2.filter(t => /^\d+$/.test(t)).length;
+      const ratio = numCount / tokens2.length;
+      if (ratio >= 0.7) {
+        return `counting_hallucination: ${numCount}/${tokens2.length} tokens are numbers (${(ratio * 100).toFixed(0)}%)`;
+      }
+    }
+  }
+
+  // 3. Repetitive sequence detector — catches "A, B, C, A, B, C" loops
   //    Split into tokens, look for a repeating subsequence covering >60% of tokens
   const tokens = trimmed.split(/[\s,]+/).filter(t => t.length > 0).map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''));
   if (tokens.length >= 4) {
@@ -284,7 +299,7 @@ function detectHallucination(text) {
     }
   }
 
-  // 3. Brand-name soup — transcript is mostly comma-separated proper nouns with no verbs
+  // 4. Brand-name soup — transcript is mostly comma-separated proper nouns with no verbs
   //    Heuristic: if >70% of "words" are title-cased or known brands and there's no verb
   const words = trimmed.split(/[\s,]+/).filter(w => w.length > 1);
   if (words.length >= 3) {
