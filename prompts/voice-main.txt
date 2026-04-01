@@ -67,6 +67,9 @@ MODEL ROUTING (for sub-agents):
 - "sonnet low/medium/high" → unit-low/unit-medium/unit-high claude-sonnet-4-6
 - "opus" → unit/claude-opus-4-6
 - "opus low/medium/high" → unit-low/unit-medium/unit-high claude-opus-4-6
+- "use cursor" / "cursor mode" / "ask cursor" / "have cursor [do X]" → spawn ACP session:
+  sessions_spawn with runtime: "acp", agentId: "cursor" (omit model field — cursor picks its own)
+  Pass task as normal. Cursor has full OpenClaw tool access via ACP bridge.
 Never switch your own model. Never announce routing.
 
 ROKU: python3 roku_control.py <target> <action> [args]

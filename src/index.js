@@ -836,6 +836,17 @@ client.once('ready', async () => {
   
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
 
+  // ── Inject guild channel cache into focus-state for fallback resolution ──
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID);
+    if (guild) {
+      const { setDiscordGuildChannels } = await import('./focus-state.js');
+      setDiscordGuildChannels(guild.channels.cache);
+    }
+  } catch (err) {
+    logger.warn(`[startup] Failed to inject guild channels into focus-state: ${err.message}`);
+  }
+
   // ── Voice Session HUD ──
   initHud(client);
   hudRefresh();
@@ -2771,6 +2782,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const msg = purpose
         ? `Focused on ${focusLabel}. ${purpose.substring(0, 80)}.`
         : `Focused on ${focusLabel}.`;
+      const ack = await synthesizeSpeech(msg);
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      return;
+    }
+
+    if (dispatchResult.type === 'focus_not_found') {
+      logger.info(`🎯 Focus not found: "${dispatchResult.query}"`);
+      const msg = `I can't find a channel called "${dispatchResult.query}", sir. Try the exact Discord channel name, or drop the channel link in text chat.`;
       const ack = await synthesizeSpeech(msg);
       if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       return;

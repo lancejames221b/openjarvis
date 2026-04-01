@@ -120,7 +120,11 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
         if (result) {
           return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose };
         }
-        // Channel not found — fall through to brain (might be a different command)
+        // Channel not found — return immediately instead of falling through to the brain.
+        // The brain doesn't know how to "focus" either, so it just wastes 300s timing out.
+        // Strip noise words from target for a cleaner error message.
+        const cleanTarget = target.replace(/^(?:the|a|an|my)\s+/i, '').replace(/\s+(?:channel|in\s+discord|please)$/i, '').trim();
+        return { type: 'focus_not_found', query: cleanTarget };
       }
     }
 

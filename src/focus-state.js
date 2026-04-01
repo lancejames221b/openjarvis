@@ -141,7 +141,67 @@ export function resolveChannel(nameOrAlias) {
     return bestMatch;
   }
 
+  // ── Pass 3: Discord guild cache fallback ────────────────────────
+  // If the channel isn't in the registry, try to find it in the Discord
+  // bot's guild cache. This handles newly created channels that haven't
+  // been registered yet.
+  if (_discordGuildChannels) {
+    const discordMatch = _findInDiscordCache(normalized, querySlug);
+    if (discordMatch) {
+      logger.info(`[focus] Discord cache resolved "${nameOrAlias}" → "${discordMatch.channelName}" (${discordMatch.channelId})`);
+      return discordMatch;
+    }
+  }
+
   return null;
+}
+
+// ── Discord guild cache for fallback channel resolution ─────────────
+let _discordGuildChannels = null;
+
+/**
+ * Inject the Discord guild channels map from index.js at startup.
+ * Called once after client.ready.
+ * @param {Map|Object} channels — guild.channels.cache (Discord.js Collection)
+ */
+export function setDiscordGuildChannels(channels) {
+  _discordGuildChannels = channels;
+  logger.info(`[focus] Discord guild cache loaded (${channels?.size || 0} channels)`);
+}
+
+function _findInDiscordCache(normalized, querySlug) {
+  if (!_discordGuildChannels) return null;
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const [id, ch] of _discordGuildChannels) {
+    // Only text channels (type 0) and announcement (type 5)
+    if (ch.type !== 0 && ch.type !== 5) continue;
+    const nameSlug = slug(ch.name || '');
+
+    let score = 0;
+    if (nameSlug === querySlug) score = 100;
+    else if (nameSlug.startsWith(querySlug)) score = 80;
+    else if (nameSlug.includes(querySlug)) score = 60;
+    else if (querySlug.includes(nameSlug) && nameSlug.length >= 4) score = 40;
+    else {
+      const qWords = querySlug.split('-').filter(w => w.length >= 3);
+      const tWords = nameSlug.split('-');
+      const overlap = qWords.filter(w => tWords.some(t => t.startsWith(w) || w.startsWith(t)));
+      if (overlap.length > 0) {
+        score = 20 + (overlap.length / Math.max(qWords.length, 1)) * 20;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = { channelId: id, channelName: ch.name, purpose: ch.topic || '' };
+    }
+  }
+
+  return bestScore >= 50 ? bestMatch : null; // Slightly higher threshold for unregistered channels
 }
 
 /**
