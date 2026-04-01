@@ -2553,6 +2553,21 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
+    // 3d. Low-confidence STT — Whisper produced a transcript but confidence is borderline.
+    // Handle locally with a "say that again" prompt rather than passing to the LLM.
+    // The LLM prompt previously said "LOW: ask once" which burned 10+ seconds and a full task cycle.
+    const BORDERLINE_CONFIDENCE = parseFloat(process.env.BORDERLINE_CONFIDENCE || '0.55');
+    const sttConfidence = sttResult?.sttMeta?.confidence;
+    if (sttConfidence != null && sttConfidence < BORDERLINE_CONFIDENCE) {
+      logger.info(`🔇 Borderline STT confidence (${sttConfidence.toFixed(3)} < ${BORDERLINE_CONFIDENCE}) — local repeat prompt: "${rawTranscript.substring(0, 50)}"`);
+      const repeatPhrases = ["Say that again?", "Come again?", "Didn't catch that, sir.", "Once more?", "Sorry, say again."];
+      const phrase = repeatPhrases[Math.floor(Math.random() * repeatPhrases.length)];
+      const audio = await synthesizeSpeech(phrase);
+      if (audio) { audioQueue.add(audio); audioQueue.playNext(); }
+      markBotResponse(userId);
+      return;
+    }
+
     // 4. Bare wake word — just "Jarvis" / "Jarvis." / "Jarvis?" with no real command.
     const bareCheck = cleanedTranscript.replace(/[.,!?;:\-'"]/g, '').trim();
     if (!bareCheck || bareCheck.length === 0) {

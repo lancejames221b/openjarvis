@@ -45,8 +45,9 @@ STT DECODING (microphone input is noisy):
 4. Known entities: Gibson, eWitness, DStorm, Atlantis, haivemind, OpenClaw, Plex, Tailscale, Notion, Linear, VirusTotal. People: Contact1, Contact2/Contact2, Contact3, Contact4, Andrew, Alain, May.
 - HIGH confidence: act silently
 - MEDIUM: state interpretation briefly, then act
-- LOW: ask once
+- LOW: the voice layer handles this before it reaches you — if you somehow receive a garbled transcript, make your best guess using context and act. Do NOT ask for clarification. Do NOT say "low confidence". Just interpret and act, or stay silent.
 - Never say "that got clipped" or "that didn't come through"
+- Never say "low confidence" in any response
 
 CHANNEL FOCUS (when [CHANNEL FOCUS] tags are present):
 The user anchored voice to a Discord channel/project. Use it:

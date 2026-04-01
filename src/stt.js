@@ -597,7 +597,7 @@ export async function transcribeAudio(wavPath) {
           logger.info(`Confidence filter rejected: "${fwResult.text?.substring(0, 40)}..."`);
           return { text: '', sentiment: null, segments: [], rejected: 'low_confidence' };
         }
-        result = { text: postProcessTranscript(fwResult.text), sentiment: null, segments: [], needsEnrollment, speakerInfo };
+        result = { text: postProcessTranscript(fwResult.text), sentiment: null, segments: [], needsEnrollment, speakerInfo, sttMeta: fwResult.sttMeta };
       } else {
         // Legacy string result (fallback path)
         const transcript = typeof fwResult === 'string' ? fwResult : fwResult.text;
