@@ -1560,6 +1560,115 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+// ── Chat Focus / Handoff Commands ───────────────────────────────────
+// Allows setting voice focus from Discord text, without using voice.
+//
+// Triggers:
+//   /handoff                — focus voice on the current channel (where message was typed)
+//   /handoff #channel       — focus voice on a specific channel by mention or name
+//   /focus                  — same as /handoff
+//   /focus gibson           — focus by channel name (fuzzy matched)
+//   Auto-focus: if Lance posts in a registered channel while NOT in voice,
+//               silently update focus (no confirmation). Only active channels
+//               (score ≥ 40 in resolveChannel) trigger auto-focus.
+client.on('messageCreate', async (message) => {
+  // Skip bots
+  if (message.author.bot) return;
+  // Only respond to allowed users
+  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
+
+  const content = (message.content || '').trim();
+  const isExplicitFocus = /^\/(handoff|focus)(\s|$)/i.test(content);
+
+  if (isExplicitFocus) {
+    // ── Explicit /handoff or /focus command ────────────────────────
+    const { setFocusById, setFocusByName, resolveChannel } = await import('./focus-state.js');
+
+    let targetChannelId = null;
+    let targetChannelName = null;
+
+    // Check for a channel mention: /handoff #channel-name or /handoff <#channelId>
+    const mentionMatch = content.match(/<#(\d+)>/);
+    const nameMatch = content.match(/^\/(handoff|focus)\s+([^<#\s].+)/i);
+
+    if (mentionMatch) {
+      targetChannelId = mentionMatch[1];
+      const ch = client.channels.cache.get(targetChannelId);
+      targetChannelName = ch?.name || targetChannelId;
+    } else if (nameMatch) {
+      const query = nameMatch[2].replace(/^#/, '').trim();
+      const resolved = resolveChannel(query);
+      if (resolved) {
+        targetChannelId = resolved.channelId;
+        targetChannelName = resolved.channelName;
+      } else {
+        // Try as a raw channel ID
+        if (/^\d+$/.test(query)) {
+          targetChannelId = query;
+          const ch = client.channels.cache.get(query);
+          targetChannelName = ch?.name || query;
+        }
+      }
+    } else {
+      // No target specified — focus on the channel where the command was typed
+      targetChannelId = message.channelId;
+      // If it's a thread, use parent channel id for focus but note thread
+      const ch = message.channel;
+      if (ch?.isThread?.()) {
+        targetChannelId = ch.parentId || message.channelId;
+        targetChannelName = ch.parent?.name || targetChannelId;
+      } else {
+        targetChannelName = ch?.name || targetChannelId;
+      }
+    }
+
+    if (targetChannelId) {
+      const result = setFocusById(targetChannelId, targetChannelName);
+      // If it was typed in a thread, also store the thread
+      const ch = message.channel;
+      if (ch?.isThread?.()) {
+        const { setFocusWithThread } = await import('./focus-state.js');
+        await setFocusWithThread(targetChannelName, ch.name);
+      }
+      const focusName = result?.channelName || targetChannelName;
+      const ack = result?.threadName ? `🎯 Focused on **#${focusName}** › ${result.threadName}` : `🎯 Focused on **#${focusName}**`;
+      await message.react('🎯').catch(() => {});
+      await message.reply({ content: ack, allowedMentions: { repliedUser: false } }).catch(() => {});
+      logger.info(`[chat-focus] Explicit focus set: #${focusName} (from Discord message)`);
+    } else {
+      await message.reply({ content: "Couldn't find that channel, sir.", allowedMentions: { repliedUser: false } }).catch(() => {});
+    }
+    return;
+  }
+
+  // ── Auto-focus: silently update focus when Lance posts in a known channel ──
+  // Only fires when NOT in voice (don't interrupt an active session's focus).
+  // Only fires for registered channels (resolveChannel by channel name/id).
+  if (!userDisconnected) return; // in voice — don't auto-focus from text
+  if (content.startsWith('/')) return; // other slash commands, skip
+
+  const { resolveChannel, setFocusById, isFocusFresh } = await import('./focus-state.js');
+  const chName = message.channel?.name || '';
+  // Try to resolve by channel ID directly first, then by name
+  let registry;
+  try {
+    const { readFileSync } = await import('fs');
+    registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
+  } catch { registry = { channels: {} }; }
+
+  const channelEntry = registry.channels?.[message.channelId];
+  if (channelEntry) {
+    // Known channel — update focus silently (no reply, no reaction)
+    // Only if focus isn't already on this exact channel and fresh
+    const { getFocus } = await import('./focus-state.js');
+    const current = getFocus();
+    if (!current || current.channelId !== message.channelId) {
+      setFocusById(message.channelId, channelEntry.name);
+      logger.info(`[chat-focus] Auto-focus updated: #${channelEntry.name} (${message.channelId}) from text activity`);
+    }
+  }
+});
+
 // ── Voice-to-Text Handoff ────────────────────────────────────────────
 
 async function sendDM(userId, message) {
