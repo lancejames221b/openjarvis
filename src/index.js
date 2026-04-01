@@ -2788,6 +2788,51 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       });
     }
 
+    // ── ACTION Intent → Webhook Dispatch (with tools) ─────────────────
+    // /v1/chat/completions has NO tool access — the model can't call sessions_spawn.
+    // For ACTION intents, dispatch via /hooks/agent which triggers a full agent turn
+    // with tools. The result comes back via /speak callback. This is the ONLY path
+    // that can actually execute actions.
+    const actionIntents = new Set(['ACTION', 'EMAIL_ACTION', 'CALENDAR_ACTION']);
+    const intentType = brainOptions.intentType || 'QUERY';
+    if (actionIntents.has(intentType)) {
+      logger.info(`🚀 Task #${taskId} intent=${intentType} → webhook dispatch (full tools)`);
+      
+      // Speak contextual ack while webhook processes
+      if (contextualAckPromise) {
+        try {
+          const ackText = await contextualAckPromise;
+          if (ackText) {
+            logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
+            const ackAudio = await synthesizeSpeech(ackText);
+            if (ackAudio) audioQueue.add(ackAudio);
+          }
+        } catch (e) {
+          logger.warn(`⚠️ Contextual ack failed: ${e.message}`);
+        }
+      }
+
+      const webhookResult = await dispatchViaWebhook(transcript, history, {
+        ...brainOptions,
+        taskId,
+      });
+
+      if (webhookResult.dispatched) {
+        postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) — awaiting /speak callback`);
+        logger.info(`📨 Task #${taskId} dispatched successfully — result will arrive via /speak`);
+      } else {
+        logger.error(`❌ Task #${taskId} webhook dispatch failed: ${webhookResult.error}`);
+        const failMsg = "I'm having trouble dispatching that right now, sir.";
+        try {
+          const audio = await synthesizeSpeech(failMsg);
+          if (audio) audioQueue.add(audio);
+        } catch (_) {}
+        postActivity(`❌ **Task #${taskId}** webhook dispatch failed: ${webhookResult.error}`);
+      }
+      return;
+    }
+
+    // ── KNOWLEDGE Intent → Streaming TTS (no tools needed) ────────────
     // TTS pipeline for parallel sentence generation
     const ttsPipeline = new TtsPipeline(synthesizeSpeech, audioQueue, {
       maxConcurrent: TTS_PIPELINE_CONCURRENCY,
