@@ -98,7 +98,7 @@ const lastBotResponseTime = new Map();
 
 // Track whether the last response invites follow-up (lists, questions, partial info)
 let followUpLikely = false;
-const EXTENDED_WINDOW_MS = 5 * 60 * 1000; // 5 min when follow-up expected
+const EXTENDED_WINDOW_MS = parseInt(process.env.EXTENDED_CONVERSATION_WINDOW_MS || '30000'); // 30s when follow-up expected (was 5min — picked up restaurant orders)
 
 // Interaction velocity: track timestamps of recent exchanges
 const interactionTimestamps = [];
@@ -339,7 +339,7 @@ export function getEffectiveWindowMs() {
 export function hasRecentContext(userId) {
   if (!userId || !lastBotResponseTime.has(userId)) return false;
   const elapsed = Date.now() - lastBotResponseTime.get(userId);
-  return elapsed < 10 * 60 * 1000; // 10 min
+  return elapsed < getEffectiveWindowMs(); // Use actual conversation window, not hardcoded 10min
 }
 
 /**
