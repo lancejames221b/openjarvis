@@ -151,7 +151,7 @@ async function handleTeamCalendar(shortcut, _transcript) {
   try {
     const result = execSync(
       `mcporter call google-workspace.get_events ` +
-      `'user_google_email=lancejames@unit221b.com' ` +
+      `'user_google_email=${process.env.GOOGLE_CALENDAR_EMAIL || ''}' ` +
       `'calendar_id=${email}' ` +
       `'time_min=${timeMin}' ` +
       `'time_max=${timeMax}' ` +
