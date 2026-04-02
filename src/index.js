@@ -305,6 +305,7 @@ setInterval(() => {
 // Speaks "I seem to have lost track of that one" for tasks stalled >30s with no result.
 // Caps activeTasks at 5 - clears oldest with "Clearing backlog" speak if exceeded.
 const _spokeLostTrackFor = new Set();
+const _spokeWebhookProgressFor = new Set(); // Tracks which webhook tasks got a "still working" update
 // Tasks whose inline response arrived too late (>STALE_INLINE_MS) — subsequent
 // onSentence calls are silently dropped.  /speak callback still delivers.
 const _staleInlineTasks = new Set();
@@ -316,9 +317,18 @@ setInterval(() => {
     // responses, adding TTS noise and delaying real answers. The stale inline
     // gate (STALE_INLINE_MS) handles dropping responses that arrive too late.
     for (const [taskId, taskMeta] of activeTasks) {
-      if (now - taskMeta.startTime > 30000 && !_spokeLostTrackFor.has(taskId)) {
+      const stalledMs = now - taskMeta.startTime;
+      if (stalledMs > 30000 && !_spokeLostTrackFor.has(taskId)) {
         _spokeLostTrackFor.add(taskId);
-        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round((now - taskMeta.startTime)/1000)}s (silent — stale gate will handle)`);
+        logger.warn(`⏱️ Task #${taskId} stalled ${Math.round(stalledMs/1000)}s (silent — stale gate will handle)`);
+      }
+      // Webhook (ACTION) tasks: speak a progress update at 60s so the user knows it's still running.
+      // These dispatch fire-and-forget to the agent — without this, silence for minutes.
+      if (stalledMs > 60000 && taskMeta.webhookDispatched && !_spokeWebhookProgressFor.has(taskId)) {
+        _spokeWebhookProgressFor.add(taskId);
+        const transcript = taskMeta.transcript?.substring(0, 60) || 'that';
+        logger.info(`⏱️ Task #${taskId} webhook in-flight 60s — speaking progress update`);
+        speakPhrase(`Still working on that, sir. I'll let you know when it's done.`).catch(() => {});
       }
     }
     // Backlog cap: if >5 pending tasks, clear oldest and speak
@@ -330,6 +340,7 @@ setInterval(() => {
         activeTasks.delete(id);
         _spokeLostTrackFor.delete(id);
         _staleInlineTasks.delete(id);
+        _spokeWebhookProgressFor.delete(id);
       }
       speakPhrase('Clearing backlog, sir.').catch(() => {});
       logger.warn(`📋 Cleared ${toClear.length} oldest task(s) from backlog (cap=5)`);
@@ -3185,6 +3196,9 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         hudTaskUpdate(taskId, 'working');
         postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) - awaiting /speak callback`);
         logger.info(`📨 Task #${taskId} dispatched successfully - result will arrive via /speak`);
+        // Flag for stall-check progress update (speaks "still working" at 60s)
+        const _wt = activeTasks.get(taskId);
+        if (_wt) _wt.webhookDispatched = true;
       } else {
         markFailed(taskId, webhookResult.error);  // Ledger: dispatch failed
         hudTaskUpdate(taskId, 'failed');
@@ -3547,6 +3561,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Guarantee task cleanup regardless of success/failure/abort
     activeTasks.delete(taskId);
     _staleInlineTasks.delete(taskId);
+    _spokeWebhookProgressFor.delete(taskId);
   }
 }
 
