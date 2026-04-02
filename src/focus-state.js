@@ -156,8 +156,19 @@ export function resolveChannel(nameOrAlias) {
   return null;
 }
 
-// ── Discord guild cache for fallback channel resolution ─────────────
+// ── Discord client + guild cache for channel resolution + message fetch ──
+let _discordClient = null;
 let _discordGuildChannels = null;
+
+/**
+ * Inject the Discord client from index.js at startup.
+ * Used to fetch channel messages on focus.
+ * @param {import('discord.js').Client} client
+ */
+export function setDiscordClient(client) {
+  _discordClient = client;
+  logger.info('[focus] Discord client injected — channel message fetch enabled');
+}
 
 /**
  * Inject the Discord guild channels map from index.js at startup.
@@ -314,6 +325,51 @@ function _buildReferences(channelId, channelData) {
 }
 
 /**
+ * Fetch recent Discord messages from a channel.
+ * Ground truth — always run BEFORE haivemind.
+ * Stores result in _focus.discordContext.
+ * @param {string} channelId
+ * @param {number} [limit=30] — number of messages to fetch
+ */
+async function _prefetchDiscordMessages(channelId, limit = 30) {
+  if (!_discordClient) {
+    logger.warn('[focus] No Discord client — skipping channel message fetch');
+    return;
+  }
+
+  try {
+    const channel = await _discordClient.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased?.()) {
+      logger.warn(`[focus] Channel ${channelId} is not text-based or not found`);
+      return;
+    }
+
+    const messages = await channel.messages.fetch({ limit });
+    if (!messages || messages.size === 0) {
+      logger.info(`[focus] No messages found in #${channel.name}`);
+      return;
+    }
+
+    // Format messages oldest-first for natural reading order
+    const sorted = [...messages.values()].reverse();
+    const formatted = sorted.map(m => {
+      const ts = m.createdAt.toISOString().replace('T', ' ').substring(0, 19);
+      const author = m.author?.username || 'unknown';
+      const content = m.content || (m.attachments.size > 0 ? `[${m.attachments.size} attachment(s)]` : '[empty]');
+      return `[${ts}] ${author}: ${content}`;
+    }).join('\n');
+
+    if (_focus && _focus.channelId === channelId) {
+      _focus.discordContext = formatted.substring(0, 4000); // Cap at 4k chars
+      _saveState(_focus);
+      logger.info(`[focus] Fetched ${sorted.length} Discord messages from #${channel.name}`);
+    }
+  } catch (err) {
+    logger.warn(`[focus] Discord message fetch failed (non-fatal): ${err.message}`);
+  }
+}
+
+/**
  * Pre-fetch haivemind context for a channel. Fire-and-forget, non-blocking.
  * Stores result in _focus.haivemindContext.
  * @param {string} channelId
@@ -366,15 +422,18 @@ export function setFocusByName(nameOrAlias) {
     purpose: resolved.purpose,
     directive: directive || null,
     references,
-    haivemindContext: null, // populated async
+    discordContext: null, // populated async by _prefetchDiscordMessages
+    haivemindContext: null, // populated async by _prefetchHaivemind
     setAt: new Date().toISOString(),
   };
 
   _saveState(_focus);
   logger.info(`[focus] Set focus: ${resolved.channelName} (${resolved.channelId})`);
 
-  // Pre-fetch haivemind in background (non-blocking)
-  _prefetchHaivemind(resolved.channelId);
+  // Pre-fetch context: Discord messages FIRST (ground truth), then haivemind
+  _prefetchDiscordMessages(resolved.channelId).then(() => {
+    _prefetchHaivemind(resolved.channelId);
+  });
 
   return _focus;
 }
@@ -460,6 +519,7 @@ export async function setFocusWithThread(nameOrAlias, threadHint) {
     purpose: resolved.purpose,
     directive: directive || null,
     references,
+    discordContext: null,
     haivemindContext: null,
     setAt: new Date().toISOString(),
     ...(threadId ? { threadId, threadName } : {}),
@@ -467,7 +527,11 @@ export async function setFocusWithThread(nameOrAlias, threadHint) {
 
   _saveState(_focus);
   logger.info(`[focus] Set focus: ${resolved.channelName}${threadName ? ` › ${threadName}` : ''} (${resolved.channelId})`);
-  _prefetchHaivemind(resolved.channelId);
+
+  // Discord messages FIRST (ground truth), then haivemind
+  _prefetchDiscordMessages(resolved.channelId).then(() => {
+    _prefetchHaivemind(resolved.channelId);
+  });
 
   return _focus;
 }
@@ -489,6 +553,7 @@ export function setFocusById(channelId, channelName) {
     purpose: channelData?.purpose || '',
     directive: directive || null,
     references,
+    discordContext: null,
     haivemindContext: null,
     setAt: new Date().toISOString(),
   };
@@ -496,8 +561,10 @@ export function setFocusById(channelId, channelName) {
   _saveState(_focus);
   logger.info(`[focus] Set focus by ID: ${_focus.channelName} (${channelId})`);
 
-  // Pre-fetch haivemind in background
-  _prefetchHaivemind(channelId);
+  // Discord messages FIRST (ground truth), then haivemind
+  _prefetchDiscordMessages(channelId).then(() => {
+    _prefetchHaivemind(channelId);
+  });
 
   return _focus;
 }
@@ -597,9 +664,14 @@ export function getFocusContextTag() {
     tag += `[REFERENCES:\n${refLines.join('\n')}\n]\n`;
   }
 
+  // ── Pre-fetched Discord messages (ground truth) ────────────────────
+  if (_focus.discordContext) {
+    const discordSnippet = _focus.discordContext.substring(0, 2000);
+    tag += `[RECENT MESSAGES (ground truth):\n${discordSnippet}\n]\n`;
+  }
+
   // ── Pre-fetched haivemind context ─────────────────────────────────
   if (_focus.haivemindContext) {
-    // Include pre-fetched memory so the agent doesn't need to search
     const memSnippet = _focus.haivemindContext.substring(0, 1200);
     tag += `[CHANNEL MEMORY (pre-fetched):\n${memSnippet}\n]\n`;
   } else {
@@ -672,6 +744,11 @@ export function getFullFocusContext() {
     ctx += `\n# Check repo state\n${cmds.gitStatus}\n${cmds.gitLog}\n`;
   }
   ctx += `\`\`\`\n`;
+
+  // ── Recent Discord messages (ground truth — always first) ─────────
+  if (_focus.discordContext) {
+    ctx += `\n### Recent Messages (ground truth)\n\`\`\`\n${_focus.discordContext.substring(0, 3000)}\n\`\`\`\n`;
+  }
 
   // ── Pre-fetched haivemind context (if available) ──────────────────
   if (_focus.haivemindContext) {

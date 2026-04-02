@@ -902,15 +902,16 @@ client.once('ready', async () => {
 
   initAlertWebhook(client, GUILD_ID, ALLOWED_USERS, scheduleBriefingOnPause);
 
-  // ── Inject guild channel cache into focus-state for fallback resolution ──
+  // ── Inject Discord client + guild channel cache into focus-state ──
   try {
+    const { setDiscordClient, setDiscordGuildChannels } = await import('./focus-state.js');
+    setDiscordClient(client);
     const guild = client.guilds.cache.get(GUILD_ID);
     if (guild) {
-      const { setDiscordGuildChannels } = await import('./focus-state.js');
       setDiscordGuildChannels(guild.channels.cache);
     }
   } catch (err) {
-    logger.warn(`[startup] Failed to inject guild channels into focus-state: ${err.message}`);
+    logger.warn(`[startup] Failed to inject Discord client into focus-state: ${err.message}`);
   }
 
   // ── Voice Session HUD ──
