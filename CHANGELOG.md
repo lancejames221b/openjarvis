@@ -4,6 +4,44 @@ All notable changes to Jarvis Voice are documented here.
 
 ---
 
+## [1.1.0] — 2026-04-02
+
+Stability, security, and developer experience update.
+
+### Bug fixes (19 resolved)
+- **FSM idle timer during TTS** — idle timer no longer fires while the bot is speaking
+- **Server mute flicker** — owner stays muted for the entire response, not just per-sentence
+- **Reconnect storm on startup** — suppressed redundant voice state logs, added oscillation guard
+- **Task ledger pruning** — orphaned/working tasks are now cleaned up properly
+- **Semantic dedup threshold** — raised from 0.45 to 0.72, stops blocking valid /speak callbacks
+- **Chatterbox cold start** — GPU warmup on boot, first TTS call no longer takes 34 seconds
+- **Task auto-sleep** — bumped from 15s to 60s so responses arrive before sleep
+- **Conversation window** — extended from 30s to 90s for natural follow-ups
+- **isJustAck classifier** — no longer misclassifies real answers under 80 chars
+- **Orphan detection** — now notifies user instead of just logging warnings
+- **STT pipeline timing** — end-to-end timing now visible in logs
+- **Gateway health check** — polling reduced from 60s to 15s for faster recovery
+- **ESM require() fix** — replaced CommonJS require('fs') in voice_move handler
+- **Moonshine STT** — removed JS import accidentally embedded in Python code string
+- **Set memory cleanup** — stale task tracking Sets now garbage collected
+- **url.parse() deprecation** — already clean (no instances found)
+- **session-manager paths** — already using env vars (no change needed)
+- **Dual AudioQueue** — documented intentional dual-pipeline architecture
+
+### New features
+- **Focus reads channel history** — when you say "focus on [channel]", the bot fetches the last 30 Discord messages as ground truth context before loading haivemind
+- **Voice message transcripts** — voice messages (.ogg) are automatically transcribed and posted as replies, making them visible in channel history
+- **Focus-switch breadcrumbs** — switching focus posts a notice to the previous channel
+- **Systemd service** — ships with a user systemd unit file for production deployment
+
+### Developer experience
+- **Docker dev environment** — Dockerfile.dev + docker-compose.dev.yml + .env.dev with safe placeholders
+- **Dev/live separation** — documented workflow: dev clone with Docker, live on host with systemd
+- **Node 22** — Dockerfile.dev upgraded from Node 20 to 22 (discordjs/voice requirement)
+- **npm audit** — @discordjs/opus upgraded 0.9→0.10 (DoS CVE fix)
+
+---
+
 ## [1.0.0] — 2026-03-05
 
 First public release. The beginning.
