@@ -2587,6 +2587,16 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         authenticatedSession = true;
         resetIdleSleepTimer();
         // fall through to process
+      } else if (!isOthersPresent() && hasRecentContext(userId)) {
+        // Conversation window still open -- owner is following up on Jarvis's last response.
+        // Same bypass as checkWakeWord() in ACTIVE state, but the FSM gate was silently
+        // dropping these before they reached that check.
+        logger.info(`💬 Conversation window open in IDLE: "${rawTranscript.substring(0, 50)}" -- resuming without wake word`);
+        transition('ACTIVE', 'conversation-window-from-idle');
+        authCtx.isOwner = true;
+        authenticatedSession = true;
+        resetIdleSleepTimer();
+        // fall through to process
       } else {
         return; // drop non-wake-word audio in IDLE
       }
@@ -3499,6 +3509,9 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     const followUp = detectFollowUpLikely(fullText);
     if (followUp) logger.info(`📋 Response invites follow-up - extending conversation window`);
     markBotResponse(userId, { followUpLikely: followUp });
+    // Reset idle timer from bot's last speech, not just user's last speech.
+    // Prevents premature ACTIVE→IDLE when Jarvis takes a while to respond.
+    if (getState() === 'ACTIVE') resetIdleSleepTimer();
 
     // ── Two-tier auto-sleep: sign-off phrase was embedded in a task request ──
     // The task is done, now transition to SLEEP as the user intended.
