@@ -12,7 +12,17 @@ OpenJarvis is the voice layer for [OpenClaw](https://openclaw.ai). Speak in a Di
 
 Run it hands-free over AirPods or any Bluetooth headset. **Blue team ops by voice.** Ask about live threats, pivot on IOCs, query your SIEM, run playbooks — no keyboard required. Tony Stark ran his SOC by talking to Jarvis. Now you can too.
 
-The Jarvis voice model runs locally via Piper TTS — British RP accent, CPU-only. No cloud TTS account needed.
+Five TTS engines out of the box — pick the one that fits your hardware:
+
+| Engine | Speed | Hardware | What it is |
+|--------|-------|----------|------------|
+| **Piper** (default) | ~1.5s | CPU | Local Jarvis voice clone. British RP accent. No cloud, no GPU, no account. |
+| **Edge TTS** | ~1s | Cloud (free) | Microsoft Edge neural voices. 400+ voices, zero setup. Auto-fallback for all other providers. |
+| **Kokoro** | ~150ms | CPU/GPU | OpenAI-compatible local TTS. Fastest time-to-first-word. British male voice (`bm_lewis`). |
+| **Chatterbox** | ~2s first word | GPU (NVIDIA) | Resemble AI voice cloning with sentence-level streaming. Clone any voice from a 5-second sample. |
+| **Qwen3** | ~2s | GPU | Alibaba's voice-design TTS. Experimental. |
+
+Set `TTS_PROVIDER=piper|edge|kokoro|chatterbox|qwen3` in your `.env`. Default is Piper — works on any machine, sounds like Jarvis.
 
 ---
 
@@ -132,7 +142,7 @@ Discord Voice Channel (you speak)
   -> FSM state gate (ACTIVE: pass, IDLE/SLEEP: wake word only)
   -> STT backend (faster-whisper with confidence filtering)
   -> OpenClaw Gateway  <- full agent with all tools
-  -> TTS backend (Piper in-process voice clone, Edge TTS fallback)
+  -> TTS backend (Piper | Edge | Kokoro | Chatterbox | Qwen3)
   -> Server mute owner -> Play audio -> Unmute owner
   -> Discord Voice Channel (Jarvis speaks)
 ```
@@ -172,7 +182,7 @@ Total VRAM: ~4.5GB (fits easily in any modern GPU).
 |                                      |                  |
 |                               CLAWDBOT_GATEWAY          |
 |                                      |                  |
-|  Discord <-- mute/play/unmute <-- Piper TTS (in-proc)   |
+|  Discord <-- mute/play/unmute <-- TTS (Piper/Edge/Kokoro/Chatterbox)  |
 |                                                         |
 |  alert-webhook.js <-- POST /speak /alert /handoff       |
 |       |-- priority classifier (P1-P5)                   |
@@ -398,23 +408,62 @@ Your persona description here. Speak in second person...
 |---|---|---|
 | `VOICE_PERSONA` | `jarvis` | Default persona on startup. Must match a file in `personalities/`. |
 
-### Chatterbox TTS (GPU Streaming)
+### Voice Engines (TTS)
 
-Chatterbox is a GPU-accelerated TTS engine by Resemble AI that streams audio sentence-by-sentence — first word starts playing in ~2 seconds for a typical response.
+Five TTS backends, switchable via `TTS_PROVIDER` in your `.env`. All support streaming sentence-by-sentence for fast time-to-first-word.
 
-Enable it by setting `TTS_PROVIDER=chatterbox` and starting the GPU service:
+#### Piper (default) — Local Voice Clone
 
+The default. Runs the custom Jarvis British RP voice model locally via the Piper binary. CPU-only, no cloud account, no API key. Sounds like Jarvis out of the box.
+
+```env
+TTS_PROVIDER=piper
+PIPER_MODEL=medium          # 'medium' (~1.5s) or 'high' (better quality, ~3.5s)
+```
+
+Ships with a pre-trained Jarvis voice model. Custom ONNX models work too — drop them in and point `PIPER_MODEL` at them.
+
+#### Edge TTS — Cloud (Free)
+
+Microsoft's neural TTS voices. 400+ voices across dozens of languages. No API key — it's free. Also serves as the automatic fallback when any other provider fails.
+
+```env
+TTS_PROVIDER=edge
+EDGE_TTS_VOICE=en-AU-WilliamNeural   # Any Edge voice ID
+```
+
+#### Kokoro — Local, Fastest
+
+OpenAI-compatible local TTS server. 114–155ms per sentence — the fastest option. British male voice (`bm_lewis`) by default. Runs on CPU or GPU.
+
+```env
+TTS_PROVIDER=kokoro
+KOKORO_URL=http://localhost:8880      # Kokoro server endpoint
+KOKORO_VOICE=bm_lewis                 # Any Kokoro voice ID
+```
+
+Kokoro exposes an OpenAI-compatible `/v1/audio/speech` endpoint, so it also works with any client that speaks that protocol.
+
+#### Chatterbox — GPU Voice Cloning
+
+GPU-accelerated TTS by Resemble AI with sentence-level streaming. Clone any voice from a 5-second audio sample. First word plays in ~2 seconds while the rest synthesizes in the background.
+
+```env
+TTS_PROVIDER=chatterbox
+CHATTERBOX_VOICE=jarvis               # 'jarvis' or 'custom'
+```
+
+Start the GPU service:
 ```bash
-# Start the Chatterbox GPU service (requires NVIDIA GPU + venv)
 systemctl --user start jarvis-chatterbox-tts.service
 
-# Or run directly:
+# Or run directly (requires NVIDIA GPU + venv):
 cd ~/dev/jarvis-gpu-services
 source ~/dev/voice-clones/train_venv310/bin/activate
 python3 chatterbox_tts_service.py
 ```
 
-The service exposes `/tts` (batch) and `/tts/stream` (sentence-level NDJSON streaming). The streaming endpoint sends each sentence as a WAV chunk as soon as it's synthesized — the client plays them in order while synthesis continues in the background.
+The service exposes `/tts` (batch) and `/tts/stream` (sentence-level NDJSON streaming). Each sentence arrives as a WAV chunk as soon as it's synthesized — the client plays them in order while synthesis continues in the background.
 
 **How streaming works:**
 ```
@@ -426,23 +475,23 @@ Request: "Today you have three meetings and one PR waiting."
  Total: first audio 2.1s vs. 6s+ with batch TTS
 ```
 
-**Configuration:**
-
 | Variable | Default | Description |
 |---|---|---|
 | `CHATTERBOX_URL` | `http://127.0.0.1:3340` | Chatterbox TTS service URL |
 | `CHATTERBOX_VOICE` | `jarvis` | Active voice (`jarvis` or `custom`) |
-| `CHATTERBOX_DEFAULT_VOICE` | `jarvis` | Default voice when none specified in request |
 | `CHATTERBOX_PORT` | `3340` | Port for the Chatterbox GPU service |
 | `CHATTERBOX_VOICE_JARVIS` | *(path to jarvis WAV)* | Reference audio for the Jarvis voice clone |
 | `CHATTERBOX_VOICE_CUSTOM` | *(empty)* | Reference audio for your own voice clone |
-| `CHATTERBOX_JARVIS_EXAGGERATION` | `0.35` | Emotion intensity for Jarvis voice (0–1) |
-| `CHATTERBOX_JARVIS_CFG_WEIGHT` | `0.6` | Classifier-free guidance for Jarvis voice |
+| `CHATTERBOX_JARVIS_EXAGGERATION` | `0.35` | Emotion intensity (0–1) |
+| `CHATTERBOX_JARVIS_CFG_WEIGHT` | `0.6` | Classifier-free guidance weight |
 
-**Enable:**
+#### Qwen3 — Experimental
+
+Alibaba's voice-design TTS. Experimental support. Requires a local Qwen3-TTS server.
+
 ```env
-TTS_PROVIDER=chatterbox
-CHATTERBOX_VOICE=jarvis
+TTS_PROVIDER=qwen3
+QWEN3_TTS_URL=http://localhost:8890
 ```
 
 ### Streaming STT Artifact Cleanup
