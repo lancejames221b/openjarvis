@@ -27,6 +27,7 @@ import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
+import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
 import { getTTSHealth } from './tts.js';
@@ -2867,6 +2868,34 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (!wakeWordUsed && isTruncatedFragment(rawTranscript)) {
       logger.info(`✂️ Truncated fragment silently dropped: "${rawTranscript.substring(0, 60)}"`);
       return;
+    }
+
+    // 3d-ambient. Haiku ambient classifier — fires only when no wake word detected.
+    // Classifies utterances as DIRECTED / SELF_TALK / AMBIENT / SLEEP / UNCERTAIN.
+    // FAIL OPEN: UNCERTAIN → silent ignore. Only DIRECTED falls through to normal processing.
+    // Phase-gated: HAIKU_AMBIENT_PHASE controls which outcomes are acted on.
+    if (isAmbientClassifierEnabled() && !wakeWordUsed && cleanedTranscript.trim()) {
+      const ambientResult = await classifyAmbient(cleanedTranscript, {
+        wakeWordDetected: wakeWordUsed,
+        wordCount: cleanedTranscript.split(/\s+/).filter(Boolean).length,
+        hasTaskVerb: hasTaskContent(cleanedTranscript),
+        isQuestion: /\?\s*$/.test(cleanedTranscript.trim()),
+      });
+
+      if (ambientResult === 'AMBIENT' || ambientResult === 'SELF_TALK' || ambientResult === 'UNCERTAIN') {
+        logger.info(`🌫️ Ambient classifier [${ambientResult}] — silent ignore: "${cleanedTranscript.substring(0, 60)}"`);
+        return;
+      }
+
+      if (ambientResult === 'SLEEP') {
+        logger.info(`🌙 Ambient classifier [SLEEP] — triggering sleep: "${cleanedTranscript.substring(0, 60)}"`);
+        const cleanLowerAmbient = cleanedTranscript.toLowerCase().replace(/[.,!?']/g, '').trim();
+        await fsmHandleSleepCheck(cleanLowerAmbient, 'ambient-classifier', userId, _pendingUtterance, synthesizeSpeech, audioQueue);
+        return;
+      }
+
+      // DIRECTED: fall through to normal processing below
+      logger.info(`🎯 Ambient classifier [DIRECTED] — processing: "${cleanedTranscript.substring(0, 60)}"`);
     }
 
     // 3d. Low-confidence STT - Whisper produced a transcript but confidence is borderline.
