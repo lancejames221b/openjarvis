@@ -457,14 +457,21 @@ async function _deliverSpeak(message, speakOpts = {}) {
   resetIdleSleepTimer();
   const wasAsleep = getState() === 'SLEEP';
   const sentences = splitIntoSentences(message);
-  for (const sentence of sentences) {
-    if (sentence.trim().length < 2) continue;
-    const audio = await synthesizeSpeech(sentence.trim());
-    if (audio) {
-      audioQueue.add(audio);
-    } else {
-      postToTextChannel(`🔇 ${sentence}`);
+  // Signal that TTS generation is in progress — keeps owner server-muted
+  // until ALL sentences are synthesized and played, not just the current one
+  audioQueue.setGenerating(true);
+  try {
+    for (const sentence of sentences) {
+      if (sentence.trim().length < 2) continue;
+      const audio = await synthesizeSpeech(sentence.trim());
+      if (audio) {
+        audioQueue.add(audio);
+      } else {
+        postToTextChannel(`🔇 ${sentence}`);
+      }
     }
+  } finally {
+    audioQueue.setGenerating(false);
   }
   if (wasAsleep) openAttentionWindow();
 }
@@ -668,6 +675,17 @@ class AudioQueue {
     this.queue = [];
     this.playing = false;
     this._holdTimer = null; // speaking hold - prevents jump between slow Chatterbox sentences
+    this._ttsGenerating = false; // true while TTS is still synthesizing sentences
+  }
+
+  /** Signal that TTS generation has started — prevents premature unmute */
+  setGenerating(value) {
+    this._ttsGenerating = !!value;
+    // If generation just finished and queue is empty, trigger unmute check
+    if (!value && this.queue.length === 0 && !this.playing) {
+      serverMuteOwner(false);
+      isSpeaking = false;
+    }
   }
 
   add(audioSource, metadata = {}) {
@@ -697,13 +715,19 @@ class AudioQueue {
 
   async playNext() {
     if (this.queue.length === 0) {
+      // If TTS is still generating more sentences, don't unmute yet — stay muted
+      if (this._ttsGenerating) {
+        this.playing = false;
+        // Don't clear isSpeaking or unmute — more audio is coming
+        return;
+      }
       // Hold state briefly - Chatterbox may still be generating the next sentence.
       // If more audio arrives within the hold window, we resume without a jump/re-mute.
       const holdMs = parseInt(process.env.SPEAKING_HOLD_MS || '800');
       if (holdMs > 0 && this.playing) {
         this._holdTimer = setTimeout(() => {
           this._holdTimer = null;
-          if (this.queue.length === 0) {
+          if (this.queue.length === 0 && !this._ttsGenerating) {
             this.playing = false;
             isSpeaking = false;
             serverMuteOwner(false);
@@ -1555,18 +1579,23 @@ client.on('messageCreate', async (message) => {
   if (!userDisconnected) {
     // Split into sentences for streaming TTS
     const sentences = splitIntoSentences(voiceText);
-    for (const sentence of sentences) {
-      if (sentence.trim().length < 2) continue;
-      try {
-        const audio = await synthesizeSpeech(sentence.trim());
-        if (audio) {
-          audioQueue.add(audio);
-        } else if (!isTTSAvailable()) {
-          await postToTextChannel(`🔇 ${sentence}`);
+    audioQueue.setGenerating(true);
+    try {
+      for (const sentence of sentences) {
+        if (sentence.trim().length < 2) continue;
+        try {
+          const audio = await synthesizeSpeech(sentence.trim());
+          if (audio) {
+            audioQueue.add(audio);
+          } else if (!isTTSAvailable()) {
+            await postToTextChannel(`🔇 ${sentence}`);
+          }
+        } catch (err) {
+          logger.error('Callback TTS failed:', err.message);
         }
-      } catch (err) {
-        logger.error('Callback TTS failed:', err.message);
       }
+    } finally {
+      audioQueue.setGenerating(false);
     }
 
     const duration = ((Date.now() - lastInteractionTime) / 1000).toFixed(1);
@@ -3228,6 +3257,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       onError: (err) => logger.error(`TTS pipeline error for task #${taskId}:`, err.message),
     });
     setTTSDeliveryActive(true);
+    audioQueue.setGenerating(true);
 
     // ── Streaming TTS with pipelined delivery ──────────────────────────
     // Strategy: accumulate text into moderate chunks (~80-200 chars) and
@@ -3373,6 +3403,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       hudTaskUpdate(taskId, 'failed');
       logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
+      audioQueue.setGenerating(false);
       audioQueue.clear();
       setTTSDeliveryActive(false);
       // audioQueue.clear() fires onDrained immediately; scheduleFlushOnDrain handles any remainder
@@ -3427,6 +3458,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         batchText = '';
       }
       await ttsPipeline.drain();
+      audioQueue.setGenerating(false);
       setTTSDeliveryActive(false);
       // Wait for audio playback to finish before flushing buffered /speak calls
       scheduleFlushOnDrain();
@@ -3454,6 +3486,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     }
     // Wait for all TTS to finish generating; schedule flush once audio finishes playing
     await ttsPipeline.drain();
+    audioQueue.setGenerating(false);
     setTTSDeliveryActive(false);
     // Schedule /speak queue flush after audio fully drains — prevents interleaving
     scheduleFlushOnDrain();
