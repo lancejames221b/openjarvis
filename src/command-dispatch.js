@@ -13,6 +13,7 @@ import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
 import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels } from './focus-state.js';
 import { detectChannelCommand } from './channel-router.js';
+import { classifyIntent as haikuClassify } from './haiku-intent.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -226,6 +227,64 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     return { type: 'shortcut', speech: shortcutResult.speech, silent: shortcutResult.silent };
   }
 
-  // ── Brain call ────────────────────────────────────────────────────
+  // ── Tier 2: Haiku intent classifier ───────────────────────────────
+  // Fast LLM classification (~500ms-1s) catches structured commands that
+  // regex missed due to natural speech variation. Only runs for admin users.
+  // Returns null on timeout/error → falls through to brain.
+  if (isAdmin) {
+    try {
+      const haikuResult = await haikuClassify(cleanedTranscript);
+      if (haikuResult && haikuResult.intent !== 'not_command' && haikuResult.confidence >= 0.7) {
+        logger.info(`[dispatch] Haiku classified: ${haikuResult.intent} (conf=${haikuResult.confidence})`);
+
+        if (haikuResult.intent === 'focus_set' && haikuResult.params?.channel) {
+          const threadHint = haikuResult.params.thread || null;
+          if (threadHint) {
+            const result = await setFocusWithThread(haikuResult.params.channel, threadHint);
+            if (result) {
+              return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose, threadName: result.threadName };
+            }
+          }
+          const result = setFocusByName(haikuResult.params.channel);
+          if (result) {
+            return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose };
+          }
+          // Haiku thought it was a focus command but channel not found
+          const cleanTarget = haikuResult.params.channel.replace(/\s+channel$/i, '').trim();
+          return { type: 'focus_not_found', query: cleanTarget };
+        }
+
+        if (haikuResult.intent === 'focus_clear') {
+          clearFocus();
+          return { type: 'focus_clear' };
+        }
+
+        if (haikuResult.intent === 'focus_query') {
+          const focus = getFocus();
+          return { type: 'focus_query', focus };
+        }
+
+        if (haikuResult.intent === 'channel_list') {
+          const channels = listChannels();
+          return { type: 'channel_list', channels };
+        }
+
+        if (haikuResult.intent === 'persona' && haikuResult.params?.persona) {
+          const requested = haikuResult.params.persona.toLowerCase();
+          const available = listPersonalities();
+          if (available.includes(requested)) {
+            const { switchPersona } = await import('./brain.js');
+            const p = switchPersona(requested);
+            return { type: 'persona_switch', persona: p.name, voice: p.voice, wakeWords: p.wakeWords };
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(`[dispatch] Haiku intent error: ${err.message}`);
+      // Fall through to brain on any error
+    }
+  }
+
+  // ── Brain call (Tier 3 — full agent, slow) ────────────────────────
   return { type: 'brain', transcript: cleanedTranscript };
 }
