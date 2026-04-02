@@ -1272,6 +1272,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         const persona = getActivePersona();
         const audio = await synthesizeSpeech(`${persona.name} online. Using ${modelLabel}.`);
         if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
+        resetIdleSleepTimer(); // Reset after greeting TTS — idle timer starts at join, not after speech
       } catch {}
 
       // ── Auto-Brief: Check for active context ──────────────────────
@@ -1322,6 +1323,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             const briefAudio = await synthesizeSpeech(briefingText);
             if (briefAudio) {
               audioQueue.add(briefAudio);
+              resetIdleSleepTimer(); // Reset idle timer — briefing plays after join, idle timer must not expire during briefing
             }
           } else {
             logger.info(`[briefing] Nothing to report - skipping`);
@@ -2399,6 +2401,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     } else {
       wavPath = join(TMP_DIR, `speech_${userId}_${Date.now()}.wav`);
       await savePcmAsWav(audioBuffer, wavPath);
+      const _audioDurationMs = (audioBuffer.length / (48000 * 2)) * 1000;
+      logger.info(`\uD83C\uDF99\uFE0F  STT recv: ${_audioDurationMs.toFixed(0)}ms from user ${userId} \u2014 queuing transcription`);
       sttResult = await transcribeAudio(wavPath);
       rawTranscript = sttResult.text;
       sentiment = sttResult.sentiment;
