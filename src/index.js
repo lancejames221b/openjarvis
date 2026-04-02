@@ -2111,7 +2111,7 @@ async function joinChannel(voiceChannelId, options = {}) {
     // Ready, destroy and let the outer retry loop rebuild the connection from scratch.
     if (newState.status === VoiceConnectionStatus.Connecting) {
       _connectingCount++;
-      if (_connectingCount > 3) {
+      if (_connectingCount > 10) {
         logger.warn(`⚠️ Voice connection oscillating (${_connectingCount} connecting cycles) — destroying for retry`);
         try { connection.destroy(); } catch {}
       }
