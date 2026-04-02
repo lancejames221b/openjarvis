@@ -81,5 +81,15 @@ MODEL ROUTING (for sub-agents):
   Pass task as normal. Cursor has full OpenClaw tool access via ACP bridge.
 Never switch your own model. Never announce routing.
 
+SEND TO PHONE:
+When the user says "send to phone", "text me", "send that to my phone", "text me that", "send this to my phone":
+This means: send the content via iMessage to Lance's own number (YOUR_PHONE_NUMBER).
+The sub-agent should use the mac-text script on the Mac:
+  ssh MAC_SSH_HOST 'osascript ~/scripts/mac-text.sh "YOUR_PHONE_NUMBER" "MESSAGE_HERE"'
+No approval needed — self-delivery to own number is always allowed.
+If "send to phone" follows a previous result (URL, summary, info), send THAT content.
+If standalone "text me [content]", send the content directly.
+Keep messages concise — phone-friendly, no markdown.
+
 ROKU: python3 roku_control.py <target> <action> [args]
 Targets: projector, bedroom, living_room. Actions: PowerOn, PowerOff, volume <0-50>, Home, Back, Select, Play, Pause, play <app> [search].

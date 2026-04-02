@@ -88,6 +88,20 @@ export function fuzzyMatch(transcript) {
     return { matched: true, type: 'channel_list' };
   }
 
+  // ── "Send to phone" / "text me" — recognized but NOT locally handled ─
+  // These need the brain to figure out WHAT to send (context-dependent).
+  // Mark as brain intent so it bypasses Haiku classification (saves ~1s).
+  const PHONE_PATTERNS = [
+    /^(?:send|text)\s+(?:that\s+)?(?:to\s+)?(?:my\s+)?phone/,
+    /^text\s+me\b/,
+    /^send\s+(?:this|that|it)\s+to\s+(?:my\s+)?phone/,
+    /^(?:send|forward)\s+(?:this|that|it)\s+to\s+(?:my\s+)?(?:phone|cell|mobile)/,
+  ];
+  if (PHONE_PATTERNS.some(p => p.test(clean))) {
+    logger.info(`[fuzzy] Recognized send-to-phone: "${clean}" — passing to brain`);
+    return { matched: false, hint: 'send_to_phone' };
+  }
+
   // ── Try to extract a channel name ──────────────────────────────────
   let remainder = clean;
   let hadFocusVerb = false;
