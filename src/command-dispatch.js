@@ -107,10 +107,11 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     // focus and query actions fall through to existing handlers below
 
     // "focus on gibson" / "switch to ewitness" / "work on gibson" / "focus ewitness"
+    // "focus on the deploy channel" / "switch to the gibson channel"
     // Also handles threads: "focus on gibson gtm, the beta launch thread"
     //   / "switch to pr-reviews Contact3 thread" / "focus on jarvis voice dev"
     const focusMatch = cleanedTranscript.match(
-      /(?:focus\s+(?:on\s+)?|switch\s+(?:to\s+)?|work\s+(?:on\s+)?)\s*([\w\s-]{1,40?}?)(?:\s*[,;]?\s*(?:the\s+)?([\w\s-]+?)\s+thread)?\s*$/i
+      /(?:focus\s+(?:on\s+(?:the\s+)?)?|switch\s+(?:to\s+(?:the\s+)?)?|work\s+(?:on\s+(?:the\s+)?)?)([\w\s-]{1,40}?)(?:\s*[,;]?\s*(?:the\s+)?([\w\s-]+?)\s+thread)?\s*$/i
     );
     if (focusMatch) {
       const target = focusMatch[1].trim();
