@@ -426,6 +426,9 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   if (options.speaker) {
     contextTags += `[SPEAKER: ${options.speaker}] `;
   }
+  if (options.taskId) {
+    contextTags += `[TASK_ID: ${options.taskId}] `;
+  }
   if (options.sentiment && options.sentiment.sentiment && options.sentiment.sentiment !== 'neutral') {
     const score = options.sentiment.sentiment_score != null ? `, score: ${options.sentiment.sentiment_score.toFixed(2)}` : '';
     contextTags += `[SENTIMENT: ${options.sentiment.sentiment}${score}] `;
@@ -797,6 +800,9 @@ export async function generateResponse(userMessage, history = [], signal, option
   if (options.speaker) {
     contextTags += `[SPEAKER: ${options.speaker}] `;
   }
+  if (options.taskId) {
+    contextTags += `[TASK_ID: ${options.taskId}] `;
+  }
   if (options.sentiment && options.sentiment.sentiment && options.sentiment.sentiment !== 'neutral') {
     const score = options.sentiment.sentiment_score != null ? `, score: ${options.sentiment.sentiment_score.toFixed(2)}` : '';
     contextTags += `[SENTIMENT: ${options.sentiment.sentiment}${score}] `;
@@ -1144,7 +1150,7 @@ export async function dispatchViaWebhook(userMessage, history = [], options = {}
 DELIVERY INSTRUCTIONS:
 1. Post detailed results to Discord #hud (channel: discord, target: channel:${_voiceReportChannel}).
 2. Then speak a 1-2 sentence TL;DR summary via this curl:
-curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_TLDR_HERE","source":"task-progress"}'
+curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_TLDR_HERE","source":"task-progress","taskId":"${options.taskId || ''}"}'
 Replace YOUR_TLDR_HERE with a brief spoken summary (escaped for JSON).
 3. ARTIFACT TRACKING (MANDATORY if you created/modified files or committed code):
 Store a record of what was written and where so other sessions can find it:
