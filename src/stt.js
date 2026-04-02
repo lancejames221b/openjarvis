@@ -464,7 +464,6 @@ async function transcribeWithMoonshine(wavPath) {
     const pythonCode = `
 import json
 import sys
-import logger from './logger.js';
 from moonshine_voice import load
 
 model = load('moonshine/medium-streaming', language='en')
