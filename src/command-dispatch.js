@@ -13,6 +13,7 @@ import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
 import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels } from './focus-state.js';
 import { detectChannelCommand } from './channel-router.js';
+import { fuzzyMatch } from './fuzzy-dispatch.js';
 import { classifyIntent as haikuClassify } from './haiku-intent.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
@@ -227,9 +228,34 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     return { type: 'shortcut', speech: shortcutResult.speech, silent: shortcutResult.silent };
   }
 
+  // ── Tier 1.5: Fuzzy keyword matching ────────────────────────────────
+  // Zero-latency: strips action verbs + noise words, tries resolveChannel()
+  // on the remaining noun. Catches "bring up deploy", "take me to gibson",
+  // "let's work on ewitness", etc. without any LLM call.
+  if (isAdmin) {
+    const fuzzyResult = fuzzyMatch(cleanedTranscript);
+    if (fuzzyResult.matched) {
+      if (fuzzyResult.type === 'focus_set' && fuzzyResult.params) {
+        return { type: 'focus_set', channelName: fuzzyResult.params.channelName, channelId: fuzzyResult.params.channelId, purpose: fuzzyResult.params.purpose };
+      }
+      if (fuzzyResult.type === 'focus_clear') {
+        clearFocus();
+        return { type: 'focus_clear' };
+      }
+      if (fuzzyResult.type === 'focus_query') {
+        const focus = getFocus();
+        return { type: 'focus_query', focus };
+      }
+      if (fuzzyResult.type === 'channel_list') {
+        const channels = listChannels();
+        return { type: 'channel_list', channels };
+      }
+    }
+  }
+
   // ── Tier 2: Haiku intent classifier ───────────────────────────────
   // Fast LLM classification (~500ms-1s) catches structured commands that
-  // regex missed due to natural speech variation. Only runs for admin users.
+  // BOTH regex AND fuzzy matching missed. Only runs for admin users.
   // Returns null on timeout/error → falls through to brain.
   if (isAdmin) {
     try {
