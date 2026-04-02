@@ -412,7 +412,8 @@ export function setDidTaskSpeakInlineCallback(fn) { _didTaskSpeakInlineFn = fn; 
 // are different hashes but same intent — word-overlap catches them.
 const _recentSpokenTexts = []; // [{text, ts, source}]
 const SEMANTIC_DEDUP_WINDOW_MS = 90_000; // 90s
-const SEMANTIC_DEDUP_OVERLAP_THRESHOLD = parseFloat(process.env.SEMANTIC_DEDUP_THRESHOLD || '0.45'); // 45% word overlap (lowered from 65% to catch paraphrased repetitions)
+const SEMANTIC_DEDUP_OVERLAP_THRESHOLD = parseFloat(process.env.SEMANTIC_DEDUP_THRESHOLD || '0.72'); // 72% word overlap required — raised from 0.45 to avoid suppressing valid /speak callbacks
+const SEMANTIC_DEDUP_RECENCY_MS = 30_000; // Only suppress if prior speak was within 30s
 
 function _wordSet(text) {
   return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2));
@@ -448,25 +449,29 @@ function _isScreenOpenMessage(msg) {
   return patterns.some(p => lower.includes(p));
 }
 
-function _isSemanticDuplicate(message) {
+function _isSemanticDuplicate(message, incomingTaskId = null) {
   const now = Date.now();
   const incoming = _wordSet(message);
-  // Prune old entries
+  // Prune old entries outside the full dedup window
   while (_recentSpokenTexts.length > 0 && now - _recentSpokenTexts[0].ts > SEMANTIC_DEDUP_WINDOW_MS) {
     _recentSpokenTexts.shift();
   }
   for (const entry of _recentSpokenTexts) {
+    // Only suppress if prior speak was within 30s (recency gate)
+    if (now - entry.ts > SEMANTIC_DEDUP_RECENCY_MS) continue;
+    // If both have a taskId, they must match (don't suppress cross-task results)
+    if (incomingTaskId && entry.taskId && incomingTaskId !== entry.taskId) continue;
     const overlap = _wordOverlap(incoming, entry.words);
     if (overlap >= SEMANTIC_DEDUP_OVERLAP_THRESHOLD) {
-      logger.info(`🔇 Semantic /speak dedup: ${(overlap*100).toFixed(0)}% overlap with recent "${entry.text.substring(0,40)}"`);
+      logger.info(`🔇 Semantic /speak dedup: ${(overlap*100).toFixed(0)}% overlap with recent "${entry.text.substring(0,40)}" (task=${entry.taskId || 'n/a'}, age=${now - entry.ts}ms)`);
       return true;
     }
   }
   return false;
 }
 
-function _recordSpoken(message, source) {
-  _recentSpokenTexts.push({ text: message, words: _wordSet(message), ts: Date.now(), source });
+function _recordSpoken(message, source, taskId = null) {
+  _recentSpokenTexts.push({ text: message, words: _wordSet(message), ts: Date.now(), source, taskId });
   if (_recentSpokenTexts.length > 10) _recentSpokenTexts.shift(); // cap at 10
 }
 
@@ -528,7 +533,7 @@ app.post('/speak', async (req, res) => {
   // Catches "Signal is open, sir." vs "I've opened Signal on your Mac, sir." as duplicates.
   // Only applies to task-result sources, not reminders/alerts (those are always intentional).
   const isSemDedup = ['task-progress', 'task-complete', 'background-agent'].includes(source);
-  if (isSemDedup && _isSemanticDuplicate(message)) {
+  if (isSemDedup && _isSemanticDuplicate(message, taskId || null)) {
     if (postActivityCallback) {
       postActivityCallback(`⏭️ **Semantic dedup** (${source}): ${message.substring(0, 200)}`);
     }
@@ -605,7 +610,7 @@ app.post('/speak', async (req, res) => {
     if (userInVoice && speakCallback) {
       // Speak a brief summary (truncated) — full result is in the thread
       speakCallback(message);
-      _recordSpoken(message, source);
+      _recordSpoken(message, source, taskId || null);
       if (markBotResponseCallback) markBotResponseCallback(ALLOWED_USERS[0], { followUpLikely: true });
     }
     return res.json({ ok: true, delivered: 'thread+voice', userInVoice });
@@ -616,7 +621,7 @@ app.post('/speak', async (req, res) => {
     logger.info(`🗣️  Speaking (${source || 'cron'}): "${message.substring(0, 60)}..."`);
     speakCallback(message);
     // Record in semantic dedup window so near-duplicate /speak callbacks are suppressed
-    _recordSpoken(message, source || 'cron');
+    _recordSpoken(message, source || 'cron', taskId || null);
     // Refresh conversation window so follow-ups don't need wake word
     if (markBotResponseCallback) {
       markBotResponseCallback(ALLOWED_USERS[0], { followUpLikely: true });

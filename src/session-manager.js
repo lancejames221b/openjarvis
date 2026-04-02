@@ -117,7 +117,7 @@ async function _storeSessionSummary(history) {
   logger.info('💾 Session summary stored to haivemind');
 }
 
-const MCPORTER_PATH = '/home/generic/.npm-global/bin/mcporter';
+const MCPORTER_PATH = process.env.MCPORTER_PATH || 'mcporter'; // set MCPORTER_PATH env var to override
 
 async function _haivemindStore(content, category = 'voice-session') {
   try {

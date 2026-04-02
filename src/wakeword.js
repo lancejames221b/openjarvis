@@ -98,7 +98,7 @@ const lastBotResponseTime = new Map();
 
 // Track whether the last response invites follow-up (lists, questions, partial info)
 let followUpLikely = false;
-const EXTENDED_WINDOW_MS = parseInt(process.env.EXTENDED_CONVERSATION_WINDOW_MS || '30000'); // 30s when follow-up expected (was 5min — picked up restaurant orders)
+const EXTENDED_WINDOW_MS = parseInt(process.env.EXTENDED_CONVERSATION_WINDOW_MS || '90000'); // 90s when follow-up expected — raised from 30s to match 30-90s think-and-respond cadence
 
 // Interaction velocity: track timestamps of recent exchanges
 const interactionTimestamps = [];

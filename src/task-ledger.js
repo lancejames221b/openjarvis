@@ -86,11 +86,22 @@ function pruneOld() {
     if (t.state === TaskState.COMPLETED || t.state === TaskState.ESCALATED || t.state === TaskState.FAILED) {
       return now - t.updatedAt < COMPLETED_TTL_MS;
     }
+    // Orphaned and working tasks also expire (after 2x the completed TTL)
+    if (t.state === TaskState.ORPHANED || t.state === TaskState.WORKING) {
+      return now - t.updatedAt < COMPLETED_TTL_MS * 2;
+    }
     return true;
   });
-  // Hard cap
+  // Hard cap: when over limit, prefer dropping orphaned/working entries first
   if (ledger.length > MAX_ENTRIES) {
-    ledger = ledger.slice(-MAX_ENTRIES);
+    const pruneable = ledger.filter(t => t.state === TaskState.ORPHANED || t.state === TaskState.WORKING);
+    const keepers = ledger.filter(t => t.state !== TaskState.ORPHANED && t.state !== TaskState.WORKING);
+    if (keepers.length <= MAX_ENTRIES) {
+      // Drop orphaned/working to fit, then hard-slice keepers if still over
+      ledger = keepers.concat(pruneable.slice(-(MAX_ENTRIES - keepers.length)));
+    } else {
+      ledger = keepers.slice(-MAX_ENTRIES);
+    }
   }
   if (ledger.length !== before) saveLedger();
 }
@@ -159,8 +170,9 @@ export function isJustAck(text) {
   if (!text) return true;
   const clean = text.trim();
   
-  // Very short responses are likely acks
-  if (clean.length < 80) return true;
+  // Very short responses are likely acks — but only below the micro-answer threshold.
+  // Raised from 80→40: answers like "The capital is Paris." are complete, not acks.
+  if (clean.length < 40) return true;
   
   // Short responses with promise language
   if (clean.length < 200 && /\b(on it|i'll|working on|let me|getting|setting up|installing|creating|checking)\b/i.test(clean)) {

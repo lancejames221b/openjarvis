@@ -18,7 +18,7 @@ const IDLE_TO_SLEEP_MS  = 2 * 60 * 1000;        // 2 more min IDLE -> SLEEP
 // and self-talk don't get picked up as commands. Wake word required to re-engage.
 // Result delivery (/speak callback) will wake via openAttentionWindow().
 // Set to 0 to disable.
-const TASK_AUTO_SLEEP_MS = parseInt(process.env.TASK_AUTO_SLEEP_MS || '15000');
+const TASK_AUTO_SLEEP_MS = parseInt(process.env.TASK_AUTO_SLEEP_MS || '60000'); // raised from 15s — brain tasks can take 15-45s
 let _taskAutoSleepTimer = null;
 
 /**

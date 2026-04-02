@@ -291,8 +291,9 @@ setInterval(() => {
     if (orphans.length > 0) {
       for (const task of orphans) {
         logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${((Date.now() - task.createdAt) / 1000).toFixed(0)}s`);
+        // Notify text channel — visible, non-voice notification for lost tasks
+        postToTextChannel(`⚠️ **Lost track of:** "${task.transcript.substring(0, 60)}" (Task #${task.taskId})`);
       }
-      // Post to activity feed if postActivity is available
       const orphanList = orphans.map(t => `• #${t.taskId}: "${t.transcript.substring(0, 60)}"`).join('\n');
       logger.warn(`📋 ${orphans.length} orphaned tasks detected:\n${orphanList}`);
     }
@@ -452,6 +453,8 @@ async function _deliverSpeak(message, speakOpts = {}) {
   }
   // Task result arriving - cancel auto-sleep, we're about to speak
   cancelTaskAutoSleep();
+  // Reset idle timer — TTS is about to play; timer must not count down during speech
+  resetIdleSleepTimer();
   const wasAsleep = getState() === 'SLEEP';
   const sentences = splitIntoSentences(message);
   for (const sentence of sentences) {
@@ -1039,6 +1042,16 @@ client.once('ready', async () => {
 
   // Pre-cache ack phrases for instant zero-latency playback
   preloadAckPhrases(synthesizeSpeech).catch(err => logger.warn('Ack preload failed:', err.message));
+
+  // Chatterbox GPU warmup — fire a silent synthesis on startup to force CUDA model load.
+  // Without this the first real TTS request triggers a 30s+ cold-start GPU load.
+  if ((process.env.TTS_PROVIDER || '').toLowerCase() === 'chatterbox') {
+    logger.info('🔥 Chatterbox GPU warmup starting...');
+    synthesizeSpeech('Warming up.').then(audio => {
+      if (audio) try { unlinkSync(audio); } catch {} // discard, just warming GPU
+      logger.info('🔥 Chatterbox GPU warmup complete');
+    }).catch(() => {}); // silent failure ok
+  }
 
   // Task ledger removed - voice bot is a thin pipe
 
@@ -2404,6 +2417,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const _audioDurationMs = (audioBuffer.length / (48000 * 2)) * 1000;
       logger.info(`\uD83C\uDF99\uFE0F  STT recv: ${_audioDurationMs.toFixed(0)}ms from user ${userId} \u2014 queuing transcription`);
       sttResult = await transcribeAudio(wavPath);
+      const _sttElapsedMs = Date.now() - startTime;
+      logger.info(`🎯 STT complete: "${(sttResult.text || '').substring(0, 50)}" (${_sttElapsedMs}ms total)`);
       rawTranscript = sttResult.text;
       sentiment = sttResult.sentiment;
       needsEnrollment = !!sttResult.needsEnrollment;
