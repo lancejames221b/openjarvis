@@ -1,0 +1,23 @@
+# Jarvis Voice Bot — systemd user service
+# Install: cp scripts/jarvis-voice.service ~/.config/systemd/user/
+#          systemctl --user daemon-reload
+#          systemctl --user enable --now jarvis-voice
+#
+# Adjust WorkingDirectory to your clone path.
+
+[Unit]
+Description=Jarvis Voice Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-voice
+ExecStart=/usr/bin/node --max-old-space-size=2048 src/index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
