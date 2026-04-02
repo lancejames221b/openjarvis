@@ -388,7 +388,7 @@ export function setFocusByName(nameOrAlias) {
  * The context tag will inject the thread name so sub-agents know to work in that thread.
  *
  * @param {string} nameOrAlias — channel name/alias
- * @param {string} threadHint — partial thread name spoken by user (e.g. "beta launch", "Contact3")
+ * @param {string} threadHint — partial thread name spoken by user (e.g. "beta launch", "team-member")
  * @returns {Promise<FocusState|null>}
  */
 export async function setFocusWithThread(nameOrAlias, threadHint) {

@@ -5,12 +5,12 @@ FastAPI wrapper around Chatterbox TTS.
 
 Supports multiple voice references configured via env vars:
   CHATTERBOX_VOICE_JARVIS  — Paul Bettany-style JARVIS voice (default)
-  CHATTERBOX_VOICE_LANCE   — Lance James voice clone
+  CHATTERBOX_VOICE_OWNER   — Owner voice clone
   CHATTERBOX_DEFAULT_VOICE — which voice to use when none specified (default: jarvis)
 
 Request body (POST /tts):
   text          str   — required
-  voice         str   — "jarvis" | "lance" (optional, falls back to default)
+  voice         str   — "jarvis" | "owner" (optional, falls back to default)
   exaggeration  float — emotion intensity 0–1 (default per voice)
   cfg_weight    float — classifier-free guidance 0–1 (default 0.5)
   temperature   float — sampling temperature (default 0.7)
@@ -48,9 +48,9 @@ VOICE_REFS = {
         "CHATTERBOX_VOICE_JARVIS",
         "/home/generic/dev/voice-clones/jarvis/jarvis_reference_15s.wav",
     )),
-    "lance": Path(os.getenv(
-        "CHATTERBOX_VOICE_LANCE",
-        "/home/generic/dev/voice-clones/lance_reference_15s.wav",
+    "owner": Path(os.getenv(
+        "CHATTERBOX_VOICE_OWNER",
+        str(Path.home() / "voice-clones/owner_reference.wav"),
     )),
     "snoop": Path(os.getenv(
         "CHATTERBOX_VOICE_SNOOP",
@@ -73,10 +73,10 @@ VOICE_DEFAULTS = {
         "cfg_weight":   float(os.getenv("CHATTERBOX_JARVIS_CFG_WEIGHT",   "1.5")),
         "temperature":  float(os.getenv("CHATTERBOX_JARVIS_TEMPERATURE",  "0.5")),
     },
-    "lance": {
-        "exaggeration": float(os.getenv("CHATTERBOX_LANCE_EXAGGERATION",  "0.4")),
-        "cfg_weight":   float(os.getenv("CHATTERBOX_LANCE_CFG_WEIGHT",    "0.5")),
-        "temperature":  float(os.getenv("CHATTERBOX_LANCE_TEMPERATURE",   "0.7")),
+    "owner": {
+        "exaggeration": float(os.getenv("CHATTERBOX_OWNER_EXAGGERATION",  "0.4")),
+        "cfg_weight":   float(os.getenv("CHATTERBOX_OWNER_CFG_WEIGHT",    "0.5")),
+        "temperature":  float(os.getenv("CHATTERBOX_OWNER_TEMPERATURE",   "0.7")),
     },
     "snoop": {
         "exaggeration": float(os.getenv("CHATTERBOX_SNOOP_EXAGGERATION",  "0.5")),
@@ -235,7 +235,7 @@ def split_into_sentences(text: str, min_merge: int = 15, max_chars: int = 250) -
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Chatterbox TTS Service",
-    description="Multi-voice TTS — JARVIS + Lance clone (Chatterbox by Resemble AI)",
+    description="Multi-voice TTS — JARVIS + Owner voice clone (Chatterbox by Resemble AI)",
     version="2.0.0",
 )
 
@@ -273,7 +273,7 @@ async def text_to_speech(request: Request):
 
     JSON body:
       text          str   — text to speak (required)
-      voice         str   — "jarvis" | "lance" (default: CHATTERBOX_DEFAULT_VOICE)
+      voice         str   — "jarvis" | "owner" (default: CHATTERBOX_DEFAULT_VOICE)
       exaggeration  float — emotion intensity (default per voice)
       cfg_weight    float — CFG guidance (default per voice)
       temperature   float — sampling temp (default per voice)
@@ -469,7 +469,7 @@ async def text_to_speech_stream(request: Request):
 async def openai_compat(request: Request):
     """
     OpenAI-compatible endpoint.
-    POST { "input": "...", "model": "tts-1|tts-1-hd", "voice": "jarvis|lance|..." }
+    POST { "input": "...", "model": "tts-1|tts-1-hd", "voice": "jarvis|owner|..." }
     Passes voice through to /tts handler.
     """
     data = await request.json()

@@ -1254,7 +1254,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       serverMuteOwner(false);
     }
     // Apply implicit wake on join when owner is not muted - same as unmute flow.
-    // Allows Lance to start talking immediately after joining without wake word,
+    // Allows the owner to start talking immediately after joining without wake word,
     // as long as UNMUTE_IMPLICIT_WAKE is enabled. Voiceprint still required.
     if (UNMUTE_IMPLICIT_WAKE && !newState.selfMute) {
       applyImplicitWakeOnUnmute(newState.id, (val) => { authenticatedSession = val; });
@@ -1659,7 +1659,7 @@ client.on('messageCreate', async (message) => {
 //   /handoff #channel       - focus voice on a specific channel by mention or name
 //   /focus                  - same as /handoff
 //   /focus gibson           - focus by channel name (fuzzy matched)
-//   Auto-focus: if Lance posts in a registered channel while NOT in voice,
+//   Auto-focus: if the owner posts in a registered channel while NOT in voice,
 //               silently update focus (no confirmation). Only active channels
 //               (score ≥ 40 in resolveChannel) trigger auto-focus.
 client.on('messageCreate', async (message) => {
@@ -1732,7 +1732,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // ── Auto-focus: silently update focus when Lance posts in a known channel ──
+  // ── Auto-focus: silently update focus when the owner posts in a known channel ──
   // Only fires when NOT in voice (don't interrupt an active session's focus).
   // Only fires for registered channels (resolveChannel by channel name/id).
   if (!userDisconnected) return; // in voice - don't auto-focus from text
@@ -2705,7 +2705,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         return;
       }
       // Medium-tier floor: 0.35 raw minimum in active sessions
-      // (was 0.45 but that rejected Lance through Discord voice codec too aggressively)
+      // (was 0.45 but that rejected the owner through Discord voice codec too aggressively)
       if (speakerInfo && speakerInfo.confidence_tier === 'medium' && speakerInfo.confidence < 0.35) {
         logger.info(`🔇 Active session: medium-tier below floor rejected (confidence=${speakerInfo.confidence})`);
         return;
@@ -2824,7 +2824,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       } else if (dispatchResult.mode === 'tts' && dispatchResult.success) {
         const p = dispatchResult.provider;
-        const voiceName = p === 'edge' ? 'Sonia' : p === 'piper' ? 'JARVIS' : p === 'chatterbox' ? 'Lance clone' : p;
+        const voiceName = p === 'edge' ? 'Sonia' : p === 'piper' ? 'JARVIS' : p === 'chatterbox' ? 'Owner clone' : p;
         logger.info(`🎭 Switched to ${p} TTS (${voiceName})`);
         if (dispatchResult.needsRestart) {
           const ack = await synthesizeSpeech(`Switching to ${voiceName} voice. Restarting now.`);

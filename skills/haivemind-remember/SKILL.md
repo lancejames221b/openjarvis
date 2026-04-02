@@ -23,7 +23,7 @@ Lets you store and recall anything by just saying it. No commands, no syntax. Ju
 > "Jarvis, remember that the staging server password is rotating on Friday."  
 > "Note that Andrew prefers email over Slack for status updates."  
 > "Don't forget — client prefers morning calls before 10am."  
-> "What do you remember about the Gibson project?"  
+> "What do you remember about the project-beta project?"  
 > "Recall what I said about the deployment process."
 
 ## How It Works

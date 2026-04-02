@@ -1,5 +1,5 @@
 /**
- * Join Briefing — Proactive spoken briefing when Lance joins voice channel.
+ * Join Briefing — Proactive spoken briefing when the owner joins voice channel.
  *
  * On voice join, gathers:
  *   1. Trello: "3 Commits" cards + current task
@@ -14,9 +14,9 @@
  *   JOIN_BRIEFING_CALENDAR=true|false (default: true)
  *   JOIN_BRIEFING_HOURS=2
  *   JOIN_BRIEFING_COOLDOWN_MS=300000
- *   TRELLO_BOARD_ID=VOnucT41
- *   TRELLO_COMMITS_LIST_ID=YOUR_TRELLO_LIST_ID
- *   TRELLO_CURRENT_LIST_ID=YOUR_TRELLO_LIST_ID_2
+ *   TRELLO_BOARD_ID=your-board-id
+ *   TRELLO_COMMITS_LIST_ID=your-commits-list-id
+ *   TRELLO_CURRENT_LIST_ID=your-current-list-id
  */
 
 import { exec as _exec } from 'child_process';
@@ -38,16 +38,16 @@ const CALENDAR_ENABLED = process.env.JOIN_BRIEFING_CALENDAR !== 'false';
 const BRIEFING_HOURS_AHEAD = parseInt(process.env.JOIN_BRIEFING_HOURS ?? '2');
 const BRIEFING_COOLDOWN_MS = parseInt(process.env.JOIN_BRIEFING_COOLDOWN_MS ?? '300000'); // 5 min
 
-// Trello config — Lance's "Commit to 3" board
+// Trello config — "Commit to 3" board
 const TRELLO_API_KEY = process.env.TRELLO_API_KEY || '';
 const TRELLO_TOKEN = process.env.TRELLO_TOKEN || '';
-const TRELLO_BOARD_ID = process.env.TRELLO_BOARD_ID || 'VOnucT41';
-const TRELLO_COMMITS_LIST_ID = process.env.TRELLO_COMMITS_LIST_ID || 'YOUR_TRELLO_LIST_ID';   // "3 Commits"
-const TRELLO_CURRENT_LIST_ID = process.env.TRELLO_CURRENT_LIST_ID || 'YOUR_TRELLO_LIST_ID_2';   // "⚡ Lance: Current Task"
+const TRELLO_BOARD_ID = process.env.TRELLO_BOARD_ID || '';
+const TRELLO_COMMITS_LIST_ID = process.env.TRELLO_COMMITS_LIST_ID || '';   // "3 Commits"
+const TRELLO_CURRENT_LIST_ID = process.env.TRELLO_CURRENT_LIST_ID || '';   // "⚡ Current Task"
 
 // Mac silent-open config
 const MAC_OPEN_ENABLED = process.env.JOIN_BRIEFING_MAC_OPEN !== 'false';  // on by default
-const MAC_SSH_HOST = process.env.MAC_SSH_HOST || 'MAC_SSH_HOST';
+const MAC_SSH_HOST = process.env.MAC_SSH_HOST || '';
 const MAC_SSH_KEY = process.env.MAC_SSH_KEY || '~/.ssh/id_rsa';
 const MAC_SSH_OPTS = `-o IdentitiesOnly=yes -i ${MAC_SSH_KEY} -o StrictHostKeyChecking=no -o ConnectTimeout=5`;
 

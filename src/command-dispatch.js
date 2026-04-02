@@ -111,13 +111,13 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     // "focus on gibson" / "switch to ewitness" / "work on gibson" / "focus ewitness"
     // "focus on the deploy channel" / "switch to the gibson channel"
     // Also handles threads: "focus on gibson gtm, the beta launch thread"
-    //   / "switch to pr-reviews Contact3 thread" / "focus on jarvis voice dev"
+    //   / "switch to pr-reviews team-member thread" / "focus on jarvis voice dev"
     const focusMatch = cleanedTranscript.match(
       /(?:focus\s+(?:on\s+(?:the\s+)?)?|switch\s+(?:to\s+(?:the\s+)?)?|work\s+(?:on\s+(?:the\s+)?)?)([\w\s-]{1,40}?)(?:\s*[,;]?\s*(?:the\s+)?([\w\s-]+?)\s+thread)?\s*$/i
     );
     if (focusMatch) {
       const target = focusMatch[1].trim();
-      const threadHint = focusMatch[2]?.trim() || null; // e.g. "beta launch" or "Contact3"
+      const threadHint = focusMatch[2]?.trim() || null; // e.g. "beta launch" or "team-member"
       // Don't match persona/mode/tts commands that overlap
       const personas = listPersonalities();
       const nonFocusKeywords = new Set(['tldr', 'transcript', 'mobile', 'tts', 'piper', 'chatterbox', 'edge', ...personas]);

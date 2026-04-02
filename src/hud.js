@@ -23,8 +23,8 @@ import { getState } from './bot-state.js';
 // Trello config (same as join-briefing)
 const TRELLO_API_KEY = process.env.TRELLO_API_KEY || '';
 const TRELLO_TOKEN = process.env.TRELLO_TOKEN || '';
-const TRELLO_COMMITS_LIST_ID = process.env.TRELLO_COMMITS_LIST_ID || 'YOUR_TRELLO_LIST_ID';
-const TRELLO_CURRENT_LIST_ID = process.env.TRELLO_CURRENT_LIST_ID || 'YOUR_TRELLO_LIST_ID_2';
+const TRELLO_COMMITS_LIST_ID = process.env.TRELLO_COMMITS_LIST_ID || '';
+const TRELLO_CURRENT_LIST_ID = process.env.TRELLO_CURRENT_LIST_ID || '';
 const HUD_TRELLO = process.env.HUD_TRELLO !== 'false';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

@@ -6,14 +6,14 @@
  * Providers:
  *   edge        — Edge TTS (en-GB-SoniaNeural) — cloud, no GPU
  *   piper       — Piper TTS (JARVIS voice clone) — local, CPU
- *   chatterbox  — Chatterbox TTS (Lance voice clone) — local, GPU
- *   lance       — alias for chatterbox + sets wake word to "lance"
+ *   chatterbox  — Chatterbox TTS (owner voice clone) — local, GPU
+ *   owner       — alias for chatterbox + sets wake word to owner's name
  *
  * Voice command patterns (handled via isTtsToggleCommand):
- *   "switch to edge / piper / chatterbox / lance"
- *   "use edge / piper / chatterbox / lance voice"
+ *   "switch to edge / piper / chatterbox / owner"
+ *   "use edge / piper / chatterbox / owner voice"
  *
- * Text command: /jvoice [edge|piper|chatterbox|lance|status]
+ * Text command: /jvoice [edge|piper|chatterbox|owner|status]
  *   Handled in index.js — calls setTtsProvider() / setWakeWord() from here.
  */
 
@@ -27,12 +27,12 @@ const ENV_FILE = `${__dirname}/../.env`;
 
 // ── Provider display metadata ─────────────────────────────────────────────────
 // Wake words are read from .env at call time (JVOICE_WAKE_<PROVIDER>=<word>).
-// "lance" is a named alias for chatterbox that also sets the wake word.
+// "owner" is a named alias for chatterbox that also sets the wake word.
 export const TTS_PROVIDERS = {
   edge:        { label: 'Edge TTS (Sonia)',         actualProvider: 'edge' },
   piper:       { label: 'Piper TTS (JARVIS)',        actualProvider: 'piper' },
-  chatterbox:  { label: 'Chatterbox (Lance clone)',  actualProvider: 'chatterbox' },
-  lance:       { label: 'Chatterbox (Lance clone)',  actualProvider: 'chatterbox' },
+  chatterbox:  { label: 'Chatterbox (Owner clone)',  actualProvider: 'chatterbox' },
+  owner:       { label: 'Chatterbox (Owner clone)',  actualProvider: 'chatterbox' },
 };
 
 /**
@@ -46,10 +46,10 @@ export function getProviderWakeWord(provider) {
 }
 
 // ── Voice toggle patterns ─────────────────────────────────────────────────────
-// "switch to edge/piper/chatterbox/lance", "use lance voice", etc.
+// "switch to edge/piper/chatterbox/owner", "use owner voice", etc.
 const TTS_TOGGLE_PATTERNS = [
-  /\b(switch|change)\s+to\s+(edge|piper|ryan|jarvis|chatterbox|lance)\b/i,
-  /\buse\s+(edge|piper|ryan|jarvis|chatterbox|lance)\s*(voice|tts)?\b/i,
+  /\b(switch|change)\s+to\s+(edge|piper|ryan|jarvis|chatterbox|owner)\b/i,
+  /\buse\s+(edge|piper|ryan|jarvis|chatterbox|owner)\s*(voice|tts)?\b/i,
 ];
 
 /**
@@ -79,7 +79,7 @@ function normalizeProvider(raw) {
     case 'edge':     return 'edge';
     case 'jarvis':
     case 'piper':    return 'piper';
-    case 'lance':    return 'lance';
+    case 'owner':    return 'owner';
     case 'chatterbox': return 'chatterbox';
     default:         return null;
   }
@@ -122,9 +122,9 @@ export function getCurrentWakeWord() {
 
 /**
  * Switch TTS provider — hot-apply to process.env + persist to .env.
- * If provider is "lance", also calls setWakeWord("lance").
+ * If provider is "owner", also calls setWakeWord(the configured owner wake word).
  *
- * @param {string} provider — "edge" | "piper" | "chatterbox" | "lance"
+ * @param {string} provider — "edge" | "piper" | "chatterbox" | "owner"
  * @returns {{ ok: boolean, provider: string, wakeWordChanged: boolean, needsRestart: boolean }}
  */
 export function setTtsProvider(provider) {
@@ -134,7 +134,7 @@ export function setTtsProvider(provider) {
     return { ok: false };
   }
 
-  // Resolve alias (e.g. "lance" → "chatterbox") and look up configured wake word
+  // Resolve alias (e.g. "owner" → "chatterbox") and look up configured wake word
   const actualProvider = TTS_PROVIDERS[canonical]?.actualProvider ?? canonical;
   const newWakeWord    = getProviderWakeWord(canonical);
 
@@ -168,7 +168,7 @@ export function setTtsProvider(provider) {
  * Change the wake word — persists to .env.
  * Requires service restart to take effect (wake word is read at module init).
  *
- * @param {string} word — e.g. "lance", "sonia", "jarvis"
+ * @param {string} word — e.g. "owner", "sonia", "jarvis"
  * @returns {{ ok: boolean, needsRestart: boolean }}
  */
 export function setWakeWord(word) {

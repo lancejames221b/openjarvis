@@ -589,7 +589,7 @@ export function classifyIntent(signals) {
       maxSpokenSeconds: 15,
       responseStyle: 'concise-answer',
       spillover: false,
-      budgetInstruction: 'CALENDAR QUERY: Check calendar using google-workspace MCP. Be specific: time, title, attendees. For "am I free" questions, answer yes/no first, then details. Example: "You have 3 meetings today. 10am standup with engineering, 1pm review with Alain, and 4pm call with the client. You\'re free between 2 and 4." For availability: "Yes, you\'re free at 3pm. Your next meeting is at 4."',
+      budgetInstruction: 'CALENDAR QUERY: Check calendar using google-workspace MCP. Be specific: time, title, attendees. For "am I free" questions, answer yes/no first, then details. Example: "You have 3 meetings today. 10am standup with engineering, 1pm review with a colleague, and 4pm call with the client. You\'re free between 2 and 4." For availability: "Yes, you\'re free at 3pm. Your next meeting is at 4."',
     });
   }
   
@@ -602,7 +602,7 @@ export function classifyIntent(signals) {
       maxSpokenSeconds: 10,
       responseStyle: 'brief-confirm',
       spillover: false,
-      budgetInstruction: 'CALENDAR ACTION: Create, modify, or cancel a calendar event using google-workspace MCP. Always create with attendees if a person is mentioned. Confirm with time, date, and title. Example: "Done. Meeting with Alain scheduled for Tuesday at 2pm. Calendar invite sent."',
+      budgetInstruction: 'CALENDAR ACTION: Create, modify, or cancel a calendar event using google-workspace MCP. Always create with attendees if a person is mentioned. Confirm with time, date, and title. Example: "Done. Meeting with the colleague scheduled for Tuesday at 2pm. Calendar invite sent."',
     });
   }
   

@@ -220,7 +220,7 @@ async function executeReminderTier(id, reminder) {
       }
       
       case 'gateway': {
-        // Tier 3: Send through Clawdbot gateway to reach whatever channel Lance is active on
+        // Tier 3: Send through Clawdbot gateway to reach whatever channel the owner is active on
         try {
           const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
           const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
@@ -236,11 +236,11 @@ async function executeReminderTier(id, reminder) {
               messages: [
                 {
                   role: 'system',
-                  content: 'You are delivering an urgent reminder to Lance. This reminder has gone unacknowledged for 30+ minutes across voice, text, and DM. Deliver it clearly and concisely.',
+                  content: 'You are delivering an urgent reminder to the user. This reminder has gone unacknowledged for 30+ minutes across voice, text, and DM. Deliver it clearly and concisely.',
                 },
                 {
                   role: 'user',
-                  content: `URGENT REMINDER FOR LANCE (unacknowledged for ${Math.round((now - reminder.fireTime) / 60_000)} minutes): ${reminder.message}`,
+                  content: `URGENT REMINDER (unacknowledged for ${Math.round((now - reminder.fireTime) / 60_000)} minutes): ${reminder.message}`,
                 },
               ],
               max_tokens: 200,

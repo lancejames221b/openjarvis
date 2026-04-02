@@ -1,5 +1,5 @@
 /**
- * mac-open.js — Direct SSH open on Lance's MacBook Pro
+ * mac-open.js — Direct SSH open on the owner's MacBook Pro
  * 
  * Bypasses LLM entirely. One SSH call, done.
  * Mirrors the mac-open skill but as a direct Node.js function.
@@ -11,12 +11,12 @@ import logger from './logger.js';
 
 const execAsync = promisify(exec);
 
-const MAC_SSH_HOST = process.env.MAC_SSH_HOST || 'MAC_SSH_HOST';
+const MAC_SSH_HOST = process.env.MAC_SSH_HOST || '';
 const MAC_SSH_KEY = process.env.MAC_SSH_KEY || `${process.env.HOME}/.ssh/id_rsa`;
 const MAC_OPEN_TIMEOUT_MS = parseInt(process.env.MAC_OPEN_TIMEOUT_MS || '5000');
 
 /**
- * Open a URL or file on Lance's Mac via SSH.
+ * Open a URL or file on the owner's Mac via SSH.
  * @param {string} url - URL or file path to open
  * @returns {Promise<boolean>} true on success, false on failure (never throws)
  */
