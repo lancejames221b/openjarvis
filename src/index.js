@@ -128,7 +128,7 @@ async function startGatewayHealthCheck() {
       }
     }, intervalMs);
   };
-  scheduleHealthPoll(_gatewayHealthy ? 60_000 : 10_000);
+  scheduleHealthPoll(_gatewayHealthy ? 15_000 : 10_000);
 }
 
 // Start health check immediately (before Discord login)
@@ -335,6 +335,14 @@ setInterval(() => {
       }
       speakPhrase('Clearing backlog, sir.').catch(() => {});
       logger.warn(`📋 Cleared ${toClear.length} oldest task(s) from backlog (cap=5)`);
+    }
+    // Periodic GC: remove entries from tracking Sets for tasks no longer in activeTasks.
+    // Without this, completed/evicted task IDs accumulate indefinitely.
+    for (const id of _spokeLostTrackFor) {
+      if (!activeTasks.has(id)) _spokeLostTrackFor.delete(id);
+    }
+    for (const id of _staleInlineTasks) {
+      if (!activeTasks.has(id)) _staleInlineTasks.delete(id);
     }
   } catch (e) {
     logger.warn(`📋 Stall check failed: ${e.message}`);
@@ -2047,9 +2055,27 @@ async function joinChannel(voiceChannelId, options = {}) {
     logger.error('🔴 Voice connection error:', err.message);
   });
 
-  // Log state transitions for debugging
+  // Log state transitions for debugging — deduplicate to suppress oscillation noise
+  // (e.g. repeated connecting→connecting during WebRTC negotiation)
+  let _lastLoggedVoiceState = '';
+  let _connectingCount = 0;
   connection.on('stateChange', (oldState, newState) => {
-    logger.info(`🔊 Voice state: ${oldState.status} → ${newState.status}`);
+    const transition = `${oldState.status} → ${newState.status}`;
+    if (transition !== _lastLoggedVoiceState) {
+      logger.info(`🔊 Voice state: ${transition}`);
+      _lastLoggedVoiceState = transition;
+    }
+    // Oscillation guard: if signalling→connecting cycles >3 times without reaching
+    // Ready, destroy and let the outer retry loop rebuild the connection from scratch.
+    if (newState.status === VoiceConnectionStatus.Connecting) {
+      _connectingCount++;
+      if (_connectingCount > 3) {
+        logger.warn(`⚠️ Voice connection oscillating (${_connectingCount} connecting cycles) — destroying for retry`);
+        try { connection.destroy(); } catch {}
+      }
+    } else if (newState.status === VoiceConnectionStatus.Ready) {
+      _connectingCount = 0; // Reset on success
+    }
   });
 
   // Wait for Ready state with timeout - destroy and retry if stuck
@@ -2943,7 +2969,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (dispatchResult.type === 'voice_move') {
       const { resolveChannel, setFocusById } = await import('./focus-state.js');
       const { target } = dispatchResult;
-      const registry = JSON.parse(require('fs').readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
+      const registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
       // Try to find a voice channel ID from registry.voiceChannels
       let targetVoiceId = null;
       const query = target.toLowerCase();

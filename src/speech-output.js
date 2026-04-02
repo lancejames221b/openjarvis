@@ -40,6 +40,9 @@ export function getIsSpeaking() { return isSpeaking; }
 export function setIsSpeaking(val) { isSpeaking = val; }
 
 // ── Audio Queue ──────────────────────────────────────────────────────
+// NOTE: This is the speech-output module's own AudioQueue for TTS/ack playback.
+// src/index.js has a separate AudioQueue instance for direct voice channel audio.
+// Both are intentional — they manage different audio pipelines and are NOT duplicates.
 const AUDIO_QUEUE_MAX_SIZE = parseInt(process.env.AUDIO_QUEUE_MAX_SIZE || '50');
 
 class AudioQueue {
