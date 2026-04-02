@@ -70,7 +70,23 @@ class AudioQueue {
       logger.warn(`[AudioQueue] Max size (${AUDIO_QUEUE_MAX_SIZE}) reached — dropping oldest item: ${dropped.audioSource}`);
       try { unlinkSync(dropped.audioSource); } catch {}
     }
-    this.queue.push({ audioSource, metadata });
+    this.queue.push({ audioSource, metadata, type: 'tts' });
+    if (!this.playing) this.playNext();
+  }
+
+  /**
+   * Add a media item (local file or URL) to the queue.
+   * Unlike TTS items, media files are NOT deleted after playback.
+   * @param {{ filePath?: string, url?: string, title?: string }} media
+   */
+  addMedia({ filePath, url, title } = {}) {
+    if (!filePath && !url) throw new Error('addMedia requires filePath or url');
+    if (this.queue.length >= AUDIO_QUEUE_MAX_SIZE) {
+      const dropped = this.queue.shift();
+      logger.warn(`[AudioQueue] Max size reached — dropping: ${dropped.title || dropped.audioSource}`);
+      if (dropped.type === 'tts') try { unlinkSync(dropped.audioSource); } catch {}
+    }
+    this.queue.push({ audioSource: filePath || url, url, filePath, title: title || filePath || url, type: 'media' });
     if (!this.playing) this.playNext();
   }
   
@@ -100,9 +116,21 @@ class AudioQueue {
     }
     this.playing = true;
     isSpeaking = true;
-    const { audioSource } = this.queue.shift();
-    try { await playAudio(audioSource); } catch (err) { logger.error('Queue playback error:', err.message); }
-    try { unlinkSync(audioSource); } catch {}
+    const item = this.queue.shift();
+    const { audioSource, type, url, filePath, title } = item;
+    try {
+      if (type === 'media' && url) {
+        await playAudioUrl(url);
+      } else {
+        await playAudio(audioSource);
+      }
+    } catch (err) {
+      logger.error('Queue playback error:', err.message);
+    }
+    // Only clean up temp TTS files — never delete media files
+    if (type === 'tts') {
+      try { unlinkSync(audioSource); } catch {}
+    }
     setImmediate(() => this.playNext());
   }
 }
@@ -124,6 +152,35 @@ export function playAudio(filePath) {
         player.off('error', onError);
       };
       
+      player.once(AudioPlayerStatus.Idle, onIdle);
+      player.once('error', onError);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Play audio from an HTTP URL by streaming it into the voice channel.
+ * Requires ffmpeg (via prism-media) for non-WAV formats.
+ */
+export function playAudioUrl(url) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const { default: fetch } = await import('node-fetch').catch(() => ({ default: globalThis.fetch }));
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${url}`);
+      const { StreamType } = await import('@discordjs/voice');
+      const resource = createAudioResource(response.body, { inputType: StreamType.Arbitrary });
+      player.play(resource);
+
+      const onIdle = () => { cleanup(); resolve(); };
+      const onError = (err) => { cleanup(); reject(err); };
+      const cleanup = () => {
+        player.off(AudioPlayerStatus.Idle, onIdle);
+        player.off('error', onError);
+      };
+
       player.once(AudioPlayerStatus.Idle, onIdle);
       player.once('error', onError);
     } catch (err) {

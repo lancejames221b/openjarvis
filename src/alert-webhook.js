@@ -3,6 +3,8 @@
  * 
  * POST /alert   — Queue alert for voice briefing (on join or next pause)
  * POST /speak   — Immediate TTS delivery if user is in voice (for cron results, etc.)
+ * POST /play    — Play local audio file or HTTP URL in voice channel
+ * POST /stop    — Stop current playback and clear media queue
  * POST /remind  — Smart reminder with multi-tier escalation
  * GET  /health  — Process health + component status
  * 
@@ -696,6 +698,59 @@ function clearActiveContext() {
   activeContext.summary = null;
   activeContext.lastUpdated = null;
 }
+
+/**
+ * POST /play — Play a local audio file or HTTP URL in the voice channel
+ *
+ * Body: { "file": "filename.mp3" | "/absolute/path.wav" }
+ *       { "url": "http://..." }
+ *       { "title": "optional label" }
+ *
+ * File paths: absolute OR relative to MEDIA_DIR (default: data/media/)
+ * Supported formats: WAV, MP3, OGG, WebM (via prism-media / ffmpeg)
+ * Auth: Bearer ALERT_WEBHOOK_TOKEN
+ */
+app.post('/play', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { file, url, title } = req.body || {};
+  if (!file && !url) return res.status(400).json({ error: 'Body must include "file" or "url"' });
+
+  try {
+    const { audioQueue, playAudio } = await import('./speech-output.js');
+
+    if (url) {
+      // HTTP streaming — fetch and pipe into createAudioResource
+      const { createAudioResource } = await import('@discordjs/voice');
+      const { Readable } = await import('stream');
+      logger.info(`🎵 /play: streaming URL — ${url}`);
+
+      // We queue a special sentinel that resolves the URL at play time
+      audioQueue.addMedia({ url, title: title || url });
+      return res.json({ ok: true, queued: true, source: 'url', url });
+    }
+
+    // Local file — resolve against MEDIA_DIR if not absolute
+    const { existsSync } = await import('fs');
+    const { resolve, isAbsolute } = await import('path');
+    const MEDIA_DIR = process.env.MEDIA_DIR || resolve(process.cwd(), 'data/media');
+    const filePath = isAbsolute(file) ? file : resolve(MEDIA_DIR, file);
+
+    if (!existsSync(filePath)) {
+      logger.warn(`/play: file not found — ${filePath}`);
+      return res.status(404).json({ error: `File not found: ${filePath}` });
+    }
+
+    logger.info(`🎵 /play: queuing local file — ${filePath}`);
+    audioQueue.addMedia({ filePath, title: title || file });
+    res.json({ ok: true, queued: true, source: 'file', filePath });
+
+  } catch (err) {
+    logger.error('/play error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /**
  * POST /stop — Stop current TTS playback (CV2 button callback)

@@ -7,6 +7,8 @@ node_modules/
 tmp/
 models/
 data/
+!data/media/
+!data/media/.gitkeep
 venv/
 __pycache__/
 *.pyc
