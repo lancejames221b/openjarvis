@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.6.0+cu121
+torchvision==0.21.0+cu121
+torchaudio==2.6.0+cu121
+faster-whisper==1.1.0
+flask==3.1.0
+speechbrain==1.0.2
+numpy==1.26.4

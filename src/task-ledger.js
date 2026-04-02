@@ -1,0 +1,334 @@
+/**
+ * Task Ledger — Persistent promise tracking for voice tasks
+ * 
+ * Every voice command creates a ledger entry. The entry tracks:
+ * - What was asked
+ * - When it was dispatched
+ * - Whether a result was delivered
+ * - How it was delivered (voice, text, DM)
+ * 
+ * On startup, checks for orphaned tasks (dispatched but never completed)
+ * and escalates them.
+ * 
+ * Storage: JSON file (simple, no deps, survives restarts)
+ */
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import logger from './logger.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = join(__dirname, '..', 'data');
+const LEDGER_PATH = join(DATA_DIR, 'task-ledger.json');
+
+// Ensure data directory exists
+if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+
+// Task states
+export const TaskState = {
+  DISPATCHED: 'dispatched',     // Sent to gateway, awaiting response
+  STREAMING: 'streaming',       // Receiving streaming response
+  STREAM_DONE: 'stream_done',   // Streaming complete (ack spoken)
+  WORKING: 'working',           // Gateway doing tool calls (post-stream)
+  COMPLETED: 'completed',       // Result delivered to user
+  FAILED: 'failed',             // Task failed
+  ORPHANED: 'orphaned',         // Found on startup with no completion
+  ESCALATED: 'escalated',       // Orphan escalated to user
+};
+
+// How long before a task is considered orphaned (5 minutes)
+const ORPHAN_THRESHOLD_MS = parseInt(process.env.TASK_ORPHAN_THRESHOLD_MS ?? '300000');
+// How long to keep completed tasks in ledger (1 hour)
+const COMPLETED_TTL_MS = 60 * 60 * 1000;
+// Max ledger entries to prevent unbounded growth
+const MAX_ENTRIES = parseInt(process.env.TASK_LEDGER_MAX ?? '100');
+
+let ledger = loadLedger();
+
+/**
+ * Load ledger from disk
+ */
+function loadLedger() {
+  try {
+    if (existsSync(LEDGER_PATH)) {
+      const data = JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
+      return data.tasks || [];
+    }
+  } catch (err) {
+    logger.error('Failed to load task ledger:', err.message);
+  }
+  return [];
+}
+
+/**
+ * Save ledger to disk (debounced)
+ */
+let saveTimeout = null;
+function saveLedger() {
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    try {
+      writeFileSync(LEDGER_PATH, JSON.stringify({ tasks: ledger, savedAt: new Date().toISOString() }, null, 2));
+    } catch (err) {
+      logger.error('Failed to save task ledger:', err.message);
+    }
+  }, 500);
+}
+
+/**
+ * Prune old completed/escalated entries
+ */
+function pruneOld() {
+  const now = Date.now();
+  const before = ledger.length;
+  ledger = ledger.filter(t => {
+    if (t.state === TaskState.COMPLETED || t.state === TaskState.ESCALATED || t.state === TaskState.FAILED) {
+      return now - t.updatedAt < COMPLETED_TTL_MS;
+    }
+    // Orphaned and working tasks also expire (after 2x the completed TTL)
+    if (t.state === TaskState.ORPHANED || t.state === TaskState.WORKING) {
+      return now - t.updatedAt < COMPLETED_TTL_MS * 2;
+    }
+    return true;
+  });
+  // Hard cap: when over limit, prefer dropping orphaned/working entries first
+  if (ledger.length > MAX_ENTRIES) {
+    const pruneable = ledger.filter(t => t.state === TaskState.ORPHANED || t.state === TaskState.WORKING);
+    const keepers = ledger.filter(t => t.state !== TaskState.ORPHANED && t.state !== TaskState.WORKING);
+    if (keepers.length <= MAX_ENTRIES) {
+      // Drop orphaned/working to fit, then hard-slice keepers if still over
+      ledger = keepers.concat(pruneable.slice(-(MAX_ENTRIES - keepers.length)));
+    } else {
+      ledger = keepers.slice(-MAX_ENTRIES);
+    }
+  }
+  if (ledger.length !== before) saveLedger();
+}
+
+/**
+ * Create a new task entry when a voice command is dispatched
+ */
+export function createTask(taskId, transcript, userId) {
+  const entry = {
+    taskId,
+    transcript: transcript.substring(0, 200),
+    userId,
+    state: TaskState.DISPATCHED,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    streamComplete: false,
+    resultDelivered: false,
+    deliveryMethod: null,     // 'voice', 'text', 'dm', 'speak-endpoint'
+    resultSummary: null,
+    error: null,
+  };
+  ledger.push(entry);
+  saveLedger();
+  logger.info(`📋 Ledger: Task #${taskId} created — "${transcript.substring(0, 60)}..."`);
+  return entry;
+}
+
+/**
+ * Update task state
+ */
+export function updateTask(taskId, updates) {
+  const task = ledger.find(t => t.taskId === taskId);
+  if (!task) {
+    logger.warn(`📋 Ledger: Task #${taskId} not found for update`);
+    return null;
+  }
+  Object.assign(task, updates, { updatedAt: Date.now() });
+  saveLedger();
+  return task;
+}
+
+/**
+ * Mark task as streaming (first tokens received)
+ */
+export function markStreaming(taskId) {
+  return updateTask(taskId, { state: TaskState.STREAMING });
+}
+
+/**
+ * Mark streaming done — the spoken ack has been delivered
+ * But the gateway may still be doing tool calls
+ */
+export function markStreamDone(taskId, spokenText) {
+  return updateTask(taskId, {
+    state: TaskState.STREAM_DONE,
+    streamComplete: true,
+    resultSummary: spokenText?.substring(0, 300),
+  });
+}
+
+/**
+ * Check if the streaming response was just an acknowledgment
+ * (short response suggesting work is happening in background)
+ */
+export function isJustAck(text) {
+  if (!text) return true;
+  const clean = text.trim();
+  
+  // Very short responses are likely acks — but only below the micro-answer threshold.
+  // Raised from 80→40: answers like "The capital is Paris." are complete, not acks.
+  if (clean.length < 40) return true;
+  
+  // Short responses with promise language
+  if (clean.length < 200 && /\b(on it|i'll|working on|let me|getting|setting up|installing|creating|checking)\b/i.test(clean)) {
+    return true;
+  }
+  
+  // Future-tense promise detection — regardless of length
+  // Catches "Phase 2's running. I'll ping you when it's done" (>200 chars but still an ack)
+  const PROMISE_PATTERNS = [
+    /\bi'll\s+(ping|let you know|notify|report|get back|update|circle back)\b/i,
+    /\b(ping|notify|update)\s+you\s+when\b/i,
+    /\bwhen\s+(it's|its|it is)\s+(done|ready|complete|finished)\b/i,
+    /\b(kicked? off|running|spawned|dispatched|started)\b.*\b(now|right now|phase)\b/i,
+    /\b(kicking off|spinning up|firing up|launching)\b/i,
+  ];
+  
+  const hasPromise = PROMISE_PATTERNS.some(p => p.test(clean));
+  
+  // If it contains a future promise AND no actual data/results, it's an ack
+  // "Actual results" = code blocks, bullet lists, specific data
+  if (hasPromise) {
+    const hasResults = /```|^\s*[-*]\s+\S/m.test(clean) || clean.length > 800;
+    if (!hasResults) return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Mark task as having a pending background operation
+ * (streaming response was just an ack, real work is still happening)
+ */
+export function markWorking(taskId) {
+  return updateTask(taskId, { state: TaskState.WORKING });
+}
+
+/**
+ * Mark task as completed with result delivered
+ */
+export function markCompleted(taskId, deliveryMethod, resultSummary) {
+  return updateTask(taskId, {
+    state: TaskState.COMPLETED,
+    resultDelivered: true,
+    deliveryMethod,
+    resultSummary: resultSummary?.substring(0, 300),
+  });
+}
+
+/**
+ * Mark task as failed
+ */
+export function markFailed(taskId, error) {
+  return updateTask(taskId, {
+    state: TaskState.FAILED,
+    error: error?.substring(0, 200),
+  });
+}
+
+/**
+ * Get all tasks that look orphaned (dispatched/working but no result after threshold)
+ */
+export function getOrphanedTasks() {
+  const now = Date.now();
+  return ledger.filter(t => {
+    if (t.state === TaskState.COMPLETED || t.state === TaskState.FAILED || 
+        t.state === TaskState.ESCALATED || t.state === TaskState.ORPHANED) {
+      return false;
+    }
+    // Task is old enough to be considered orphaned
+    return now - t.createdAt > ORPHAN_THRESHOLD_MS;
+  });
+}
+
+/**
+ * Get tasks that are in STREAM_DONE state and the response was just an ack
+ * These need follow-up — the gateway said "On it" but we never got results
+ */
+export function getPendingFollowups() {
+  const now = Date.now();
+  const FOLLOWUP_THRESHOLD_MS = parseInt(process.env.TASK_FOLLOWUP_THRESHOLD_MS ?? '120000');
+  return ledger.filter(t => {
+    if (t.state !== TaskState.STREAM_DONE && t.state !== TaskState.WORKING) return false;
+    return now - t.updatedAt > FOLLOWUP_THRESHOLD_MS;
+  });
+}
+
+/**
+ * Mark orphaned tasks and return them for escalation
+ */
+export function processOrphans() {
+  const orphans = getOrphanedTasks();
+  for (const task of orphans) {
+    task.state = TaskState.ORPHANED;
+    task.updatedAt = Date.now();
+  }
+  if (orphans.length > 0) saveLedger();
+  return orphans;
+}
+
+/**
+ * Mark a task as escalated (user was notified about the orphan)
+ */
+export function markEscalated(taskId) {
+  return updateTask(taskId, { state: TaskState.ESCALATED });
+}
+
+/**
+ * Get active tasks (not completed, failed, or escalated)
+ */
+export function getActiveTasks() {
+  return ledger.filter(t => 
+    t.state !== TaskState.COMPLETED && 
+    t.state !== TaskState.FAILED && 
+    t.state !== TaskState.ESCALATED
+  );
+}
+
+/**
+ * Get task by ID
+ */
+export function getTask(taskId) {
+  return ledger.find(t => t.taskId === taskId) || null;
+}
+
+/**
+ * Get ledger stats
+ */
+export function getLedgerStats() {
+  const counts = {};
+  for (const task of ledger) {
+    counts[task.state] = (counts[task.state] || 0) + 1;
+  }
+  return { total: ledger.length, ...counts };
+}
+
+/**
+ * Startup reconciliation — find orphans from previous run
+ */
+export function reconcileOnStartup() {
+  pruneOld();
+  const orphans = processOrphans();
+  const pending = getPendingFollowups();
+  
+  if (orphans.length > 0) {
+    logger.info(`📋 Ledger: Found ${orphans.length} orphaned tasks from previous run`);
+    for (const task of orphans) {
+      logger.info(`  ❗ Task #${task.taskId}: "${task.transcript}" (${task.state})`);
+    }
+  }
+  
+  if (pending.length > 0) {
+    logger.info(`📋 Ledger: Found ${pending.length} tasks awaiting follow-up`);
+    for (const task of pending) {
+      logger.info(`  ⏳ Task #${task.taskId}: "${task.transcript}" (${task.state})`);
+    }
+  }
+  
+  return { orphans, pending };
+}

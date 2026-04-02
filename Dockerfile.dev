@@ -1,0 +1,23 @@
+# jarvis-voice — Development Container
+# GPU services are mocked in dev mode. Set USE_MOCK_GPU=true (default).
+FROM node:20-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip curl git ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+RUN npm ci
+
+COPY src/ ./src/
+COPY prompts/ ./prompts/
+
+ENV NODE_ENV=development
+ENV USE_MOCK_GPU=true
+ENV LOG_LEVEL=debug
+
+EXPOSE 3335
+
+CMD ["node", "--max-old-space-size=2048", "src/index.js"]
