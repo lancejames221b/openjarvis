@@ -401,6 +401,28 @@ async function _prefetchHaivemind(channelId) {
 }
 
 /**
+ * Post a breadcrumb notice to the previously-focused channel when switching focus.
+ * Non-blocking, fire-and-forget.
+ * @param {object} oldFocus — previous focus state
+ * @param {string} newChannelName — name of the new channel
+ */
+async function _postFocusBreadcrumb(oldFocus, newChannelName) {
+  if (!_discordClient || !oldFocus?.channelId) return;
+  // Don't post breadcrumb if switching to the same channel
+  if (oldFocus.channelId === newChannelName) return;
+
+  try {
+    const channel = await _discordClient.channels.fetch(oldFocus.channelId);
+    if (channel?.isTextBased?.()) {
+      await channel.send(`📌 *Switching focus to **#${newChannelName}***`);
+      logger.info(`[focus] Posted breadcrumb to #${oldFocus.channelName} → #${newChannelName}`);
+    }
+  } catch (err) {
+    logger.warn(`[focus] Breadcrumb post failed (non-fatal): ${err.message}`);
+  }
+}
+
+/**
  * Set the focus to a channel (by name/alias).
  * Resolves the channel, loads its directive, builds structured references,
  * and kicks off a haivemind pre-fetch.
@@ -410,6 +432,7 @@ async function _prefetchHaivemind(channelId) {
 export function setFocusByName(nameOrAlias) {
   const resolved = resolveChannel(nameOrAlias);
   if (!resolved) return null;
+  const previousFocus = _focus;
 
   const directive = loadDirective(resolved.channelId);
   const registry = _loadRegistry();
@@ -429,6 +452,11 @@ export function setFocusByName(nameOrAlias) {
 
   _saveState(_focus);
   logger.info(`[focus] Set focus: ${resolved.channelName} (${resolved.channelId})`);
+
+  // Post breadcrumb to previous channel (fire-and-forget)
+  if (previousFocus && previousFocus.channelId !== resolved.channelId) {
+    _postFocusBreadcrumb(previousFocus, resolved.channelName);
+  }
 
   // Pre-fetch context: Discord messages FIRST (ground truth), then haivemind
   _prefetchDiscordMessages(resolved.channelId).then(() => {
@@ -453,6 +481,7 @@ export function setFocusByName(nameOrAlias) {
 export async function setFocusWithThread(nameOrAlias, threadHint) {
   const resolved = resolveChannel(nameOrAlias);
   if (!resolved) return null;
+  const previousFocus = _focus;
 
   // Try to resolve the thread via Discord bot client (if available in global scope)
   let threadId = null;
@@ -528,6 +557,11 @@ export async function setFocusWithThread(nameOrAlias, threadHint) {
   _saveState(_focus);
   logger.info(`[focus] Set focus: ${resolved.channelName}${threadName ? ` › ${threadName}` : ''} (${resolved.channelId})`);
 
+  // Post breadcrumb to previous channel
+  if (previousFocus && previousFocus.channelId !== resolved.channelId) {
+    _postFocusBreadcrumb(previousFocus, resolved.channelName);
+  }
+
   // Discord messages FIRST (ground truth), then haivemind
   _prefetchDiscordMessages(resolved.channelId).then(() => {
     _prefetchHaivemind(resolved.channelId);
@@ -542,6 +576,7 @@ export async function setFocusWithThread(nameOrAlias, threadHint) {
  * @param {string} channelName
  */
 export function setFocusById(channelId, channelName) {
+  const previousFocus = _focus;
   const directive = loadDirective(channelId);
   const registry = _loadRegistry();
   const channelData = registry.channels?.[channelId] || {};
@@ -560,6 +595,11 @@ export function setFocusById(channelId, channelName) {
 
   _saveState(_focus);
   logger.info(`[focus] Set focus by ID: ${_focus.channelName} (${channelId})`);
+
+  // Post breadcrumb to previous channel
+  if (previousFocus && previousFocus.channelId !== channelId) {
+    _postFocusBreadcrumb(previousFocus, _focus.channelName);
+  }
 
   // Discord messages FIRST (ground truth), then haivemind
   _prefetchDiscordMessages(channelId).then(() => {

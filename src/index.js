@@ -1798,6 +1798,48 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+// ── Voice Message Transcript Replies ─────────────────────────────────
+// When a user sends a voice message (.ogg attachment) in any channel the bot
+// can see, transcribe it and reply with the text. This makes voice message
+// content visible in channel history for focus-read, reloads, and search.
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
+
+  // Discord voice messages have flags 8192 (IS_VOICE_MESSAGE) and an .ogg attachment
+  const isVoiceMessage = (message.flags?.bitfield & 8192) !== 0;
+  if (!isVoiceMessage) return;
+
+  const oggAttachment = message.attachments.find(a =>
+    a.contentType?.includes('audio/ogg') || a.url?.endsWith('.ogg')
+  );
+  if (!oggAttachment) return;
+
+  try {
+    // Download the voice message
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(oggAttachment.url);
+    if (!response.ok) return;
+
+    const tmpPath = join(__dirname, '..', 'data', `voice-msg-${message.id}.ogg`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    writeFileSync(tmpPath, buffer);
+
+    // Transcribe using the configured STT provider
+    const transcript = await transcribeWhisperOnly(tmpPath);
+
+    // Clean up temp file
+    try { unlinkSync(tmpPath); } catch {}
+
+    if (transcript && transcript.trim().length > 0) {
+      await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
+      logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${transcript.trim().substring(0, 60)}"`);
+    }
+  } catch (err) {
+    logger.warn(`[voice-transcript] Failed to transcribe voice message: ${err.message}`);
+  }
+});
+
 // ── Voice-to-Text Handoff ────────────────────────────────────────────
 
 async function sendDM(userId, message) {
