@@ -1,0 +1,47 @@
+# GPU services image — runs whisper-stt, piper-tts, and speaker-verify
+#
+# Build args:
+#   CUDA_VERSION  — CUDA base tag (default: 12.1.0)
+#   UBUNTU_VER    — Ubuntu base (default: 22.04)
+#   PLATFORM      — cuda | cpu (default: cuda)
+#
+# For CPU-only (no NVIDIA runtime needed):
+#   docker build --build-arg PLATFORM=cpu -f Dockerfile.gpu -t jarvis-gpu-cpu .
+
+ARG CUDA_VERSION=12.1.0
+ARG UBUNTU_VER=22.04
+ARG PLATFORM=cuda
+
+# Base image selection — CPU build uses slim Python, GPU build uses CUDA devel
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu${UBUNTU_VER} AS base-cuda
+FROM python:3.11-slim AS base-cpu
+FROM base-${PLATFORM} AS base
+
+# Common system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv \
+    ffmpeg libsndfile1 \
+    curl wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# In CUDA base, python3 might not be symlinked to python
+RUN python3 -m ensurepip --upgrade 2>/dev/null || true
+
+WORKDIR /app
+
+# Copy requirements based on platform
+ARG PLATFORM=cuda
+COPY requirements-${PLATFORM}.txt ./requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy GPU services and models
+COPY gpu-services/ ./gpu-services/
+COPY models/ ./models/
+
+# Expose all three service ports
+EXPOSE 8766 8767 3336
+
+# Default: whisper STT (override CMD in docker-compose per service)
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python3", "gpu-services/whisper_stt_service.py"]

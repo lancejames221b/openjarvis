@@ -1,0 +1,25 @@
+[Unit]
+Description=Jarvis Chatterbox TTS Service (Owner voice clone)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/generic/dev/jarvis-gpu-services
+Environment=CHATTERBOX_PORT=3340
+Environment=CHATTERBOX_DEFAULT_VOICE=jarvis
+Environment=CHATTERBOX_VOICE_JARVIS=${HOME}/voice-clones/jarvis/jarvis_reference_15s.wav
+Environment=CHATTERBOX_VOICE_OWNER=${HOME}/voice-clones/owner_reference.wav
+Environment=CHATTERBOX_JARVIS_EXAGGERATION=0.35
+Environment=CHATTERBOX_JARVIS_CFG_WEIGHT=0.6
+Environment=CHATTERBOX_JARVIS_TEMPERATURE=0.7
+Environment=CHATTERBOX_OWNER_EXAGGERATION=0.4
+Environment=CHATTERBOX_OWNER_CFG_WEIGHT=0.5
+Environment=CHATTERBOX_OWNER_TEMPERATURE=0.7
+ExecStart=${HOME}/voice-clones/train_venv310/bin/python %h/jarvis-gpu-services/chatterbox_tts_service.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

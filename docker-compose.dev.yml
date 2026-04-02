@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  jarvis-voice:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file:
+      - .env.dev
+    ports:
+      - "3335:3335"
+    volumes:
+      - ./src:/app/src
+      - ./prompts:/app/prompts
+      - ./data:/app/data
+    restart: unless-stopped

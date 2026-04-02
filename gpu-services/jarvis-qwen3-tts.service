@@ -1,0 +1,15 @@
+[Unit]
+Description=Qwen3-TTS Service for Jarvis Voice
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/generic/dev/jarvis-voice/gpu-services
+ExecStart=/home/generic/dev/tts-compare-venv/bin/python3 qwen3_tts_service.py
+Environment=QWEN3_TTS_PORT=3341
+Environment=QWEN3_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
