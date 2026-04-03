@@ -41,6 +41,7 @@ import { isMobileModeEnabled } from './mobile-mode.js';
 import { isVisualModeEnabled, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
+import { registerSlashCommands, handleSlashCommand } from './slash-commands.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { touchFocus } from './focus-state.js';
@@ -935,6 +936,9 @@ client.once('ready', async () => {
   logger.info(`🤖 Jarvis Voice Bot online as ${client.user.tag}`);
   logger.info(`📡 Guild: ${GUILD_ID} | Voice: ${VOICE_CHANNEL_ID} | Multi-user: ${MULTI_USER_ENABLED} | Callback: ${WEBHOOK_CALLBACK_MODE}`);
 
+  // Register slash commands (/visual)
+  registerSlashCommands(client).catch(e => logger.warn(`[slash] Registration error: ${e.message}`));
+
   // Seed wake words + Chatterbox voice from the startup persona (VOICE_PERSONA env var, default: jarvis)
   const startupPersona = getActivePersona();
   setPersonaWakeWords(startupPersona.wakeWords || []);
@@ -1164,6 +1168,17 @@ client.once('ready', async () => {
   } catch (err) {
     logger.error('⚠️ Failed to join voice channel:', err.message);
     logger.info('🔄 Will auto-join when owner enters a voice channel');
+  }
+});
+
+// ── Slash command handler (/visual) ──────────────────────────────────
+client.on('interactionCreate', async (interaction) => {
+  try {
+    await handleSlashCommand(interaction, ALLOWED_USERS);
+  } catch (err) {
+    logger.error(`[slash] Interaction error: ${err.message}`);
+    if (interaction.replied || interaction.deferred) return;
+    await interaction.reply({ content: '❌ Something went wrong.', ephemeral: true }).catch(() => {});
   }
 });
 
