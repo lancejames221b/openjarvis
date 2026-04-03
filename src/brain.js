@@ -171,7 +171,7 @@ function resolvePrompt(filename, vars = {}) {
 
 // ── Gateway Resilience: Timeout, Retry, Circuit Breaker ──────────────
 
-const ACK_MODEL = process.env.ACK_MODEL;
+const ACK_MODEL = 'openclaw'; // Gateway only accepts 'openclaw' — per-request model routing not supported
 const ACK_TIMEOUT_MS = 8_000; // 8s hard limit — ack should return in <2s
 const CONTEXTUAL_ACK_TIMEOUT_MS = 1_500; // 1.5s hard limit for contextual dispatch acks
 // Master ack feature flag. Set VOICE_ACK_ENABLED=false to suppress all "On it, sir." style responses.
@@ -890,7 +890,7 @@ export async function generateAck(userMessage) {
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
-        model: ACK_MODEL,
+        model: 'openclaw',
         stream: false,
         max_tokens: 30,
         ...THINKING_PARAM,
@@ -977,7 +977,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
-        model: ACK_MODEL,
+        model: 'openclaw',
         stream: false,
         max_tokens: 50,
         ...THINKING_PARAM,
@@ -1034,7 +1034,7 @@ export async function generateContextualInterim(userRequest) {
         'x-openclaw-scopes': 'operator.write',
       },
       body: JSON.stringify({
-        model: ACK_MODEL,
+        model: 'openclaw',
         stream: false,
         max_tokens: 30,
         ...THINKING_PARAM,

@@ -37,8 +37,13 @@ export const TaskState = {
   ESCALATED: 'escalated',       // Orphan escalated to user
 };
 
-// How long before a task is considered orphaned (5 minutes)
-const ORPHAN_THRESHOLD_MS = parseInt(process.env.TASK_ORPHAN_THRESHOLD_MS ?? '300000');
+// Tiered orphan thresholds based on task state (Issue #5)
+// DISPATCHED = gateway never acked → something is wrong fast
+// STREAM_DONE = ack spoken but no result → standard timeout
+// WORKING = confirmed background work (sub-agents, research) → long timeout
+const DISPATCHED_ORPHAN_MS = parseInt(process.env.TASK_DISPATCHED_ORPHAN_MS ?? '120000');   // 2 min
+const ORPHAN_THRESHOLD_MS = parseInt(process.env.TASK_ORPHAN_THRESHOLD_MS ?? '300000');      // 5 min
+const WORKING_ORPHAN_MS = parseInt(process.env.TASK_WORKING_ORPHAN_MS ?? '1800000');         // 30 min
 // How long to keep completed tasks in ledger (1 hour)
 const COMPLETED_TTL_MS = 60 * 60 * 1000;
 // Max ledger entries to prevent unbounded growth
@@ -241,8 +246,21 @@ export function getOrphanedTasks() {
         t.state === TaskState.ESCALATED || t.state === TaskState.ORPHANED) {
       return false;
     }
-    // Task is old enough to be considered orphaned
-    return now - t.createdAt > ORPHAN_THRESHOLD_MS;
+    // Tiered thresholds based on task state (Issue #5)
+    const age = now - t.createdAt;
+    switch (t.state) {
+      case TaskState.DISPATCHED:
+        // Gateway never responded — 2 min is plenty
+        return age > DISPATCHED_ORPHAN_MS;
+      case TaskState.WORKING:
+        // Confirmed background work (sub-agents, research) — 30 min
+        return age > WORKING_ORPHAN_MS;
+      case TaskState.STREAMING:
+      case TaskState.STREAM_DONE:
+      default:
+        // Standard threshold — 5 min
+        return age > ORPHAN_THRESHOLD_MS;
+    }
   });
 }
 
