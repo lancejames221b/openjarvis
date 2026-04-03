@@ -1,0 +1,101 @@
+/**
+ * Slash Commands — /visual
+ *
+ * Registers and handles Discord slash commands for the voice bot.
+ * Currently supports /visual for toggling visual mode from any text channel.
+ */
+
+import { SlashCommandBuilder, REST, Routes } from 'discord.js';
+import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
+import { setFocusByName } from './focus-state.js';
+import logger from './logger.js';
+
+const VISUAL_CMD = new SlashCommandBuilder()
+  .setName('visual')
+  .setDescription('Toggle visual mode — responses go to text instead of voice')
+  .addSubcommand(sub =>
+    sub.setName('on').setDescription('Enable visual mode'))
+  .addSubcommand(sub =>
+    sub.setName('off').setDescription('Disable visual mode (back to voice)'))
+  .addSubcommand(sub =>
+    sub.setName('status').setDescription('Check current visual mode state'))
+  .addSubcommand(sub =>
+    sub.setName('channel')
+      .setDescription('Set the target channel for visual output')
+      .addStringOption(opt =>
+        opt.setName('name').setDescription('Channel name (e.g. gibson, pr-reviews)').setRequired(true)));
+
+/**
+ * Register slash commands with Discord API
+ */
+export async function registerSlashCommands(client) {
+  const rest = new REST({ version: '10' }).setToken(client.token);
+  try {
+    const guildId = client.guilds.cache.first()?.id;
+    if (!guildId) {
+      logger.warn('[slash] No guild found, skipping command registration');
+      return;
+    }
+    await rest.put(
+      Routes.applicationGuildCommands(client.user.id, guildId),
+      { body: [VISUAL_CMD.toJSON()] }
+    );
+    logger.info('[slash] Registered /visual command');
+  } catch (err) {
+    logger.error(`[slash] Failed to register commands: ${err.message}`);
+  }
+}
+
+/**
+ * Handle incoming slash command interactions
+ */
+export async function handleSlashCommand(interaction, allowedUsers) {
+  if (!interaction.isChatInputCommand()) return false;
+  if (interaction.commandName !== 'visual') return false;
+
+  // Auth check — only allowed users
+  if (!allowedUsers.includes(interaction.user.id)) {
+    await interaction.reply({ content: '🚫 Not authorized.', ephemeral: true });
+    return true;
+  }
+
+  const sub = interaction.options.getSubcommand();
+
+  if (sub === 'on') {
+    setVisualMode(true);
+    await interaction.reply({ content: '🖥️ **Visual mode ON** — responses will appear as text, not voice.', ephemeral: false });
+    return true;
+  }
+
+  if (sub === 'off') {
+    setVisualMode(false);
+    setVisualTargetChannel(null);
+    await interaction.reply({ content: '🔊 **Visual mode OFF** — back to voice output.', ephemeral: false });
+    return true;
+  }
+
+  if (sub === 'status') {
+    const enabled = isVisualModeEnabled();
+    const target = getVisualTargetChannel();
+    const status = enabled
+      ? `🖥️ **Visual mode is ON**${target ? ` → <#${target}>` : ' (default channel)'}`
+      : '🔊 **Visual mode is OFF** — voice output active';
+    await interaction.reply({ content: status, ephemeral: true });
+    return true;
+  }
+
+  if (sub === 'channel') {
+    const name = interaction.options.getString('name');
+    const result = setFocusByName(name);
+    if (result) {
+      setVisualMode(true);
+      setVisualTargetChannel(result.channelId);
+      await interaction.reply({ content: `🖥️ **Visual mode ON** → <#${result.channelId}> (${result.channelName})`, ephemeral: false });
+    } else {
+      await interaction.reply({ content: `❌ Channel "${name}" not found in registry.`, ephemeral: true });
+    }
+    return true;
+  }
+
+  return false;
+}

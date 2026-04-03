@@ -196,6 +196,23 @@ Total VRAM: ~4.5GB (fits easily in any modern GPU).
 
 ## What's New
 
+### Visual Mode (Expanse-style)
+
+All voice input still works — you talk, Jarvis listens. But instead of speaking back, responses appear as rich formatted text in Discord. Like the ship AI in The Expanse.
+
+**Voice commands:**
+- "Jarvis, visual mode" / "screen mode" / "text only" / "expanse mode" → ON
+- "Jarvis, voice mode" / "talk to me" / "audio mode" → OFF
+- "Jarvis, visual mode in gibson" → ON + route to specific channel
+
+**Slash commands:**
+- `/visual on` — enable visual mode from any text channel
+- `/visual off` — disable (back to voice)
+- `/visual status` — check current state
+- `/visual channel <name>` — set target channel
+
+When active, the brain gets a `[VISUAL]` tag so it uses full markdown formatting instead of optimizing for speech.
+
 ### Self-Mute TTS Queue
 
 When you self-mute on Discord, Jarvis stops speaking — but keeps working. Tasks execute in the background, and any TTS output (responses, alerts, `/speak` callbacks) is captured to a text queue instead of being synthesized and played.
