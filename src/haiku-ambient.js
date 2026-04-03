@@ -15,6 +15,19 @@
  *
  * FAIL OPEN: on timeout, error, or any ambiguity → UNCERTAIN → silent ignore.
  *
+ * ── Active Conversation Window (2026-04-02) ───────────────────────────────────
+ * The classifier does NOT fire on every utterance. It only activates when we are
+ * inside an "active conversation window" — i.e., within HAIKU_AMBIENT_WINDOW_MS
+ * (default: 60000ms = 60s) of the last wake word.
+ *
+ * Rationale: cost control. We don't want to make a Haiku API call for every ambient
+ * sound captured all day. If the user hasn't said "Jarvis" in the last 60 seconds,
+ * all no-wake-word utterances are silently ignored — no API call, no classification.
+ *
+ * The caller (brain.js / index.js) is responsible for passing `lastWakeWordTime`
+ * (a Unix timestamp in ms) in the context object. If omitted, the classifier falls
+ * back to the old always-on behaviour (for backward compatibility during rollout).
+ *
  * Phase gating (HAIKU_AMBIENT_PHASE env var):
  *   Phase 1 — act on AMBIENT only (hmm, ugh, non-language sounds)
  *   Phase 2 — act on AMBIENT + SELF_TALK
@@ -33,6 +46,9 @@ const AMBIENT_ENABLED = process.env.HAIKU_AMBIENT_CLASSIFIER_ENABLED === 'true';
 const AMBIENT_LOG_DECISIONS = process.env.HAIKU_AMBIENT_LOG_DECISIONS !== 'false'; // default true
 const AMBIENT_LOG_CHANNEL = process.env.HAIKU_AMBIENT_LOG_CHANNEL || 'HUD_CHANNEL_ID';
 const AMBIENT_PHASE = parseInt(process.env.HAIKU_AMBIENT_PHASE || '1');
+// How long after the last wake word the ambient classifier is still active.
+// Default: 60s. Set to 0 to disable window-gating (always-on, not recommended).
+const AMBIENT_WINDOW_MS = parseInt(process.env.HAIKU_AMBIENT_WINDOW_MS || '60000');
 
 // ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -177,12 +193,33 @@ export async function classifyAmbient(transcript, context = {}) {
     hasTaskVerb = false,
     isQuestion = /\?\s*$/.test(transcript.trim()),
     recentHistory = [],
+    lastWakeWordTime = null,  // Unix timestamp (ms) of the most recent wake word event
   } = context;
 
   // Fast path: wake word present → always DIRECTED (caller should handle this,
   // but defend against being called with wake word anyway)
   if (wakeWordDetected) {
     return 'DIRECTED';
+  }
+
+  // ── Active Conversation Window Guard ────────────────────────────────────────
+  // Only fire the classifier when we are within AMBIENT_WINDOW_MS of the last
+  // wake word. Outside this window every utterance is silently dropped — no API
+  // call, no cost. If AMBIENT_WINDOW_MS=0 the guard is disabled (always-on).
+  //
+  // `lastWakeWordTime` must be passed by the caller (brain.js / index.js).
+  // If it is not provided we skip the guard for backward-compat, but log a
+  // warning so the caller can be updated.
+  if (AMBIENT_WINDOW_MS > 0) {
+    if (lastWakeWordTime === null) {
+      logger.warn('[haiku-ambient] lastWakeWordTime not provided — window guard skipped (update caller)');
+    } else {
+      const msSinceWakeWord = Date.now() - lastWakeWordTime;
+      if (msSinceWakeWord > AMBIENT_WINDOW_MS) {
+        logger.debug(`[haiku-ambient] Outside active window (${Math.round(msSinceWakeWord / 1000)}s since wake word, limit ${AMBIENT_WINDOW_MS / 1000}s) → silent ignore`);
+        return 'UNCERTAIN'; // Treat as UNCERTAIN so existing logic stays quiet
+      }
+    }
   }
 
   // Build the user message for the classifier

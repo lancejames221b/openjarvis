@@ -26,7 +26,7 @@ const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 
 // Model: Haiku for speed. ~500ms for a classification call.
-const CLASSIFIER_MODEL = process.env.HAIKU_INTENT_MODEL || 'unit/claude-haiku-4-5';
+const CLASSIFIER_MODEL = process.env.HAIKU_INTENT_MODEL || 'jamesgroup/claude-haiku-4-5';
 const CLASSIFIER_TIMEOUT_MS = parseInt(process.env.HAIKU_INTENT_TIMEOUT_MS || '3000');
 
 // Build channel vocabulary from registry (refreshed on each call — registry can change)
