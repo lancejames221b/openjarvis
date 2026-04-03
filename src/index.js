@@ -28,7 +28,7 @@ import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
-import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken } from './alert-webhook.js';
+import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
@@ -286,16 +286,22 @@ function pruneConversations() {
 setInterval(pruneConversations, 10 * 60 * 1000);
 
 // ── Orphan Task Detection (every 2 minutes) ──────────────────────────
-// Catch tasks that were dispatched but never got a result (webhook didn't callback)
+// Catch tasks that were dispatched but never got a result (webhook didn't callback).
+// Posts to text channel ONCE per task (marks escalated after first notice).
 setInterval(() => {
   try {
     const orphans = processOrphans();
     if (orphans.length > 0) {
-      for (const task of orphans) {
-        const ageS = ((Date.now() - task.createdAt) / 1000).toFixed(0);
-        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${ageS}s (was ${task.state})`);
-        postToTextChannel(`⚠️ **Lost track of:** "${task.transcript.substring(0, 60)}" (Task #${task.taskId})`);
+      const newOrphans = orphans.filter(t => t.state !== 'escalated');
+      for (const task of newOrphans) {
+        const age = ((Date.now() - task.createdAt) / 1000).toFixed(0);
+        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${age}s`);
+        postToTextChannel(`⚠️ **Lost task #${task.taskId}** (no result after ${age}s): "${task.transcript.substring(0, 60)}"`);
         markEscalated(task.taskId);
+      }
+      if (newOrphans.length > 0) {
+        const orphanList = newOrphans.map(t => `• #${t.taskId}: "${t.transcript.substring(0, 60)}"`).join('\n');
+        logger.warn(`📋 ${newOrphans.length} new orphaned tasks:\n${orphanList}`);
       }
     }
   } catch (e) {
@@ -987,6 +993,13 @@ client.once('ready', async () => {
 
   // Wire up task-spoke-inline check so /speak can suppress redundant task-progress voice
   setDidTaskSpeakInlineCallback(didTaskSpeakInline);
+
+  // Wire up /cancel endpoint → cancelAllTasks() (returns count of cancelled tasks)
+  setCancelAllTasksCallback(() => {
+    const count = activeTasks.size;
+    cancelAllTasks();
+    return count;
+  });
 
   // Wire follow-up detection into the TV noise filter (intent-classifier.js)
   // When a follow-up is expected, short phrases like "yes please" bypass the TV filter
@@ -2952,17 +2965,14 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     }
 
     // 3d. Low-confidence STT - Whisper produced a transcript but confidence is borderline.
-    // Handle locally with a "say that again" prompt rather than passing to the LLM.
-    // The LLM prompt previously said "LOW: ask once" which burned 10+ seconds and a full task cycle.
+    // Low confidence = ambient noise, humming, muttering — not a real command.
+    // Go to sleep rather than asking "say that again?" — if it wasn't a real utterance,
+    // a repeat prompt just wastes time and TTS. User can wake with "Jarvis" when ready.
     const BORDERLINE_CONFIDENCE = parseFloat(process.env.BORDERLINE_CONFIDENCE || '0.55');
     const sttConfidence = sttResult?.sttMeta?.confidence;
     if (sttConfidence != null && sttConfidence < BORDERLINE_CONFIDENCE) {
-      logger.info(`🔇 Borderline STT confidence (${sttConfidence.toFixed(3)} < ${BORDERLINE_CONFIDENCE}) - local repeat prompt: "${rawTranscript.substring(0, 50)}"`);
-      const repeatPhrases = ["Say that again?", "Come again?", "Didn't catch that, sir.", "Once more?", "Sorry, say again."];
-      const phrase = repeatPhrases[Math.floor(Math.random() * repeatPhrases.length)];
-      const audio = await synthesizeSpeech(phrase);
-      if (audio) { audioQueue.add(audio); audioQueue.playNext(); }
-      markBotResponse(userId);
+      logger.info(`🌙 Borderline STT confidence (${sttConfidence.toFixed(3)} < ${BORDERLINE_CONFIDENCE}) — sleeping instead of asking again: "${rawTranscript.substring(0, 50)}"`);
+      await fsmHandleSleepCheck('going to sleep', 'low-confidence-stt', userId, _pendingUtterance, synthesizeSpeech, audioQueue);
       return;
     }
 
