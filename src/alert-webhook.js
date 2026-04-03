@@ -404,6 +404,10 @@ app.post('/alert', async (req, res) => {
 let _isDuplicateContentFn = null;
 export function setDedupCallback(fn) { _isDuplicateContentFn = fn; }
 
+// Cancel all active tasks — wired from index.js cancelAllTasks()
+let _cancelAllTasksFn = null;
+export function setCancelAllTasksCallback(fn) { _cancelAllTasksFn = fn; }
+
 let _didTaskSpeakInlineFn = null;
 export function setDidTaskSpeakInlineCallback(fn) { _didTaskSpeakInlineFn = fn; }
 
@@ -740,6 +744,34 @@ app.post('/stop', async (req, res) => {
     res.json({ ok: true, action: 'acknowledged' });
   } catch (err) {
     logger.error('/stop error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+/**
+ * POST /cancel — Kill all active tasks immediately + stop TTS
+ *
+ * Emergency stop. Cancels all in-flight gateway tasks, aborts their
+ * AbortControllers, clears audio queue, stops TTS. Same effect as
+ * saying "stop" / "cancel" by voice but callable from anywhere.
+ *
+ * Body: (none required)
+ * Response: { ok: true, cancelled: <count> }
+ */
+app.post('/cancel', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    if (typeof _cancelAllTasksFn === 'function') {
+      const count = _cancelAllTasksFn();
+      logger.info(`🛑 /cancel: killed ${count} task(s) via API`);
+      return res.json({ ok: true, cancelled: count });
+    }
+    logger.warn('🛑 /cancel: no cancel callback wired yet');
+    res.json({ ok: true, cancelled: 0, note: 'cancel callback not wired' });
+  } catch (err) {
+    logger.error('/cancel error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
