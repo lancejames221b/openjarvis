@@ -17,6 +17,7 @@ import { setActiveAlert } from './alert-context.js';
 import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './bot-state.js';
 import { setFocusById } from './focus-state.js';
 import logger from './logger.js';
+import { isVisualModeEnabled, getVisualTargetChannel } from './visual-mode.js';
 
 const app = express();
 app.use(express.json({ limit: '50kb' })); // Larger limit for cron results
@@ -538,6 +539,29 @@ app.post('/speak', async (req, res) => {
       postActivityCallback(`⏭️ **Semantic dedup** (${source}): ${message.substring(0, 200)}`);
     }
     return res.json({ ok: true, delivered: 'semantic-dedup-skip' });
+  }
+
+  // ── Visual mode: route to text channel instead of TTS ──
+  if (isVisualModeEnabled()) {
+    logger.info(`🖥️ /speak visual mode: routing to text (${message.substring(0, 60)}...)`);
+    const targetChannelId = getVisualTargetChannel()
+      || process.env.VOICE_REPORT_CHANNEL_ID
+      || process.env.DISCORD_TEXT_CHANNEL_ID;
+    if (postToTextCallback && targetChannelId) {
+      // Use the text callback but with visual formatting
+      postToTextCallback(`🖥️ **${source || 'Alert'}:** ${message}`);
+    } else if (postToTextCallback) {
+      postToTextCallback(`🖥️ **${source || 'Alert'}:** ${message}`);
+    }
+    // Still track task completion
+    if (source === 'task-complete' || source === 'background-agent') {
+      if (taskId) {
+        markCompleted(taskId, 'speak-endpoint-visual', message.substring(0, 200));
+        hudTaskUpdate(taskId, 'completed');
+      }
+    }
+    _recordSpoken(message, source || 'visual', taskId || null);
+    return res.json({ ok: true, delivered: 'visual-text' });
   }
 
   // ── Alert context injection — store so next voice turn knows what this was about ──

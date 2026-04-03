@@ -38,6 +38,7 @@ import { postTaskToThread } from './thread-router.js';
 import { shouldBrief, markBriefingDelivered, generateBriefing } from './join-briefing.js';
 import { initHud, hudTaskUpdate, hudQueueUpdate, hudRefresh } from './hud.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
+import { isVisualModeEnabled, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
@@ -309,6 +310,7 @@ const _spokeLostTrackFor = new Set();
 // Tasks whose inline response arrived too late (>STALE_INLINE_MS) — subsequent
 // onSentence calls are silently dropped.  /speak callback still delivers.
 const _staleInlineTasks = new Set();
+const _visualAccumulator = new Map(); // taskId → { chunks[], startTime, editMsg }
 setInterval(() => {
   try {
     const now = Date.now();
@@ -1907,6 +1909,44 @@ async function postToTextChannel(message) {
 }
 
 /**
+ * Post a message to any channel by ID — used by visual mode to route output
+ * to the focused channel instead of TTS.
+ */
+async function postToChannel(channelId, message) {
+  try {
+    const channel = client.channels.cache.get(channelId);
+    if (!channel) {
+      logger.warn(`[visual-mode] Channel ${channelId} not in cache, attempting fetch`);
+      const fetched = await client.channels.fetch(channelId).catch(() => null);
+      if (!fetched) {
+        logger.error(`[visual-mode] Channel ${channelId} not found`);
+        return null;
+      }
+      return await fetched.send(typeof message === 'string' ? { content: message.substring(0, 2000) } : message);
+    }
+    return await channel.send(typeof message === 'string' ? { content: message.substring(0, 2000) } : message);
+  } catch (err) {
+    logger.error(`[visual-mode] Failed to post to ${channelId}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve the target channel for visual mode output.
+ * Priority: explicit VOICE_VISUAL_CHANNEL → current focus channel → VOICE_REPORT_CHANNEL_ID → TEXT_CHANNEL_ID
+ */
+async function resolveVisualChannel() {
+  const explicit = getVisualTargetChannel();
+  if (explicit) return explicit;
+  try {
+    const { getFocus } = await import('./focus-state.js');
+    const focus = getFocus();
+    if (focus?.channelId) return focus.channelId;
+  } catch { /* focus-state not available */ }
+  return process.env.VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
+}
+
+/**
  * Post voice conversation as a thread (user question → thread with Jarvis response + task tracking)
  */
 async function postTranscriptThread(taskId, userTranscript, jarvisResponse, duration) {
@@ -2985,6 +3025,22 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           ? `Mobile mode on. I'll narrate as I work and keep you updated hands-free.`
           : `Mobile mode off. Back to standard voice output.`);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      } else if (dispatchResult.mode === 'visual' && dispatchResult.success) {
+        if (dispatchResult.enabled) {
+          // Visual mode ON — announce via text (not speech)
+          const channelLabel = dispatchResult.channelName ? ` Output → #${dispatchResult.channelName}` : '';
+          logger.info(`🖥️ Visual mode enabled${channelLabel}`);
+          const targetId = await resolveVisualChannel();
+          await postToChannel(targetId, `🖥️ **Visual mode activated.** Responses will appear here as text.${channelLabel}`);
+          // Also send typing indicator as the new "ack"
+          const ch = client.channels.cache.get(targetId);
+          if (ch?.sendTyping) ch.sendTyping().catch(() => {});
+        } else {
+          // Visual mode OFF — speak confirmation
+          logger.info('🔊 Visual mode disabled, voice restored');
+          const ack = await synthesizeSpeech('Voice mode restored. Speaking normally.');
+          if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+        }
       }
       return;
     }
@@ -3321,14 +3377,22 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     if (actionIntents.has(intentType)) {
       logger.info(`🚀 Task #${taskId} intent=${intentType} → webhook dispatch (full tools)`);
 
-      // Speak contextual ack while webhook processes
+      // Speak contextual ack while webhook processes (or typing indicator in visual mode)
       if (contextualAckPromise) {
         try {
           const ackText = await contextualAckPromise;
           if (ackText) {
-            logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
-            const ackAudio = await synthesizeSpeech(ackText);
-            if (ackAudio) audioQueue.add(ackAudio);
+            if (isVisualModeEnabled()) {
+              // Visual mode: typing indicator instead of spoken ack
+              const targetId = await resolveVisualChannel();
+              const ch = client.channels.cache.get(targetId);
+              if (ch?.sendTyping) ch.sendTyping().catch(() => {});
+              logger.info(`🖥️ Visual ack: typing indicator (suppressed: "${ackText}")`);
+            } else {
+              logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
+              const ackAudio = await synthesizeSpeech(ackText);
+              if (ackAudio) audioQueue.add(ackAudio);
+            }
           }
         } catch (e) {
           logger.warn(`⚠️ Contextual ack failed: ${e.message}`);
@@ -3460,7 +3524,32 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       // Skip TTS for tasks already marked stale (subsequent sentences after the first)
       if (_staleInlineTasks.has(taskId)) return;
 
-      logger.info(`📨 Task #${taskId} onSentence: "${sentence.substring(0, 60)}..." (${sentence.length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected}, ttsAvail=${isTTSAvailable()})`);
+      logger.info(`📨 Task #${taskId} onSentence: "${sentence.substring(0, 60)}..." (${sentence.length} chars, tldr=${tldrModeEnabled}, disconnected=${userDisconnected}, ttsAvail=${isTTSAvailable()}, visual=${isVisualModeEnabled()})`);
+
+      // ── Visual mode gate: route to text channel instead of TTS ──────
+      if (isVisualModeEnabled()) {
+        // Accumulate sentences for this task, post as a single rich message on completion
+        if (!_visualAccumulator.has(taskId)) _visualAccumulator.set(taskId, { chunks: [], startTime: Date.now(), editMsg: null });
+        const acc = _visualAccumulator.get(taskId);
+        acc.chunks.push(sentence);
+
+        // Live-edit: post first chunk immediately, then edit the message as more arrive
+        const fullText = acc.chunks.join(' ').replace(/<p>/g, '\n\n').trim();
+        // Use sync version — can't await in non-async callback
+        resolveVisualChannel().then(targetChannelId => {
+          if (!acc.editMsg) {
+            // First sentence — create the message
+            postToChannel(targetChannelId, `🖥️ ${fullText}`).then(msg => { acc.editMsg = msg; });
+          } else {
+            // Subsequent — edit in place (live typewriter)
+            acc.editMsg.edit({ content: `🖥️ ${fullText}`.substring(0, 2000) }).catch(err => {
+              logger.warn(`[visual-mode] Edit failed, posting new: ${err.message}`);
+              postToChannel(targetChannelId, `🖥️ ${fullText}`).then(msg => { acc.editMsg = msg; });
+            });
+          }
+        });
+        return; // Skip all TTS
+      }
 
       if (!tldrModeEnabled) {
         if (userDisconnected) {
@@ -3531,9 +3620,16 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         try {
           const ackText = await contextualAckPromise;
           if (ackText) {
-            logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
-            const ackAudio = await synthesizeSpeech(ackText);
-            if (ackAudio) audioQueue.add(ackAudio);
+            if (isVisualModeEnabled()) {
+              const targetId = await resolveVisualChannel();
+              const ch = client.channels.cache.get(targetId);
+              if (ch?.sendTyping) ch.sendTyping().catch(() => {});
+              logger.info(`🖥️ Visual ack: typing indicator (suppressed: "${ackText}")`);
+            } else {
+              logger.info(`🎯 Contextual dispatch ack: "${ackText}"`);
+              const ackAudio = await synthesizeSpeech(ackText);
+              if (ackAudio) audioQueue.add(ackAudio);
+            }
             postActivity(`🎯 **Task #${taskId}** dispatch ack: "${ackText}"`);
           }
         } catch (e) {
@@ -3743,6 +3839,8 @@ function cancelAllTasks() {
 // Jarvis's own audio (echo) and TV/ambient noise during speech output.
 // Owner can still hear Jarvis; only their mic input is suppressed.
 async function serverMuteOwner(mute) {
+  // Visual mode: never mute the owner — there's no audio to overlap with
+  if (isVisualModeEnabled() && mute) return;
   try {
     const guild = client.guilds.cache.get(GUILD_ID);
     if (!guild) return;

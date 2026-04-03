@@ -325,6 +325,7 @@ export function isGatewayCircuitOpen() {
 // Voice tag prepended to messages so the agent formats for TTS
 // Key: use tools exactly as you would in text chat. The ONLY difference is output format.
 import { isMobileModeEnabled } from './mobile-mode.js';
+import { isVisualModeEnabled } from './visual-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
 import { getFocusContextTag, getFullFocusContext } from './focus-state.js';
 
@@ -351,6 +352,12 @@ function getVoicePromptVars() {
 // Dynamic VOICE_TAG — composes mode overlays at call time, loaded from prompts/
 function getVoiceTag() {
   const vars = getVoicePromptVars();
+
+  // Visual mode: full markdown output, no speech constraints
+  if (isVisualModeEnabled()) {
+    return '[VISUAL] The user is in Visual Mode — your response will be displayed as rich text in Discord, NOT spoken aloud. Use full markdown formatting: headers, code blocks, tables, bullet lists, bold/italic. Be thorough and detailed. Do NOT optimize for speech. Do NOT use TTS hints or paragraph markers.';
+  }
+
   let tag = resolvePrompt('voice-main.txt', vars);
   if (isMobileModeEnabled()) tag += '\n' + resolvePrompt('mobile-mode.txt', vars);
   return tag;

@@ -8,6 +8,7 @@ import logger from './logger.js';
 import { tryShortcut } from './shortcut-engine.js';
 import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from './tldr-mode.js';
 import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
+import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from './visual-mode.js';
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
@@ -73,6 +74,32 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   if (mobileToggle !== null) {
     const success = setMobileMode(mobileToggle);
     return { type: 'mode_toggle', mode: 'mobile', enabled: mobileToggle, success };
+  }
+
+  // ── Visual mode toggle ─────────────────────────────────────────────
+  // "visual mode on", "screen mode", "text only", "expanse mode" → visual on
+  // "voice mode", "talk to me", "audio mode" → visual off
+  // Also handles "visual mode in #channel" — enable + set target channel
+  if (isAdmin) {
+    // Check for combined "visual mode in <channel>" first
+    const visualChannelMatch = rawTranscript.match(/(?:visual|screen|display|expanse)\s+mode\s+(?:in|to|for)\s+(?:#?)([\w-]+)/i);
+    if (visualChannelMatch) {
+      const channelTarget = visualChannelMatch[1];
+      setVisualMode(true);
+      // Try to resolve channel name to ID via focus-state
+      const focusResult = setFocusByName(channelTarget);
+      if (focusResult) {
+        setVisualTargetChannel(focusResult.channelId);
+        return { type: 'mode_toggle', mode: 'visual', enabled: true, success: true, channelName: focusResult.channelName, channelId: focusResult.channelId };
+      }
+      return { type: 'mode_toggle', mode: 'visual', enabled: true, success: true, channelName: channelTarget };
+    }
+
+    const visualToggle = isVisualModeToggle(rawTranscript);
+    if (visualToggle !== null) {
+      const success = setVisualMode(visualToggle);
+      return { type: 'mode_toggle', mode: 'visual', enabled: visualToggle, success };
+    }
   }
 
   // ── Persona switch ────────────────────────────────────────────────
