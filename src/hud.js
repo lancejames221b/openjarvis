@@ -18,6 +18,7 @@ import { fileURLToPath } from 'url';
 import logger from './logger.js';
 import { getActiveTasks, getLedgerStats, getTask } from './task-ledger.js';
 import { getFocus } from './focus-state.js';
+import { isVisualModeEnabled, getVisualTargetChannel } from './visual-mode.js';
 import { getState } from './bot-state.js';
 
 // Trello config (same as join-briefing)
@@ -196,6 +197,22 @@ function _buildEmbed() {
     value: focus ? `#${focus.channelName}` : 'None',
     inline: true,
   });
+
+  // Output mode indicator
+  if (isVisualModeEnabled()) {
+    const visualTarget = getVisualTargetChannel();
+    fields.push({
+      name: 'Output',
+      value: visualTarget ? `🖥️ Visual → <#${visualTarget}>` : '🖥️ Visual',
+      inline: true,
+    });
+  } else {
+    fields.push({
+      name: 'Output',
+      value: '🔊 Voice',
+      inline: true,
+    });
+  }
 
   // ── Trello: Current Task ──
   if (HUD_TRELLO && _trelloCache.current.length > 0) {
