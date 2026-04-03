@@ -29,7 +29,7 @@ import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, cl
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken } from './alert-webhook.js';
-import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
+import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
@@ -291,12 +291,11 @@ setInterval(() => {
     const orphans = processOrphans();
     if (orphans.length > 0) {
       for (const task of orphans) {
-        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${((Date.now() - task.createdAt) / 1000).toFixed(0)}s`);
-        // Notify text channel — visible, non-voice notification for lost tasks
+        const ageS = ((Date.now() - task.createdAt) / 1000).toFixed(0);
+        logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${ageS}s (was ${task.state})`);
         postToTextChannel(`⚠️ **Lost track of:** "${task.transcript.substring(0, 60)}" (Task #${task.taskId})`);
+        markEscalated(task.taskId);
       }
-      const orphanList = orphans.map(t => `• #${t.taskId}: "${t.transcript.substring(0, 60)}"`).join('\n');
-      logger.warn(`📋 ${orphans.length} orphaned tasks detected:\n${orphanList}`);
     }
   } catch (e) {
     logger.warn(`📋 Orphan check failed: ${e.message}`);
@@ -951,17 +950,31 @@ client.once('ready', async () => {
   initHud(client);
   hudRefresh();
 
-  // ── Task Ledger: reconcile orphans from previous run ──
+  // ── Task Ledger: reconcile orphans from previous run (Issue #4) ──
   try {
     const { orphans, pending } = reconcileOnStartup();
-    if (orphans.length > 0 || pending.length > 0) {
-      const orphanSummary = orphans.map(t => `• Task #${t.taskId}: "${t.transcript}"`).join('\n');
-      const pendingSummary = pending.map(t => `• Task #${t.taskId}: "${t.transcript}" (${t.state})`).join('\n');
-      const msg = [
-        orphans.length > 0 ? `⚠️ **${orphans.length} orphaned tasks** from previous run:\n${orphanSummary}` : '',
-        pending.length > 0 ? `⏳ **${pending.length} tasks** still awaiting follow-up:\n${pendingSummary}` : '',
-      ].filter(Boolean).join('\n\n');
-      logger.info(`📋 Ledger reconciliation:\n${msg}`);
+    if (orphans.length > 0) {
+      // Build user-facing summary
+      const shown = orphans.slice(0, 3);
+      const lines = shown.map(t => {
+        const ago = Math.round((Date.now() - t.createdAt) / 60000);
+        return `• "${t.transcript.substring(0, 60)}" (${ago}m ago)`;
+      });
+      if (orphans.length > 3) lines.push(`...and ${orphans.length - 3} more`);
+
+      const msg = `⚠️ I restarted and lost track of **${orphans.length}** voice command(s) from before:\n${lines.join('\n')}\nThe gateway likely completed the work, but I wasn't alive to deliver results.`;
+
+      // Post to Discord text channel
+      postToTextChannel(msg);
+      logger.info(`📋 Orphan escalation: ${orphans.length} tasks notified to user`);
+
+      // Mark all as escalated so they don't re-fire
+      for (const t of orphans) {
+        markEscalated(t.taskId);
+      }
+    }
+    if (pending.length > 0) {
+      logger.info(`📋 ${pending.length} tasks still awaiting follow-up (will be caught by interval check)`);
     }
   } catch (e) {
     logger.warn(`📋 Ledger reconciliation failed: ${e.message}`);
