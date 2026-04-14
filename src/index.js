@@ -1999,8 +1999,47 @@ client.on('messageCreate', async (message) => {
     try { unlinkSync(tmpPath); } catch {}
 
     if (transcript && transcript.trim().length > 0) {
-      await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
-      logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${transcript.trim().substring(0, 60)}"`);
+      const cleanTranscript = transcript.trim();
+      await message.reply({ content: `🎙️ *"${cleanTranscript}"*`, allowedMentions: { repliedUser: false } });
+      logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${cleanTranscript.substring(0, 60)}"`);
+
+      // Show typing indicator while we process the voice message as a command
+      try { await message.channel.sendTyping(); } catch (_) {}
+
+      try {
+        const result = await generateTextResponse(cleanTranscript, {
+          channelId: message.channelId,
+          sessionUser: `agent:main:discord:channel:${message.channelId}`,
+        });
+
+        if (result.text && result.text.length >= 2) {
+          const response = result.text;
+          if (response.length <= 2000) {
+            await message.reply(response);
+          } else {
+            // Split into chunks if it's too long
+            const chunks = [];
+            let remaining = response;
+            while (remaining.length > 0) {
+              if (remaining.length <= 2000) {
+                chunks.push(remaining);
+                break;
+              }
+              let splitAt = remaining.lastIndexOf('\n\n', 2000);
+              if (splitAt < 500) splitAt = remaining.lastIndexOf('\n', 2000);
+              if (splitAt < 500) splitAt = 2000;
+              chunks.push(remaining.substring(0, splitAt));
+              remaining = remaining.substring(splitAt).trimStart();
+            }
+            await message.reply(chunks[0]);
+            for (let i = 1; i < chunks.length; i++) {
+              await message.channel.send(chunks[i]);
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(`[voice-transcript] Failed to generate response for voice message: ${err.message}`);
+      }
     }
   } catch (err) {
     logger.warn(`[voice-transcript] Failed to transcribe voice message: ${err.message}`);
