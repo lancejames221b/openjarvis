@@ -19,6 +19,9 @@ services:
       - ~/.ssh:/home/generic/.ssh:ro
       # Full read/write access to ~/dev so cursor-agent can code locally on the host
       - ~/dev:/home/generic/dev
+      # External drives and mounts
+      - /media/generic:/media/generic
+      - /mnt:/mnt
       - ~/.config/gcloud:/home/generic/.config/gcloud:ro
       - ~/.google_workspace_mcp:/home/generic/.google_workspace_mcp:ro
     restart: "no"
