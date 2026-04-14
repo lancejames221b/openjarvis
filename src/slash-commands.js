@@ -63,14 +63,14 @@ export async function handleSlashCommand(interaction, allowedUsers) {
 
   if (sub === 'on') {
     setVisualMode(true);
-    await interaction.reply({ content: '🖥️ **Visual mode ON** — responses will appear as text, not voice.', ephemeral: false });
+    await interaction.reply({ content: '🖥️ **Visual mode ON** — at-desk mode. Text output, always listening, auto-open on Mac.', ephemeral: false });
     return true;
   }
 
   if (sub === 'off') {
     setVisualMode(false);
     setVisualTargetChannel(null);
-    await interaction.reply({ content: '🔊 **Visual mode OFF** — back to voice output.', ephemeral: false });
+    await interaction.reply({ content: '🔊 **Visual mode OFF** — back to voice output. Sleep timers re-armed.', ephemeral: false });
     return true;
   }
 
@@ -78,8 +78,8 @@ export async function handleSlashCommand(interaction, allowedUsers) {
     const enabled = isVisualModeEnabled();
     const target = getVisualTargetChannel();
     const status = enabled
-      ? `🖥️ **Visual mode is ON**${target ? ` → <#${target}>` : ' (default channel)'}`
-      : '🔊 **Visual mode is OFF** — voice output active';
+      ? `🖥️ **Visual mode is ON** (at-desk)${target ? ` → <#${target}>` : ' (default channel)'} — always listening, auto-open on Mac`
+      : '🔊 **Visual mode is OFF** — voice output active, normal sleep timers';
     await interaction.reply({ content: status, ephemeral: true });
     return true;
   }

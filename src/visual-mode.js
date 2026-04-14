@@ -41,6 +41,11 @@ const VISUAL_OFF_PATTERNS = [
   /\btalk\s+to\s+me\b/i,
   /\bspeak\s+to\s+me\b/i,
   /\baudio\s+mode\b/i,
+  /\bgo\s+back\s+to\s+voice\b/i,
+  /\bswitch\s+to\s+voice\b/i,
+  /\bnormal\s+mode\b/i,
+  /\bleaving\s+(my\s+)?desk\b/i,
+  /\bgoing\s+mobile\b/i,
 ];
 
 /**

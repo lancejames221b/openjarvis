@@ -12,7 +12,7 @@ import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from './vis
 import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
-import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels } from './focus-state.js';
+import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from './focus-state.js';
 import { detectChannelCommand } from './channel-router.js';
 import { fuzzyMatch } from './fuzzy-dispatch.js';
 import { classifyIntent as haikuClassify } from './haiku-intent.js';
@@ -169,9 +169,29 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     }
 
     // "clear focus" / "unfocus" / "no focus" / "reset focus"
+    // Also resets visual channel target back to #hud (VOICE_REPORT_CHANNEL_ID)
     if (/(?:clear|reset|remove|drop|no)\s*focus|unfocus/i.test(cleanedTranscript)) {
       clearFocus();
+      // Reset visual channel to default (#hud) so output goes back there
+      try {
+        const { setVisualTargetChannel } = await import('./visual-mode.js');
+        setVisualTargetChannel(null);
+      } catch {}
       return { type: 'focus_clear' };
+    }
+
+    // "refocus" / "go back" / "back to last" — restore previous focus
+    if (/\brefocus\b|(?:go|switch|get)\s*back(?:\s+to\s+(?:last|previous|that))?|(?:back\s+to\s+)?(?:last|previous)\s+(?:focus|channel|project)/i.test(cleanedTranscript)) {
+      const restored = refocus();
+      if (restored) {
+        // Also update visual channel target to the restored focus
+        try {
+          const { setVisualTargetChannel } = await import('./visual-mode.js');
+          setVisualTargetChannel(restored.channelId);
+        } catch {}
+        return { type: 'focus_restore', focus: restored };
+      }
+      return { type: 'focus_restore_empty' };
     }
 
     // "where am i" / "what channel" / "what focus" / "what context"

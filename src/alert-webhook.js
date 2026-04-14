@@ -551,11 +551,19 @@ app.post('/speak', async (req, res) => {
     const targetChannelId = getVisualTargetChannel()
       || process.env.VOICE_REPORT_CHANNEL_ID
       || process.env.DISCORD_TEXT_CHANNEL_ID;
-    if (postToTextCallback && targetChannelId) {
-      // Use the text callback but with visual formatting
-      postToTextCallback(`🖥️ **${source || 'Alert'}:** ${message}`);
-    } else if (postToTextCallback) {
-      postToTextCallback(`🖥️ **${source || 'Alert'}:** ${message}`);
+    if (postToTextCallback) {
+      // Format for Discord readability — preserve markdown, add paragraph breaks
+      const formatted = message
+        .replace(/<p>/g, '\n\n')
+        .replace(/<\/p>/g, '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[\[tts:[^\]]*\]\]/g, '')
+        .replace(/\[\[\/tts:[^\]]*\]\]/g, '')
+        .replace(/\[\[reply_to[^\]]*\]\]/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      postToTextCallback(formatted.substring(0, 2000));
     }
     // Still track task completion
     if (source === 'task-complete' || source === 'background-agent') {
@@ -1600,6 +1608,33 @@ app.post('/test-voice', async (req, res) => {
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
+
+// ── /test/stt — Fake STT injection endpoint (DEV_MODE only) ────────────────
+// Allows injecting a fake transcript directly into the voice pipeline
+// without needing a real microphone or STT service. Useful for integration
+// testing and quick iteration on command handling.
+let _handleFakeSttFn = null;
+export function setHandleFakeSttCallback(fn) { _handleFakeSttFn = fn; }
+
+if (process.env.NODE_ENV === 'development' || process.env.DEV_MODE === 'true') {
+  app.post('/test/stt', async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
+    const { text, userId } = req.body || {};
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    try {
+      if (typeof _handleFakeSttFn === 'function') {
+        const result = await _handleFakeSttFn(text, userId);
+        return res.json({ ok: true, ...result });
+      }
+      return res.json({ ok: true, note: 'fake STT handler not wired — bot may not be in voice channel' });
+    } catch (err) {
+      logger.error(`/test/stt error: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+}
 
 // Export the express app for testing (tests start their own server on a random port)
 export { app };
