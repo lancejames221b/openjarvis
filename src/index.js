@@ -30,6 +30,7 @@ import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFra
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
+import { storeTaskToHaivemind, getHaivemindContext } from './session-manager.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
@@ -640,7 +641,7 @@ function _isScreenSentence(text) {
 // isInterruptCommand imported from ./command-dispatch.js
 
 // Voice-to-text handoff tracking
-let userDisconnected = false;
+let userDisconnected = true;
 let lastInteractionTime = Date.now(); // Init to now - prevents immediate idle disconnect on startup/restart
 
 // Mute-gated output: when others present + owner unmuted, hold responses
@@ -1943,15 +1944,29 @@ client.on('messageCreate', async (message) => {
     registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
   } catch { registry = { channels: {} }; }
 
-  const channelEntry = registry.channels?.[message.channelId];
+  const ch = message.channel;
+  const isThread = ch?.isThread?.();
+  const effectiveChannelId = isThread ? (ch.parentId || message.channelId) : message.channelId;
+  const channelEntry = registry.channels?.[effectiveChannelId];
+
   if (channelEntry) {
     // Known channel - update focus silently (no reply, no reaction)
-    // Only if focus isn't already on this exact channel and fresh
     const { getFocus } = await import('./focus-state.js');
     const current = getFocus();
-    if (!current || current.channelId !== message.channelId) {
-      setFocusById(message.channelId, channelEntry.name);
-      logger.info(`[chat-focus] Auto-focus updated: #${channelEntry.name} (${message.channelId}) from text activity`);
+    
+    const threadId = isThread ? ch.id : null;
+    const needsUpdate = !current || current.channelId !== effectiveChannelId || current.threadId !== threadId;
+    
+    if (needsUpdate) {
+      if (isThread) {
+        const { setFocusWithThread } = await import('./focus-state.js');
+        // setFocusWithThread takes (channelNameOrAlias, threadHint)
+        await setFocusWithThread(channelEntry.name, ch.name);
+        logger.info(`[chat-focus] Auto-focus updated: #${channelEntry.name} › ${ch.name} (${effectiveChannelId}) from text activity`);
+      } else {
+        setFocusById(effectiveChannelId, channelEntry.name);
+        logger.info(`[chat-focus] Auto-focus updated: #${channelEntry.name} (${effectiveChannelId}) from text activity`);
+      }
     }
   }
 });
@@ -2001,6 +2016,63 @@ client.on('messageCreate', async (message) => {
     if (transcript && transcript.trim().length > 0) {
       await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
       logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${transcript.trim().substring(0, 60)}"`);
+      
+      // Dispatch to LLM with haivemind channel context + Discord task tracking
+      try {
+        const text = transcript.trim();
+        const vmTaskId = ++taskIdCounter;
+        createTask(vmTaskId, text, message.author.id);
+
+        // Post working indicator to Discord so user sees something immediately
+        let statusMsg = null;
+        try {
+          statusMsg = await message.reply({ content: `⚙️ Task #${vmTaskId} — working...`, allowedMentions: { repliedUser: false } });
+        } catch (_) {}
+
+        // Load channel context from haivemind (non-blocking, best-effort)
+        let channelContext = '';
+        try {
+          const channelQuery = `channel:${message.channelId}`;
+          const hmCtx = await getHaivemindContext();
+          if (hmCtx) channelContext = `[channel memory]\n${hmCtx}\n\n`;
+        } catch (_) {}
+
+        // Store task creation to haivemind
+        try {
+          await storeTaskToHaivemind(vmTaskId, text, null);
+        } catch (_) {}
+
+        try {
+          const prompt = channelContext + text;
+          const result = await generateTextResponse(prompt, {
+            channelId: message.channelId,
+            sessionUser: "agent:main:discord:channel:" + message.channelId,
+          });
+          if (result && result.text && result.text.length >= 2) {
+            // Store completed task to haivemind
+            try { await storeTaskToHaivemind(vmTaskId, text, result.text.substring(0, 300)); } catch (_) {}
+            ledgerMarkCompleted(vmTaskId);
+            if (statusMsg) {
+              try { await statusMsg.edit(`✅ Task #${vmTaskId} done`); } catch (_) {}
+            }
+            if (result.text.length <= 2000) {
+              await message.reply(result.text);
+            } else {
+              const chunks = result.text.match(/[\s\S]{1,1999}/g) || [];
+              for (const c of chunks) await message.reply(c);
+            }
+          } else {
+            ledgerMarkCompleted(vmTaskId);
+            if (statusMsg) { try { await statusMsg.edit(`⚠️ Task #${vmTaskId} — no response`); } catch (_) {} }
+          }
+        } catch (innerErr) {
+          markFailed(vmTaskId);
+          if (statusMsg) { try { await statusMsg.edit(`❌ Task #${vmTaskId} failed`); } catch (_) {} }
+          logger.error("Voice text response error: " + innerErr.message);
+        }
+      } catch (e) {
+        logger.error("Voice task setup error: " + e.message);
+      }
     }
   } catch (err) {
     logger.warn(`[voice-transcript] Failed to transcribe voice message: ${err.message}`);
