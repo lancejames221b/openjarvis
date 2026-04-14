@@ -16,6 +16,7 @@ services:
       - ~/.npm-global:/home/generic/.npm-global:ro
       - ~/.cursor:/home/generic/.cursor:ro
       - ~/.openclaw:/home/generic/.openclaw:ro
+      - ~/.ssh:/home/generic/.ssh:ro
       - ~/dev/contexts:/home/generic/dev/contexts:ro
       - ~/.config/gcloud:/home/generic/.config/gcloud:ro
       - ~/.google_workspace_mcp:/home/generic/.google_workspace_mcp:ro
