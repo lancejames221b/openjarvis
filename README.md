@@ -630,6 +630,11 @@ OpenClaw will clone the repo, download the Jarvis voice model from Hugging Face,
 - Discord bot token (create a separate bot application — do not share with your main bot)
 - OpenClaw gateway running and accessible
 
+**Optional but recommended for persistent memory:**
+- [hAIveMind](https://github.com/unit221b/haivemind) — collective memory MCP server. Enables channel-aware context, voice task history, and cross-session memory. Install and set `HAIVEMIND_URL` or ensure `mcporter` is on PATH.
+- `mcporter` CLI — bridge between jarvis-voice and the hAIveMind MCP server. Install via: `pip install mcporter`
+- Set `VOICE_MEMORY_ENABLED=true` in `.env` to activate (default: true when mcporter is available)
+
 **Optional for local STT:**
 - NVIDIA GPU — faster-whisper STT runs ~10x faster with CUDA
 
