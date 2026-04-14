@@ -3503,24 +3503,26 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   let fullResponse = '';
   const tldrModeEnabled = isTldrModeEnabled();
 
-  // ── Voice Model Override ────────────────────────────────────────────
+  // ── Sub-Agent Model Override ────────────────────────────────────────
   // All model IDs live in .env (MODEL_OPUS, MODEL_SONNET, MODEL_GEMINI)
-  let activeModel = process.env.VOICE_MODEL;
+  let agentModelOverride = null;
   const lowerTranscript = transcript.toLowerCase();
 
-  if (lowerTranscript.includes('use opus') || lowerTranscript.includes('switch to opus') || lowerTranscript.includes('claude 3 opus')) {
-    activeModel = process.env.MODEL_OPUS;
-    logger.info(`🔄 Voice model override → ${activeModel}`);
-  } else if (lowerTranscript.includes('use sonnet') || lowerTranscript.includes('switch to sonnet') || lowerTranscript.includes('claude 3.5 sonnet') || lowerTranscript.includes('claude 3.7 sonnet')) {
-    activeModel = process.env.MODEL_SONNET;
-    logger.info(`🔄 Voice model override → ${activeModel}`);
-  } else if (lowerTranscript.includes('use gemini') || lowerTranscript.includes('switch to gemini') || lowerTranscript.includes('gemini 3.1 pro') || lowerTranscript.includes('gemini 3 pro')) {
-    activeModel = process.env.MODEL_GEMINI;
-    logger.info(`🔄 Voice model override → ${activeModel}`);
+  if (lowerTranscript.includes('use opus') || lowerTranscript.includes('choose opus') || lowerTranscript.includes('claude opus') || lowerTranscript.includes('opus 4.6')) {
+    agentModelOverride = process.env.MODEL_OPUS;
+    logger.info(`🔄 Sub-Agent model override → ${agentModelOverride}`);
+  } else if (lowerTranscript.includes('use sonnet') || lowerTranscript.includes('choose sonnet') || lowerTranscript.includes('claude sonnet')) {
+    agentModelOverride = process.env.MODEL_SONNET;
+    logger.info(`🔄 Sub-Agent model override → ${agentModelOverride}`);
+  } else if (lowerTranscript.includes('use gemini') || lowerTranscript.includes('choose gemini') || lowerTranscript.includes('gemini 3.1 pro') || lowerTranscript.includes('gemini 3 pro')) {
+    agentModelOverride = process.env.MODEL_GEMINI;
+    logger.info(`🔄 Sub-Agent model override → ${agentModelOverride}`);
   }
   
-  // Inject the model into brainOptions so downstream functions use it
-  brainOptions.model = activeModel;
+  // Inject the model into brainOptions so downstream functions use it for agent dispatch
+  if (agentModelOverride) {
+    brainOptions.agentModel = agentModelOverride;
+  }
   // ─────────────────────────────────────────────────────────────────────
 
   // ── Two-Phase Async Voice Dispatch ──────────────────────────────────
@@ -3610,18 +3612,20 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         }
       }
 
-      // Route to cursor-agent subagent when voice model is cursor-agent/*,
+      // Route to cursor-agent subagent when agentModel, dispatch model, or voice model is cursor-agent/*,
       // otherwise use the OpenClaw gateway webhook path.
       const _activeVoiceModel = process.env.VOICE_MODEL || '';
-      const dispatchOptions = { ...brainOptions, taskId, model: _activeVoiceModel };
-      const webhookResult = isCursorModel(_activeVoiceModel)
+      const _defaultDispatchModel = process.env.DISPATCH_MODEL || _activeVoiceModel;
+      const _targetAgentModel = brainOptions.agentModel || _defaultDispatchModel;
+      const dispatchOptions = { ...brainOptions, taskId, model: _targetAgentModel };
+      const webhookResult = isCursorModel(_targetAgentModel)
         ? dispatchViaCursorAgent(transcript, history, dispatchOptions)
         : await dispatchViaWebhook(transcript, history, dispatchOptions);
 
       if (webhookResult.dispatched) {
         markWorking(taskId);  // Ledger: task is now working via webhook
         hudTaskUpdate(taskId, 'working');
-        const dispatchSource = isCursorModel(_activeVoiceModel) ? `cursor-agent (pid: ${webhookResult.pid})` : 'webhook';
+        const dispatchSource = isCursorModel(_targetAgentModel) ? `cursor-agent (pid: ${webhookResult.pid})` : 'webhook';
         postActivity(`🚀 **Task #${taskId}** dispatched via ${dispatchSource} (${intentType}) - awaiting /speak callback`);
         logger.info(`📨 Task #${taskId} dispatched successfully - result will arrive via /speak`);
 

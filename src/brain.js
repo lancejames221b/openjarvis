@@ -149,6 +149,7 @@ const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
 const HOOKS_TOKEN = process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 const voiceModel = process.env.VOICE_MODEL || 'openclaw'; // module-level so all functions share it
+const _dispatchModel = process.env.DISPATCH_MODEL || process.env.VOICE_MODEL || 'cursor-agent/claude-3-5-sonnet-20241022';
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
 
@@ -1342,7 +1343,7 @@ Never skip this step. The voice session cannot see your filesystem — this is t
         message: hookMessage,
         sessionKey: getActiveSessionUser(),
         wakeMode: 'now',
-        model: voiceModel || undefined,  // Use same model as voice (max/claude-sonnet-4-6)
+        model: options.model || voiceModel || undefined,  // Use passed model override, otherwise voice model
       }),
     });
 
