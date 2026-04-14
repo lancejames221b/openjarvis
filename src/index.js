@@ -1740,8 +1740,23 @@ client.on('messageCreate', async (message) => {
   // Skip bot messages (including our own)
   if (message.author.bot) return;
 
-  // Only respond if we're actually mentioned
-  if (!message.mentions.has(client.user.id)) return;
+  // Check if we were mentioned OR if this is a direct reply to one of our messages
+  const isMentioned = message.mentions.has(client.user.id);
+  let isReplyToUs = false;
+  
+  if (message.reference && message.reference.messageId) {
+    try {
+      // Try cache first, fallback to fetch if not in cache
+      const repliedMsg = message.channel.messages.cache.get(message.reference.messageId) || 
+                         await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+      if (repliedMsg && repliedMsg.author.id === client.user.id) {
+        isReplyToUs = true;
+      }
+    } catch (e) {}
+  }
+
+  // Only respond if we're actually mentioned or replied to
+  if (!isMentioned && !isReplyToUs) return;
 
   // Only respond to allowed users (same as voice)
   if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
@@ -1753,13 +1768,25 @@ client.on('messageCreate', async (message) => {
 
   if (!content) return; // Empty mention, nothing to respond to
 
-  logger.info(`@mention from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
+  let repliedContentContext = '';
+  if (isReplyToUs && message.reference) {
+    try {
+      const repliedMsg = message.channel.messages.cache.get(message.reference.messageId);
+      if (repliedMsg) {
+         repliedContentContext = `[Context: User is replying to this previous message from you: "${repliedMsg.content}"]\n\n`;
+      }
+    } catch (e) {}
+  }
+
+  const finalPrompt = `${repliedContentContext}${content}`;
+
+  logger.info(`@mention/reply from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
 
   // Show typing indicator while we process
   try { await message.channel.sendTyping(); } catch (_) {}
 
   try {
-    const result = await generateTextResponse(content, {
+    const result = await generateTextResponse(finalPrompt, {
       channelId: message.channelId,
       sessionUser: `agent:main:discord:channel:${message.channelId}`,
     });
