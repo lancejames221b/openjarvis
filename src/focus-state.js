@@ -45,6 +45,10 @@ function _loadState() {
 function _saveState(state) {
   try {
     writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    // Refresh the HUD to display the new focus
+    import('./hud.js').then(m => {
+      if (typeof m.hudRefresh === 'function') m.hudRefresh();
+    }).catch(() => {});
   } catch (err) {
     logger.warn(`[focus] Failed to persist focus state: ${err.message}`);
   }
