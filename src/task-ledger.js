@@ -179,15 +179,21 @@ export function isJustAck(text) {
   // Raised from 80→40: answers like "The capital is Paris." are complete, not acks.
   if (clean.length < 40) return true;
   
-  // Short responses with promise language
-  if (clean.length < 200 && /\b(on it|i'll|working on|let me|getting|setting up|installing|creating|checking)\b/i.test(clean)) {
+  // Short responses with explicit delegation/async-work language.
+  // Intentionally narrow: "I'll keep that in mind" and "I'm creating X" are NOT acks.
+  // Retained words only trigger if they indicate spawned background work, not inline info.
+  if (clean.length < 200 && /\b(on it|working on it|let me check|let me look|let me find|let me get|setting up|installing)\b/i.test(clean)) {
+    return true;
+  }
+  // "I'll" only counts as an ack when paired with a specific callback verb
+  if (clean.length < 200 && /\bi'll\s+(ping|let you know|notify|report|get back|circle back|check on|look into|follow up)\b/i.test(clean)) {
     return true;
   }
   
   // Future-tense promise detection — regardless of length
   // Catches "Phase 2's running. I'll ping you when it's done" (>200 chars but still an ack)
   const PROMISE_PATTERNS = [
-    /\bi'll\s+(ping|let you know|notify|report|get back|update|circle back)\b/i,
+    /\bi'll\s+(ping|let you know|notify|report|get back|update you|circle back)\b/i,
     /\b(ping|notify|update)\s+you\s+when\b/i,
     /\bwhen\s+(it's|its|it is)\s+(done|ready|complete|finished)\b/i,
     /\b(kicked? off|running|spawned|dispatched|started)\b.*\b(now|right now|phase)\b/i,

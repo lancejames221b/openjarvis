@@ -21,7 +21,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, dispatchViaCursorAgent, isCursorModel, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
@@ -264,7 +264,9 @@ function startHealthMonitor() {
         }
       }
     } catch (err) {
-      logger.warn(`Stuck-mute watchdog error: ${err.message}`);
+      if (!err.message.includes('not connected to voice')) {
+        logger.warn(`Stuck-mute watchdog error: ${err.message}`);
+      }
     }
   }, HEALTH_CHECK_INTERVAL_MS);
 
@@ -362,7 +364,22 @@ setInterval(() => {
 const REBUFF_COOLDOWN_MS = parseInt(process.env.SPEAKER_REBUFF_COOLDOWN_MS ?? '60000');
 const TRANSCRIPT_DEDUP_MS = parseInt(process.env.TRANSCRIPT_DEDUP_MS ?? '15000');
 const INFLIGHT_SIMILARITY_THRESHOLD = parseFloat(process.env.INFLIGHT_SIMILARITY_THRESHOLD ?? '0.75'); // Jaccard bigram overlap to absorb in-flight duplicate
-const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '6');
+const CONVERSATION_HISTORY_MAX = parseInt(process.env.CONVERSATION_HISTORY_MAX ?? '10000');
+const CONVERSATION_HISTORY_MAX_CHARS = parseInt(process.env.CONVERSATION_HISTORY_MAX_CHARS ?? String(900000 * 4));
+/**
+ * Trim a conv.history array using a sliding window.
+ * Removes oldest messages when either the message count or total char budget is exceeded.
+ * Mirrors the foldHistory() logic in brain.js so what's kept locally is what gets sent.
+ */
+function trimHistory(history) {
+  while (history.length > CONVERSATION_HISTORY_MAX) history.shift();
+  let charCount = history.reduce((acc, m) => acc + (m.content || '').length, 0);
+  while (charCount > CONVERSATION_HISTORY_MAX_CHARS && history.length > 1) {
+    const removed = history.shift();
+    charCount -= (removed.content || '').length;
+  }
+}
+
 // Chatterbox needs fewer, larger chunks - GPU inference per call is expensive (~2-5s each).
 // Larger batches = fewer calls = lower total latency + better prosody (more context per chunk).
 // Concurrency 2 (vs 3) avoids VRAM contention on single-GPU inference.
@@ -693,6 +710,39 @@ class AudioQueue {
     this.playing = false;
     this._holdTimer = null; // speaking hold - prevents jump between slow Chatterbox sentences
     this._ttsGenerating = false; // true while TTS is still synthesizing sentences
+    /** @type {Array<() => void>} */
+    this._drainWaiters = [];
+  }
+
+  _isPlaybackIdle() {
+    return this.queue.length === 0 && !this.playing && !this._ttsGenerating && !this._holdTimer;
+  }
+
+  /** Wake anyone waiting on waitForPlaybackDrained() when the queue is fully quiet. */
+  _notifyPlaybackDrainedIfIdle() {
+    if (!this._isPlaybackIdle()) return;
+    const waiters = this._drainWaiters.splice(0);
+    for (const fn of waiters) {
+      try {
+        fn();
+      } catch (e) {
+        logger.error('[AudioQueue] drain waiter error:', e.message);
+      }
+    }
+  }
+
+  /**
+   * Resolve after all queued clips have finished playing (includes SPEAKING_HOLD_MS gap).
+   * Used so conversation-window / wake-word bypass starts after the last audible word, not when TTS generation ends.
+   */
+  waitForPlaybackDrained() {
+    return new Promise((resolve) => {
+      if (this._isPlaybackIdle()) {
+        resolve();
+        return;
+      }
+      this._drainWaiters.push(resolve);
+    });
   }
 
   /** Signal that TTS generation has started — prevents premature unmute */
@@ -728,6 +778,7 @@ class AudioQueue {
       this.playing = false;
     }
     serverMuteOwner(false);
+    this._notifyPlaybackDrainedIfIdle();
   }
 
   async playNext() {
@@ -840,7 +891,7 @@ async function briefPendingAlerts(userId) {
   alertContext += `User was told: "${briefing}"\nIf they ask for details, provide the full alert information above.`;
 
   conv.history.push({ role: 'assistant', content: alertContext });
-  while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
+  trimHistory(conv.history);
 
   clearAlerts();
 }
@@ -889,7 +940,7 @@ async function briefPendingHandoffs(userId) {
   context += `\nUser has been briefed via TTS. Continue from this context.`;
 
   conv.history.push({ role: 'assistant', content: context });
-  while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
+  trimHistory(conv.history);
 
   clearHandoffs();
 }
@@ -1251,7 +1302,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
               if (!conversations.has(userId)) conversations.set(userId, { history: [], lastActive: Date.now() });
               const conv = conversations.get(userId);
               conv.history.push({ role: 'assistant', content: ctxBlock });
-              while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
+              trimHistory(conv.history);
               conv.lastActive = Date.now();
             }
 
@@ -1459,7 +1510,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             if (!conversations.has(uid)) conversations.set(uid, { history: [], lastActive: Date.now() });
             const conv = conversations.get(uid);
             conv.history.push({ role: 'assistant', content: ctxBlock });
-            while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
+            trimHistory(conv.history);
             conv.lastActive = Date.now();
           }
           // Wake bypass - just reconnected, don't require wake word for reply
@@ -1642,7 +1693,7 @@ client.on('messageCreate', async (message) => {
   // Add to conversation history
   const conv = conversations.get(ALLOWED_USERS[0]) || { history: [], lastActive: 0 };
   conv.history.push({ role: 'assistant', content: voiceText });
-  if (conv.history.length > 20) conv.history.splice(0, conv.history.length - 20);
+  trimHistory(conv.history);
   conv.lastActive = Date.now();
   conversations.set(ALLOWED_USERS[0], conv);
 
@@ -3373,7 +3424,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     // Add user message to history immediately
     conv.history.push({ role: 'user', content: transcript });
-    while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
+    trimHistory(conv.history);
 
     // Resolve speaker display name for multi-user identification
     let speakerName = null;
@@ -3435,6 +3486,26 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   let firstAudioLogged = false;
   let fullResponse = '';
   const tldrModeEnabled = isTldrModeEnabled();
+
+  // ── Voice Model Override ────────────────────────────────────────────
+  // All model IDs live in .env (MODEL_OPUS, MODEL_SONNET, MODEL_GEMINI)
+  let activeModel = process.env.VOICE_MODEL;
+  const lowerTranscript = transcript.toLowerCase();
+
+  if (lowerTranscript.includes('use opus') || lowerTranscript.includes('switch to opus') || lowerTranscript.includes('claude 3 opus')) {
+    activeModel = process.env.MODEL_OPUS;
+    logger.info(`🔄 Voice model override → ${activeModel}`);
+  } else if (lowerTranscript.includes('use sonnet') || lowerTranscript.includes('switch to sonnet') || lowerTranscript.includes('claude 3.5 sonnet') || lowerTranscript.includes('claude 3.7 sonnet')) {
+    activeModel = process.env.MODEL_SONNET;
+    logger.info(`🔄 Voice model override → ${activeModel}`);
+  } else if (lowerTranscript.includes('use gemini') || lowerTranscript.includes('switch to gemini') || lowerTranscript.includes('gemini 3.1 pro') || lowerTranscript.includes('gemini 3 pro')) {
+    activeModel = process.env.MODEL_GEMINI;
+    logger.info(`🔄 Voice model override → ${activeModel}`);
+  }
+  
+  // Inject the model into brainOptions so downstream functions use it
+  brainOptions.model = activeModel;
+  // ─────────────────────────────────────────────────────────────────────
 
   // ── Two-Phase Async Voice Dispatch ──────────────────────────────────
   // Phase 1: Generate a fast 1-sentence ack (haiku, no tools, ~1-2s)
@@ -3523,15 +3594,19 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         }
       }
 
-      const webhookResult = await dispatchViaWebhook(transcript, history, {
-        ...brainOptions,
-        taskId,
-      });
+      // Route to cursor-agent subagent when voice model is cursor-agent/*,
+      // otherwise use the OpenClaw gateway webhook path.
+      const _activeVoiceModel = process.env.VOICE_MODEL || '';
+      const dispatchOptions = { ...brainOptions, taskId, model: _activeVoiceModel };
+      const webhookResult = isCursorModel(_activeVoiceModel)
+        ? dispatchViaCursorAgent(transcript, history, dispatchOptions)
+        : await dispatchViaWebhook(transcript, history, dispatchOptions);
 
       if (webhookResult.dispatched) {
         markWorking(taskId);  // Ledger: task is now working via webhook
         hudTaskUpdate(taskId, 'working');
-        postActivity(`🚀 **Task #${taskId}** dispatched via webhook (${intentType}) - awaiting /speak callback`);
+        const dispatchSource = isCursorModel(_activeVoiceModel) ? `cursor-agent (pid: ${webhookResult.pid})` : 'webhook';
+        postActivity(`🚀 **Task #${taskId}** dispatched via ${dispatchSource} (${intentType}) - awaiting /speak callback`);
         logger.info(`📨 Task #${taskId} dispatched successfully - result will arrive via /speak`);
 
       } else {
@@ -3922,7 +3997,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     const conv = conversations.get(userId);
     if (conv) {
       conv.history.push({ role: 'assistant', content: fullText });
-      while (conv.history.length > CONVERSATION_HISTORY_MAX) conv.history.shift();
+      trimHistory(conv.history);
     }
 
     // Detect if response invites follow-up (extends conversation window)
