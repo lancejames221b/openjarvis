@@ -563,7 +563,7 @@ app.post('/speak', async (req, res) => {
         .replace(/\[\[reply_to[^\]]*\]\]/g, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
-      postToTextCallback(formatted.substring(0, 2000));
+      postToTextCallback(formatted.substring(0, 2000), { forceChannelId: targetChannelId });
     }
     // Still track task completion
     if (source === 'task-complete' || source === 'background-agent') {
