@@ -17,7 +17,8 @@ services:
       - ~/.cursor:/home/generic/.cursor:ro
       - ~/.openclaw:/home/generic/.openclaw:ro
       - ~/.ssh:/home/generic/.ssh:ro
-      - ~/dev/contexts:/home/generic/dev/contexts:ro
+      # Full read/write access to ~/dev so cursor-agent can code locally on the host
+      - ~/dev:/home/generic/dev
       - ~/.config/gcloud:/home/generic/.config/gcloud:ro
       - ~/.google_workspace_mcp:/home/generic/.google_workspace_mcp:ro
     restart: "no"
