@@ -35,7 +35,7 @@ const HUD_STATE_PATH = join(DATA_DIR, 'hud-state.json');
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
 const HUD_ENABLED = process.env.HUD_ENABLED !== 'false'; // on by default
-const HUD_CHANNEL_ID = process.env.HUD_CHANNEL_ID || process.env.VOICE_REPORT_CHANNEL_ID || '1482037873426567229';
+const HUD_CHANNEL_ID = process.env.HUD_CHANNEL_ID || process.env.VOICE_REPORT_CHANNEL_ID || process.env.DISCORD_TEXT_CHANNEL_ID;
 const UPDATE_DEBOUNCE_MS = parseInt(process.env.HUD_DEBOUNCE_MS ?? '2000'); // 2s debounce
 
 // Emoji state indicators
@@ -47,12 +47,19 @@ const STATE_EMOJI = {
 };
 
 let _client = null; // Discord client ref
-let _hudMessageId = _loadHudState();
 let _updateTimer = null;
 let _startedAt = Date.now();
-let _lastCompletedTask = null;
 let _currentTaskId = null;
 let _queueDepth = 0;
+
+// Loaded from disk — persists lastCompletedTask and hudMessageId across restarts
+const _persistedState = _loadHudState();
+let _hudMessageId = _persistedState.messageId || null;
+let _lastCompletedTask = _persistedState.lastCompletedTask || null;
+
+// Per-task transcript cache: taskId → { transcript, startTime }
+// Populated at dispatch so completion can show what was asked
+const _taskTranscripts = new Map();
 
 // Trello cache (refreshed every 5 min)
 let _trelloCache = { commits: [], current: [], fetchedAt: 0 };
@@ -64,10 +71,13 @@ function _loadHudState() {
   try {
     if (existsSync(HUD_STATE_PATH)) {
       const data = JSON.parse(readFileSync(HUD_STATE_PATH, 'utf8'));
-      return data.messageId || null;
+      return {
+        messageId: data.messageId || null,
+        lastCompletedTask: data.lastCompletedTask || null,
+      };
     }
   } catch {}
-  return null;
+  return { messageId: null, lastCompletedTask: null };
 }
 
 function _saveHudState() {
@@ -75,6 +85,7 @@ function _saveHudState() {
     writeFileSync(HUD_STATE_PATH, JSON.stringify({
       messageId: _hudMessageId,
       channelId: HUD_CHANNEL_ID,
+      lastCompletedTask: _lastCompletedTask,
       updatedAt: new Date().toISOString(),
     }, null, 2));
   } catch (err) {
@@ -100,9 +111,25 @@ export function hudTaskUpdate(taskId, state, extra = {}) {
   if (!HUD_ENABLED || !_client) return;
   _currentTaskId = taskId;
   if (extra.queueDepth !== undefined) _queueDepth = extra.queueDepth;
+
+  // Cache transcript when task is first dispatched so completion can show it
+  if (state === 'dispatched' && extra.transcript) {
+    _taskTranscripts.set(taskId, { transcript: extra.transcript, startTime: Date.now() });
+  }
+
   if (state === 'completed' || state === 'failed') {
-    _lastCompletedTask = { taskId, state, completedAt: Date.now(), ...extra };
+    const cached = _taskTranscripts.get(taskId);
+    _lastCompletedTask = {
+      taskId,
+      state,
+      completedAt: Date.now(),
+      transcript: extra.transcript || cached?.transcript || null,
+      resultSummary: extra.resultSummary || null,
+      ...extra,
+    };
+    _taskTranscripts.delete(taskId);
     _currentTaskId = null;
+    _saveHudState();
   }
   _scheduleUpdate();
 }
@@ -259,10 +286,14 @@ function _buildEmbed() {
   // Last completed
   if (_lastCompletedTask) {
     const ago = _formatUptime(Date.now() - _lastCompletedTask.completedAt);
+    const taskLabel = _lastCompletedTask.transcript
+      ? `\`#${_lastCompletedTask.taskId}\` ${_truncate(_lastCompletedTask.transcript, 55)}`
+      : `\`#${_lastCompletedTask.taskId}\``;
+    const stateIcon = _lastCompletedTask.state === 'failed' ? '✗' : '✓';
     fields.push({
-      name: '✓ Last Completed',
-      value: `\`#${_lastCompletedTask.taskId}\` — ${ago} ago`,
-      inline: true,
+      name: `${stateIcon} Last Completed`,
+      value: `${taskLabel}\n*${ago} ago*`,
+      inline: false,
     });
   }
 

@@ -1,10 +1,14 @@
 /**
- * Session Manager — rotating gateway session keys with haivemind-backed memory.
+ * Session Manager — rotating gateway session keys with file + haivemind memory.
  *
  * Why: The OpenClaw gateway session accumulates ALL tool call results and
  * history unbounded. After 15+ voice tasks the context window balloons and
  * inference slows from 7s → 130s. Rotating the session key gives a fresh
- * context window. haivemind stores the memory so nothing is lost.
+ * context window. Memory is persisted so nothing is lost across restarts.
+ *
+ * Memory tiers (both run in parallel):
+ *   1. data/memory.md  — local append-only log, primary source on cold start
+ *   2. hAIveMind       — external tool (optional, feature-flagged)
  *
  * Rotation trigger: idle gap (default 30 min). Active conversations never
  * get interrupted — only fires on next turn after silence.
@@ -12,15 +16,35 @@
  * Memory strategy on session rotation (B → A fallback):
  *   B (primary): Inject the last N turns of the local conv.history — exact,
  *     chronological, zero hallucination risk. Available for mid-session rotations.
- *   A (fallback): Query haivemind with a prefix-anchored "VOICE-SESSION-END" query
- *     (not semantic). Returns actual stored session summaries sorted by recency.
- *     Used on fresh boots or when local history is empty.
+ *   A (fallback): Local memory.md / haivemind VOICE-TASK prefix query (not semantic).
  */
 import { exec as _exec } from 'child_process';
 import { promisify } from 'util';
+import { readFile, appendFile, mkdir } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import logger from './logger.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const execAsync = promisify(_exec);
+
+// ── hAIveMind config ─────────────────────────────────────────────────────────
+// All haivemind integration is gated on HAIVEMIND_ENABLED. Set to "false" to
+// disable all memory reads/writes (useful when hAIveMind isn't running or the
+// user wants to disable this external dependency entirely).
+const HAIVEMIND_ENABLED = (process.env.VOICE_MEMORY_ENABLED ?? 'true').toLowerCase() !== 'false';
+// mcporter CLI path — override if not on PATH
+const MCPORTER_PATH = process.env.MCPORTER_PATH || 'mcporter';
+// Optional direct HTTP URL — bypasses mcporter subprocess when set
+const HAIVEMIND_URL = process.env.HAIVEMIND_URL || '';
+
+// ── Local memory file ─────────────────────────────────────────────────────────
+// data/memory.md — append-only log of completed tasks, no external dependency.
+// On cold start this is read first; haivemind supplements if enabled.
+const MEMORY_FILE = process.env.VOICE_MEMORY_FILE
+  || join(__dirname, '..', 'data', 'memory.md');
+const MEMORY_RECALL_ENTRIES = parseInt(process.env.VOICE_MEMORY_RECALL ?? '10');
 
 /** How long idle before rotating on next turn (ms). Override via .env */
 const IDLE_ROTATION_MS = parseInt(process.env.SESSION_ROTATION_IDLE_MS ?? '1800000'); // 30 min (was 5 min)
@@ -29,7 +53,7 @@ const SESSION_BASE = process.env.SESSION_USER || 'jarvis-voice-user';
 
 let _suffix   = '';            // empty = use base name (initial session)
 let _lastActivity = Date.now();
-let _newSession   = false;     // true once after a rotation — consumed once
+let _newSession   = true;      // true on cold start + after rotation — seeds first turn with haivemind context
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -54,17 +78,6 @@ export function consumeNewSessionFlag() {
 }
 
 /**
- * Returns and clears the history stash from the previous session.
- * Used by getHaivemindContext() Option B to seed the new session with exact
- * chronological context from the rotated session, consumed once.
- */
-export function consumeRotatedHistory() {
-  const h = _rotatedHistory;
-  _rotatedHistory = [];
-  return h;
-}
-
-/**
  * Check if idle threshold exceeded. If so, store session summary to haivemind
  * and rotate the session key. Returns true if rotated.
  * @param {Array} history - local conversation history for summary storage
@@ -75,12 +88,12 @@ export async function maybeRotateSession(history = []) {
 
   logger.info({ idleMs: Math.round(idleMs / 1000) }, '🔄 Idle threshold hit — rotating gateway session');
 
-  // Store summary to haivemind BEFORE rotating (Option A fallback for future boots)
+  // Store summary to haivemind BEFORE rotating
   if (history.length > 0) {
     await _storeSessionSummary(history);
   }
 
-  // Stash the history snapshot so getHaivemindContext() (Option B) can use it
+  // Stash the history snapshot so getLocalMemoryContext() (Option B) can use it
   // on the very next turn after rotation, before local history fills back up.
   _rotatedHistory = history.slice(-6);
 
@@ -94,33 +107,41 @@ export async function maybeRotateSession(history = []) {
 let _rotatedHistory = [];
 
 /**
- * Store a completed task summary to haivemind.
- * Fire-and-forget — never blocks voice latency.
+ * Returns and clears the history stash from the previous session.
+ * Used by getLocalMemoryContext() Option B to seed the new session with exact
+ * chronological context from the rotated session, consumed once.
+ */
+export function consumeRotatedHistory() {
+  const h = _rotatedHistory;
+  _rotatedHistory = [];
+  return h;
+}
+
+/**
+ * Append a completed task to data/memory.md (local file, no external deps).
+ * Also stores to haivemind if enabled. Fire-and-forget.
  */
 export async function storeTaskToHaivemind(taskId, userMessage, spokenResult) {
   const ts         = new Date().toISOString().substring(0, 16);
   const userSnip   = (userMessage   || '').substring(0, 120);
   const resultSnip = (spokenResult  || '').substring(0, 200);
-  const content    = `VOICE-TASK ${ts} task=${taskId}: request="${userSnip}" spoken="${resultSnip}"`;
-  await _haivemindStore(content, 'voice-session');
+
+  // Always write to local file — no external dependency
+  await _appendMemoryFile(ts, taskId, userSnip, resultSnip);
+
+  // Also push to haivemind if enabled
+  if (HAIVEMIND_ENABLED) {
+    const content = `VOICE-TASK ${ts} task=${taskId}: request="${userSnip}" spoken="${resultSnip}"`;
+    await _haivemindStore(content, 'voice-session');
+  }
 }
 
 /**
- * Fetch recent voice session context as a compact string for injection into new sessions.
- *
- * Strategy B → A fallback:
- *   B (primary): Use local conv.history from the just-ended session — exact chronological
- *     turns, no semantic search, no hallucination risk. formatHistoryContext() extracts
- *     the last N user turns as a compact summary.
- *   A (fallback): Query haivemind using the prefix-anchored "VOICE-SESSION-END" string
- *     (not a semantic query — this matches stored session-end summaries by prefix).
- *     Returns null if nothing found or on error.
- *
- * @param {Array} [recentHistory] - Local conv.history from the rotated session (Option B).
- *   Pass this from maybeRotateSession. If empty/absent, falls through to haivemind (Option A).
- * @returns {Promise<string|null>}
+ * Read the last VOICE_MEMORY_RECALL entries from data/memory.md.
+ * Returns a compact string for context injection, or null if file is empty/missing.
+ * @param {Array} recentHistory - Option B: local history stash from previous session
  */
-export async function getHaivemindContext(recentHistory = []) {
+export async function getLocalMemoryContext(recentHistory = []) {
   // Option B: use local history if available (exact, chronological, no hallucination)
   if (recentHistory && recentHistory.length > 0) {
     const ctx = _formatHistoryContext(recentHistory);
@@ -130,30 +151,19 @@ export async function getHaivemindContext(recentHistory = []) {
     }
   }
 
-  // Option A: fallback — query haivemind with prefix-anchored session-end summaries
-  // Using "VOICE-SESSION-END" as a prefix forces matching stored summaries, not random
-  // semantic matches. This is still semantic search but the distinctive prefix dramatically
-  // reduces hallucination compared to "VOICE-TASK recent".
   try {
-    const { stdout } = await execAsync(
-      `${MCPORTER_PATH} call haivemind.search_memories query="VOICE-SESSION-END" limit=3`,
-      { timeout: 6000, cwd: '/home/generic' }
-    );
-    const raw  = stdout.trim();
-    const data = JSON.parse(raw);
-    const memories = data?.result?.memories || data?.memories || [];
-    if (!memories.length) return null;
-    // Only use memories that actually start with our prefix (filter semantic drift)
-    const relevant = memories.filter(m => (m.content || '').startsWith('VOICE-SESSION-END'));
-    if (!relevant.length) return null;
-    logger.info(`[session] Context seeded from haivemind (${relevant.length} session summaries)`);
-    return relevant
-      .map(m => m.content || String(m))
+    const text = await readFile(MEMORY_FILE, 'utf8');
+    // Each entry starts with "## " — split on that boundary
+    const entries = text.split(/\n(?=## )/).filter(Boolean);
+    const recent  = entries.slice(-MEMORY_RECALL_ENTRIES);
+    if (!recent.length) return null;
+    // Compact: strip markdown headings, collapse whitespace
+    return recent
+      .map(e => e.replace(/^## /m, '').replace(/\n/g, ' ').trim())
       .join(' | ')
-      .substring(0, 600);
-  } catch (e) {
-    logger.warn({ err: e.message }, 'haivemind context fetch failed (non-fatal)');
-    return null;
+      .substring(0, 800);
+  } catch {
+    return null; // file doesn't exist yet — silent
   }
 }
 
@@ -174,6 +184,32 @@ function _formatHistoryContext(history) {
   return `Recent session: ${lines.join(' | ')}`;
 }
 
+/**
+ * Fetch recent voice session context from haivemind as a compact string.
+ * Returns null if nothing found or on error.
+ */
+export async function getHaivemindContext() {
+  if (!HAIVEMIND_ENABLED) return null;
+  try {
+    // Use semantic=false so haivemind returns results sorted by creation time (most recent first),
+    // not by semantic relevance. This prevents old calendar/cron memories from outranking recent tasks.
+    const raw = await _haivemindSearch('VOICE-TASK', { limit: 3, semantic: false });
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const memories = data?.result?.memories || data?.memories || [];
+    // Filter to only genuine VOICE-TASK entries (exact prefix match) to avoid cross-contamination
+    const voiceTasks = memories.filter(m => (m.content || '').startsWith('VOICE-TASK '));
+    if (!voiceTasks.length) return null;
+    return voiceTasks
+      .map(m => m.content || String(m))
+      .join(' | ')
+      .substring(0, 600);
+  } catch (e) {
+    logger.warn({ err: e.message }, 'haivemind context fetch failed (non-fatal)');
+    return null;
+  }
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 async function _storeSessionSummary(history) {
@@ -182,22 +218,70 @@ async function _storeSessionSummary(history) {
     .slice(-8)
     .map(m => `${m.role === 'user' ? 'U' : 'J'}: ${(m.content || '').substring(0, 100)}`)
     .join('; ');
-  const content = `VOICE-SESSION-END ${ts}: ${lines}`;
-  await _haivemindStore(content, 'voice-session');
-  logger.info('💾 Session summary stored to haivemind');
+
+  // Write session boundary to local file
+  try {
+    await mkdir(dirname(MEMORY_FILE), { recursive: true });
+    await appendFile(MEMORY_FILE, `\n## ${ts} [session-end]\n${lines}\n`);
+  } catch (e) {
+    logger.warn({ err: e.message }, 'memory file session write failed (non-fatal)');
+  }
+
+  if (HAIVEMIND_ENABLED) {
+    await _haivemindStore(`VOICE-SESSION-END ${ts}: ${lines}`, 'voice-session');
+    logger.info('💾 Session summary stored to haivemind');
+  }
 }
 
-const MCPORTER_PATH = process.env.MCPORTER_PATH || 'mcporter'; // set MCPORTER_PATH env var to override
+async function _appendMemoryFile(ts, taskId, userSnip, resultSnip) {
+  try {
+    await mkdir(dirname(MEMORY_FILE), { recursive: true });
+    const entry = `\n## ${ts} task=${taskId}\n**User:** ${userSnip}\n**JARVIS:** ${resultSnip}\n`;
+    await appendFile(MEMORY_FILE, entry);
+  } catch (e) {
+    logger.warn({ err: e.message }, 'memory file write failed (non-fatal)');
+  }
+}
+
+// ── Transport helpers ─────────────────────────────────────────────────────────
+// When HAIVEMIND_URL is set, use direct HTTP fetch to avoid mcporter subprocess overhead.
+// Otherwise fall back to mcporter CLI.
 
 async function _haivemindStore(content, category = 'voice-session') {
   try {
-    // Shell-safe: escape single quotes inside the value
-    const escaped = content.replace(/'/g, "'\\''");
-    await execAsync(
-      `${MCPORTER_PATH} call haivemind.store_memory content='${escaped}' category='${category}'`,
-      { timeout: 8000, cwd: '/home/generic' }
-    );
+    if (HAIVEMIND_URL) {
+      await fetch(`${HAIVEMIND_URL}/store_memory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, category }),
+        signal: AbortSignal.timeout(8000),
+      });
+    } else {
+      const escaped = content.replace(/'/g, "'\\''");
+      await execAsync(
+        `${MCPORTER_PATH} call haivemind.store_memory content='${escaped}' category='${category}'`,
+        { timeout: 8000, cwd: '/home/generic' }
+      );
+    }
   } catch (e) {
     logger.warn({ err: e.message }, 'haivemind store failed (non-fatal)');
+  }
+}
+
+async function _haivemindSearch(query, { limit = 5, semantic = true } = {}) {
+  if (HAIVEMIND_URL) {
+    const res = await fetch(`${HAIVEMIND_URL}/search_memories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit, semantic }),
+      signal: AbortSignal.timeout(6000),
+    });
+    return await res.text();
+  } else {
+    const { stdout } = await execAsync(
+      `${MCPORTER_PATH} call haivemind.search_memories query="${query}" limit=${limit} semantic=${semantic}`,
+      { timeout: 6000, cwd: '/home/generic' }
+    );
+    return stdout.trim();
   }
 }

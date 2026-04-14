@@ -198,6 +198,64 @@ export function setCircuitBreakerNotifyCallback(cb) {
   _circuitBreakerNotify = cb;
 }
 
+// ── Cursor-agent direct CLI path ─────────────────────────────────────
+const CURSOR_AGENT_BIN = process.env.CURSOR_AGENT_BIN || `${process.env.HOME}/.local/bin/cursor-agent`;
+const CURSOR_API_KEY = process.env.CURSOR_API_KEY || '';
+
+/** Returns true if the model string targets the cursor-agent CLI backend. */
+export function isCursorModel(model) {
+  return typeof model === 'string' && model.startsWith('cursor-agent/');
+}
+
+/**
+ * Call cursor-agent CLI directly and return the text response.
+ * Converts the messages array to a single prompt (system + last user turn).
+ * Non-streaming — returns the full response string or throws.
+ */
+function callCursorAgentDirect(messages, model, signal) {
+  const modelId = model.replace(/^cursor-agent\//, '');
+  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+
+  // Strip sub-agent/tool-use instructions from the system prompt so cursor-agent
+  // doesn't attempt to execute curl /speak calls or spawn sub-agents even without --yolo.
+  const safeSystem = systemMsg
+    .replace(/SUB-AGENT SPOKEN UPDATES[\s\S]*?(?=\n\n[A-Z]|\n[A-Z][A-Z]|$)/g, '')
+    .replace(/When spawning a sub-agent[\s\S]*?(?=\n\n|\n[A-Z-]|$)/g, '')
+    .trim();
+
+  const CURSOR_VOICE_OVERRIDE = 'You are Jarvis, a voice assistant. Respond with PLAIN SPOKEN TEXT — no markdown, no code blocks, no bullet lists. Keep answers concise but substantive. You DO have the ability to dispatch tasks to sub-agents and run commands — the system handles that separately. Never claim you cannot do something because of "voice mode" — just answer naturally.';
+
+  // Collapse full conversation history into the prompt so the model retains context
+  // across multi-turn voice exchanges (the old gateway path sent a messages array;
+  // cursor-agent --print only accepts a flat string).
+  const nonSystem = messages.filter(m => m.role !== 'system');
+  const historyBlock = nonSystem
+    .map(m => `${m.role === 'user' ? 'User' : 'Jarvis'}: ${m.content}`)
+    .join('\n\n');
+
+  const prompt = safeSystem
+    ? `${CURSOR_VOICE_OVERRIDE}\n\n${safeSystem}\n\n${historyBlock}`
+    : `${CURSOR_VOICE_OVERRIDE}\n\n${historyBlock}`;
+
+  // No --yolo: voice responses must be plain text, not agentic tool execution
+  const args = ['--print', '--output-format', 'text', '--model', modelId, prompt];
+  const env = { ...process.env, CURSOR_API_KEY };
+
+  return new Promise((resolve, reject) => {
+    const child = execFile(CURSOR_AGENT_BIN, args, { env, timeout: GATEWAY_TIMEOUT_MS }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(`cursor-agent exited ${err.code}: ${stderr || err.message}`));
+        return;
+      }
+      resolve(stdout.trim());
+    });
+    // Honour AbortSignal so voice interruptions cancel the subprocess
+    if (signal) {
+      signal.addEventListener('abort', () => { try { child.kill(); } catch (_) {} }, { once: true });
+    }
+  });
+}
+
 const circuitBreaker = {
   failures: [],    // timestamps of recent failures
   tripped: false,  // true = stop trying
@@ -400,37 +458,26 @@ Cursor IDE (code editing):
 const SENTENCE_END = /[.!?]+(?:\s|$)/;
 const PHRASE_END = /[.!?]+\s+/; // Sentence-ending punctuation only
 
-// ── Sliding Window History ────────────────────────────────────────────────────
-// Keeps conversation history within the model's ~900k token budget.
-// Estimates token count as chars/4 (rough but consistent with Claude's tokenizer).
-// Drops oldest messages first to make room for newer context.
-// Protects the current user message from being trimmed.
-const TOKEN_BUDGET = parseInt(process.env.VOICE_TOKEN_BUDGET || '900000');
-const CHARS_PER_TOKEN = 4; // Claude tokenizer approximation
-
-function _slidingWindowHistory(history, newUserMessage) {
-  if (!history || !history.length) return [];
-
-  // Reserve budget for the new user message (voiceTag + contextTags can be large)
-  const newMsgChars = (newUserMessage || '').length;
-  let remainingBudget = (TOKEN_BUDGET * CHARS_PER_TOKEN) - newMsgChars;
-  if (remainingBudget <= 0) return []; // New message alone exceeds budget (very unlikely)
-
-  // Walk history newest-first, include as many turns as fit in the budget
-  const included = [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    const chars = (history[i].content || '').length;
-    if (chars > remainingBudget) break; // Stop — oldest fitting message
-    included.unshift({ role: history[i].role, content: history[i].content });
-    remainingBudget -= chars;
+function foldHistory(history, maxTokens = 900000) {
+  const maxChars = maxTokens * 4;
+  let folded = [...history];
+  let charCount = folded.reduce((acc, msg) => acc + (msg.content || '').length, 0);
+  
+  let originalLen = folded.length;
+  while (charCount > maxChars && folded.length > 1) {
+    const removed = folded.shift();
+    charCount -= (removed.content || '').length;
   }
-
-  if (included.length < history.length) {
-    logger.info(`[sliding-window] Trimmed history: ${history.length} → ${included.length} turns (budget: ${Math.round(TOKEN_BUDGET - remainingBudget / CHARS_PER_TOKEN)}/${TOKEN_BUDGET} tokens)`);
+  
+  if (folded.length < originalLen) {
+    logger.info(`[foldHistory] Sliding window: removed ${originalLen - folded.length} old messages, keeping ${folded.length} (~${charCount} chars) to stay under ${maxTokens} tokens`);
   }
-  return included;
+  return folded;
 }
 
+/**
+ * Trim response for voice - strip any markdown that slipped through
+ */
 // Patterns that are agent signals, not speech — suppress from TTS
 // Catches: NO, NO_, NO_REPLY, _NO, _NO_REPLY, HEARTBEAT_OK, and partials
 const AGENT_SIGNAL_PATTERN = /^\s*_?(NO_?R?E?P?L?Y?|HEARTBEAT_?O?K?|NO)\s*[.!?]*\s*$/i;
@@ -533,7 +580,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${focusTag}${priorCtxTag}${userMessage}`;
   
   const messages = [
-    ..._slidingWindowHistory(history, voiceMessage),
+    ...foldHistory(history).map(m => ({ role: m.role, content: m.content })),
     { role: 'user', content: voiceMessage },
   ];
   
@@ -553,8 +600,43 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
   // ── Model — single model for all intents ────────────────────────────
   const intentType = options.intentType || null;
-  // voiceModel is now module-level (const voiceModel above) — reads VOICE_MODEL env at startup
-  logger.info({ taskId: options.taskId, intentType, model: voiceModel }, '🧠 Model selected');
+  // voiceModel is module-level, but can be overridden per-request via options.model
+  const activeModel = options.model || voiceModel;
+  logger.info({ taskId: options.taskId, intentType, model: activeModel }, '🧠 Model selected');
+
+  // ── Cursor-agent direct CLI path ────────────────────────────────────
+  // cursor-agent doesn't expose an HTTP server — invoke CLI directly,
+  // collect full text, then feed sentence-by-sentence into TTS pipeline.
+  if (isCursorModel(activeModel)) {
+    try {
+      logger.info(`🤖 cursor-agent request (model: ${activeModel})`);
+      fullText = await callCursorAgentDirect(messages, activeModel, signal);
+      fullText = trimForVoice(fullText);
+
+      if (AGENT_SIGNAL_PATTERN.test(fullText.trim())) return { text: '', silent: true };
+      if (!fullText || fullText.length < 2) return { text: '', empty: true };
+
+      const paragraphs = fullText.split('<p>').map(p => p.trim()).filter(p => p.length > 0);
+      for (const para of paragraphs) {
+        const sentences = para.match(/[^.!?]+[.!?]+[\s]?|[^.!?]+$/g) || [para];
+        for (const sentence of sentences) {
+          const clean = trimForVoice(sentence.trim());
+          if (clean && clean.length > 1 && !AGENT_SIGNAL_PATTERN.test(clean)) onSentence(clean);
+        }
+      }
+      // Save to haivemind (re-using the logic from the streaming path)
+      if (fullText) {
+        storeTaskToHaivemind(options.taskId, messages, fullText);
+      }
+
+      return { text: fullText.replace(/<p>/g, '\n\n') };
+    } catch (err) {
+      if (err.name === 'AbortError' || signal?.aborted) return { text: '', aborted: true };
+      logger.error('cursor-agent failed:', err.message);
+      onSentence("cursor-agent isn't responding. Try again?");
+      return { text: "cursor-agent isn't responding. Try again?" };
+    }
+  }
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
   // CLI providers (cursor-agent) don't support SSE. Fetch full response,
@@ -908,7 +990,7 @@ export async function generateResponse(userMessage, history = [], signal, option
   const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${focusTag}${userMessage}`;
   
   const messages = [
-    ..._slidingWindowHistory(history, voiceMessage),
+    ...foldHistory(history).map(m => ({ role: m.role, content: m.content })),
     { role: 'user', content: voiceMessage },
   ];
   
@@ -1276,4 +1358,48 @@ Never skip this step. The voice session cannot see your filesystem — this is t
     logger.error('Webhook dispatch error:', err.message);
     return { dispatched: false, error: err.message };
   }
+}
+
+export function dispatchViaCursorAgent(userMessage, history = [], options = {}) {
+  const _now = new Date();
+  const taskId = options.taskId || `task-${Date.now()}`;
+  const voiceReportChannel = process.env.DISCORD_REPORT_CHANNEL_ID || process.env.DISCORD_TEXT_CHANNEL_ID || '';
+  const focus = getFocus();
+  const targetChannelId = focus ? focus.channelId : voiceReportChannel;
+  const targetChannelName = focus ? focus.channelName : 'hud';
+
+  // Build context tags matching the webhook dispatch format
+  let contextTags = `[DATETIME: ${_now.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}] `;
+  if (options.speaker) contextTags += `[SPEAKER: ${options.speaker}] `;
+
+  // Convert recent history into a brief context block (last 4 turns)
+  const recentHistory = (history || []).slice(-4).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
+  const historyBlock = recentHistory ? `\nRecent conversation:\n${recentHistory}\n` : '';
+
+  const deliveryInstructions = `
+DELIVERY INSTRUCTIONS:
+1. Post detailed results to Discord #${targetChannelName} (channel: discord, target: channel:${targetChannelId}).
+2. Then speak a 1-2 sentence TL;DR summary via this curl:
+curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_TLDR_HERE","source":"task-progress","taskId":"${taskId}"}'
+Replace YOUR_TLDR_HERE with a brief spoken summary (properly JSON-escaped).
+3. ARTIFACT TRACKING (MANDATORY if you created/modified files or committed code):
+mcporter call haivemind.store_memory content="ARTIFACT [timestamp]: files=[list] | repo=[path] | commit=[hash] | branch=[branch] | summary=[what was built]" category="operations"`;
+
+  const fullPrompt = `${contextTags}${historyBlock}\nTASK: ${userMessage}\n${deliveryInstructions}`;
+
+  // Prefer DISPATCH_MODEL env over voice model — allows cheap voice + capable dispatch split
+  const modelId = (options.model || _dispatchModel).replace(/^cursor-agent\//, '') || 'auto';
+  const args = ['--print', '--output-format', 'text', '--yolo', '--model', modelId, fullPrompt];
+  const env = { ...process.env, CURSOR_API_KEY };
+
+  // Spawn detached — parent returns immediately; cursor-agent runs to completion on its own
+  const child = spawn(CURSOR_AGENT_BIN, args, {
+    env,
+    stdio: 'ignore',
+    detached: true,
+  });
+  child.unref();
+
+  logger.info(`🤖 cursor-agent subagent spawned (model: ${modelId}, task: ${taskId}, pid: ${child.pid})`);
+  return { dispatched: true, pid: child.pid, taskId };
 }
