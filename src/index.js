@@ -299,7 +299,7 @@ setInterval(() => {
       for (const task of newOrphans) {
         const age = ((Date.now() - task.createdAt) / 1000).toFixed(0);
         logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${age}s`);
-        postToTextChannel(`⚠️ **Lost task #${task.taskId}** (no result after ${age}s): "${task.transcript.substring(0, 60)}"`);
+        postToTextChannel(`⚠️ **Lost task #${task.taskId}** (no result after ${age}s): "${task.transcript.substring(0, 60)}"`, { forceChannelId: process.env.VOICE_TRANSCRIPT_CHANNEL_ID || 'HUD_CHANNEL_ID' });
         markEscalated(task.taskId);
       }
       if (newOrphans.length > 0) {
@@ -1028,7 +1028,7 @@ client.once('ready', async () => {
       const msg = `⚠️ I restarted and lost track of **${orphans.length}** voice command(s) from before:\n${lines.join('\n')}\nThe gateway likely completed the work, but I wasn't alive to deliver results.`;
 
       // Post to Discord text channel
-      postToTextChannel(msg);
+      postToTextChannel(msg, { forceChannelId: process.env.VOICE_TRANSCRIPT_CHANNEL_ID || 'HUD_CHANNEL_ID' });
       logger.info(`📋 Orphan escalation: ${orphans.length} tasks notified to user`);
 
       // Mark all as escalated so they don't re-fire
@@ -1090,7 +1090,9 @@ client.once('ready', async () => {
   });
 
   // Wire up conversation window refresh for /speak callback responses
-  setMarkBotResponseCallback((userId, opts) => markBotResponse(userId, opts));
+  setMarkBotResponseCallback((userId, opts) => {
+    audioQueue.waitForPlaybackDrained().then(() => markBotResponse(userId, opts));
+  });
 
   // Wire up activity feed posting for /speak endpoint
   setPostActivityCallback((message) => postActivity(message));
@@ -1108,7 +1110,7 @@ client.once('ready', async () => {
   });
 
   // Wire up text channel posting for /speak endpoint (belt and suspenders)
-  setPostToTextCallback((message) => postToTextChannel(message));
+  setPostToTextCallback((message, opts) => postToTextChannel(message, opts));
 
   // Wire up runtime persona switch for POST /persona endpoint
   // Wire the atomic switchPersonaFull implementation
@@ -1992,20 +1994,34 @@ async function postToCC(prefix, text) {
   }
 }
 
-async function postToTextChannel(message) {
-  if (!TEXT_CHANNEL_ID) {
+async function postToTextChannel(message, options = {}) {
+  let targetId = options.forceChannelId;
+
+  if (!targetId) {
+    try {
+      const { getFocus } = await import('./focus-state.js');
+      const focus = getFocus();
+      if (focus && focus.channelId) {
+        targetId = focus.channelId;
+      }
+    } catch (e) {}
+  }
+
+  if (!targetId) targetId = TEXT_CHANNEL_ID;
+
+  if (!targetId) {
     logger.warn('⚠️  No text channel configured, skipping channel post');
     return false;
   }
 
   try {
-    const channel = client.channels.cache.get(TEXT_CHANNEL_ID);
+    const channel = client.channels.cache.get(targetId);
     if (!channel) {
-      logger.error(`❌ Channel ${TEXT_CHANNEL_ID} not found in cache`);
+      logger.error(`❌ Channel ${targetId} not found in cache`);
       return false;
     }
 
-    logger.info(`📤 Posting to ${channel.name} (${TEXT_CHANNEL_ID})...`);
+    logger.info(`📤 Posting to ${channel.name} (${targetId})...`);
     await channel.send(message);
     logger.info(`✅ Posted to ${channel.name} successfully`);
     return true;
@@ -4000,13 +4016,15 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       trimHistory(conv.history);
     }
 
-    // Detect if response invites follow-up (extends conversation window)
-    const followUp = detectFollowUpLikely(fullText);
-    if (followUp) logger.info(`📋 Response invites follow-up - extending conversation window`);
-    markBotResponse(userId, { followUpLikely: followUp });
-    // Reset idle timer from bot's last speech, not just user's last speech.
-    // Prevents premature ACTIVE→IDLE when Jarvis takes a while to respond.
-    if (getState() === 'ACTIVE') resetIdleSleepTimer();
+    // Wait for audio to actually finish playing before starting the 60s wake-word-free window
+    audioQueue.waitForPlaybackDrained().then(() => {
+      const followUp = detectFollowUpLikely(fullText);
+      if (followUp) logger.info(`📋 Response invites follow-up - extending conversation window`);
+      markBotResponse(userId, { followUpLikely: followUp });
+      // Reset idle timer from bot's last speech, not just user's last speech.
+      // Prevents premature ACTIVE→IDLE when Jarvis takes a while to respond.
+      if (getState() === 'ACTIVE') resetIdleSleepTimer();
+    });
 
     // ── Two-tier auto-sleep: sign-off phrase was embedded in a task request ──
     // The task is done, now transition to SLEEP as the user intended.
