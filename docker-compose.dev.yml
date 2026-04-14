@@ -11,21 +11,31 @@ services:
       - ./src:/app/src
       - ./prompts:/app/prompts
       - ./data:/app/data
-      # Map all necessary CLI binaries, auth tokens, and contexts for MCP/Agent access
+      # CLI binaries and host tools
       - ~/.local:/home/generic/.local:ro
       - ~/.npm-global:/home/generic/.npm-global:ro
-      - ~/.cursor:/home/generic/.cursor:ro
-      - ~/.openclaw:/home/generic/.openclaw:ro
-      - ~/.ssh:/home/generic/.ssh:ro
-      # Vital AI Memory, Skills, and MCP configurations
+      # OpenClaw, Cursor, and AI contexts - RW to allow agents to save state, skills, and audio notes
+      - ~/.cursor:/home/generic/.cursor
+      - ~/.openclaw:/home/generic/.openclaw
       - ~/.claude:/home/generic/.claude
       - ~/.haivemind:/home/generic/.haivemind
+      # MCP Servers, Memory, and OAuth tokens - RW to allow auth refreshes and database updates
       - ~/.mcporter:/home/generic/.mcporter
+      - ~/.mcp-auth:/home/generic/.mcp-auth
+      - ~/.google_workspace_mcp:/home/generic/.google_workspace_mcp
+      - ~/.workspace-mcp:/home/generic/.workspace-mcp
+      - ~/.vibe-kanban:/home/generic/.vibe-kanban
+      - ~/.playwright-mcp:/home/generic/.playwright-mcp
+      - ~/.puppeteer-mcp-logs:/home/generic/.puppeteer-mcp-logs
+      # Developer Identity and Cloud Configs - RW to allow auth refreshes or keep safe via RO
+      - ~/.ssh:/home/generic/.ssh:ro
+      - ~/.gitconfig:/home/generic/.gitconfig:ro
+      - ~/.docker:/home/generic/.docker:ro
+      - ~/.kube:/home/generic/.kube:ro
+      - ~/.config/gcloud:/home/generic/.config/gcloud:ro
       # Full read/write access to ~/dev so cursor-agent can code locally on the host
       - ~/dev:/home/generic/dev
       # External drives and mounts
       - /media/generic:/media/generic
       - /mnt:/mnt
-      - ~/.config/gcloud:/home/generic/.config/gcloud:ro
-      - ~/.google_workspace_mcp:/home/generic/.google_workspace_mcp:ro
     restart: "no"
