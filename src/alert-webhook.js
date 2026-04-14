@@ -361,7 +361,13 @@ app.post('/alert', async (req, res) => {
   if (ALERTS_ALSO_POST_TEXT && postToTextCallback) {
     const badge = ['', 'P1 CRITICAL', 'P2 URGENT', 'P3', 'P4', 'P5'][numericPriority] || 'P3';
     const src = alert.source ? ` (${alert.source})` : '';
-    postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`);
+    
+    if (alert.source === 'incoming-call') {
+      postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`, { forceChannelId: process.env.HUD_CHANNEL_ID || 'HUD_CHANNEL_ID' });
+      postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`, { forceChannelId: 'HUD_CHANNEL_ID_2' });
+    } else {
+      postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`);
+    }
   }
 
   if (!userInVoice) {
@@ -664,7 +670,12 @@ app.post('/speak', async (req, res) => {
     }
     // When voice is active, text is just a quiet log (no @ping, no bold notification)
     if (ALERTS_ALSO_POST_TEXT && postToTextCallback) {
-      postToTextCallback(`📝 *(voiced)* ${source || 'result'}: ${message.substring(0, 300)}`);
+      if (source === 'incoming-call') {
+        postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: process.env.HUD_CHANNEL_ID || 'HUD_CHANNEL_ID' });
+        postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: 'HUD_CHANNEL_ID_2' });
+      } else {
+        postToTextCallback(`📝 *(voiced)* ${source || 'result'}: ${message.substring(0, 300)}`);
+      }
     }
     res.json({ ok: true, delivered: 'voice', userInVoice: true });
   } else {
@@ -672,7 +683,13 @@ app.post('/speak', async (req, res) => {
     logger.info(`📝 User not in voice — posting text + queueing (${source || 'cron'})`);
     if (ALERTS_ALSO_POST_TEXT && postToTextCallback) {
       const sourceBadge = source ? `**${source}**` : '**Voice Result**';
-      postToTextCallback(`🗣️ ${sourceBadge}: ${message}`);
+      
+      if (source === 'incoming-call') {
+        postToTextCallback(`🗣️ ${sourceBadge}: ${message}`, { forceChannelId: process.env.HUD_CHANNEL_ID || 'HUD_CHANNEL_ID' });
+        postToTextCallback(`🗣️ ${sourceBadge}: ${message}`, { forceChannelId: 'HUD_CHANNEL_ID_2' });
+      } else {
+        postToTextCallback(`🗣️ ${sourceBadge}: ${message}`);
+      }
     }
     queueAlert({
       message: message.substring(0, 200),

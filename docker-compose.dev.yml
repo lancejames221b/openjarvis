@@ -3,12 +3,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    # Use host network to seamlessly access Whisper, Kokoro, Piper, and Ollama
+    network_mode: "host"
     env_file:
-      - .env.dev
-    ports:
-      - "4335:3335"
+      - .env
     volumes:
       - ./src:/app/src
       - ./prompts:/app/prompts
       - ./data:/app/data
-    restart: unless-stopped
+      # Map all necessary CLI binaries, auth tokens, and contexts for MCP/Agent access
+      - ~/.local:/home/generic/.local:ro
+      - ~/.npm-global:/home/generic/.npm-global:ro
+      - ~/.cursor:/home/generic/.cursor:ro
+      - ~/.openclaw:/home/generic/.openclaw:ro
+      - ~/dev/contexts:/home/generic/dev/contexts:ro
+      - ~/.config/gcloud:/home/generic/.config/gcloud:ro
+      - ~/.google_workspace_mcp:/home/generic/.google_workspace_mcp:ro
+    restart: "no"
