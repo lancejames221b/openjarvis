@@ -17,6 +17,10 @@ services:
       - ~/.cursor:/home/generic/.cursor:ro
       - ~/.openclaw:/home/generic/.openclaw:ro
       - ~/.ssh:/home/generic/.ssh:ro
+      # Vital AI Memory, Skills, and MCP configurations
+      - ~/.claude:/home/generic/.claude
+      - ~/.haivemind:/home/generic/.haivemind
+      - ~/.mcporter:/home/generic/.mcporter
       # Full read/write access to ~/dev so cursor-agent can code locally on the host
       - ~/dev:/home/generic/dev
       # External drives and mounts
