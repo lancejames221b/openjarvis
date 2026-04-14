@@ -28,6 +28,7 @@ const CONTEXTS_DIR = process.env.CHANNEL_CONTEXTS_DIR || '/home/generic/dev/cont
 // ── Focus state ──────────────────────────────────────────────────────
 
 let _focus = _loadState();
+let _previousFocus = null; // Last focus before clear — for "refocus" back-button
 
 function _loadState() {
   try {
@@ -433,6 +434,8 @@ export function setFocusByName(nameOrAlias) {
   const resolved = resolveChannel(nameOrAlias);
   if (!resolved) return null;
   const previousFocus = _focus;
+  // Save for refocus back-button
+  if (_focus) _previousFocus = { ..._focus };
 
   const directive = loadDirective(resolved.channelId);
   const registry = _loadRegistry();
@@ -609,11 +612,33 @@ export function setFocusById(channelId, channelName) {
   return _focus;
 }
 
-/** Clear the current focus. */
+/** Clear the current focus. Saves previous focus for refocus back-button. */
 export function clearFocus() {
+  if (_focus) {
+    _previousFocus = { ..._focus };
+    logger.info(`[focus] Saved previous focus: ${_focus.channelName || _focus.channelId} for refocus`);
+  }
   _focus = null;
   _saveState({});
   logger.info('[focus] Focus cleared');
+}
+
+/** Restore the previous focus (back-button). Returns the restored focus or null. */
+export function refocus() {
+  if (!_previousFocus) {
+    logger.info('[focus] No previous focus to restore');
+    return null;
+  }
+  _focus = { ..._previousFocus, setAt: new Date().toISOString() };
+  _previousFocus = null;
+  _saveState(_focus);
+  logger.info(`[focus] Refocused on ${_focus.channelName || _focus.channelId}`);
+  return _focus;
+}
+
+/** Get the previous focus (for status queries). */
+export function getPreviousFocus() {
+  return _previousFocus;
 }
 
 /**

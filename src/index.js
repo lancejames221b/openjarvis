@@ -28,7 +28,7 @@ import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
-import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback } from './alert-webhook.js';
+import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
@@ -1005,6 +1005,16 @@ client.once('ready', async () => {
     return count;
   });
 
+  // Wire up /test/stt endpoint (dev mode only) — injects fake transcript into pipeline
+  setHandleFakeSttCallback(async (text, userId) => {
+    const effectiveUserId = userId || ALLOWED_USERS[0];
+    // Run through the same pipeline as real STT
+    const wakeResult = checkWakeWord(text);
+    const cleaned = wakeResult.stripped || text;
+    const dispatch = await dispatchCommand(text, cleaned, effectiveUserId, ALLOWED_USERS, enrollmentState);
+    return { type: dispatch.type, wakeWord: wakeResult.detected, transcript: text, dispatch };
+  });
+
   // Wire follow-up detection into the TV noise filter (intent-classifier.js)
   // When a follow-up is expected, short phrases like "yes please" bypass the TV filter
   setFollowUpExpectedCallback(() => isFollowUpExpected());
@@ -1360,8 +1370,17 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           .replace('claude-haiku-4-5', 'Claude Haiku')
           .replace('gpt-5.3-codex', 'Codex');
         const persona = getActivePersona();
-        const audio = await synthesizeSpeech(`${persona.name} online. Using ${modelLabel}.`);
-        if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
+        const visualOn = isVisualModeEnabled();
+        const modeLabel = visualOn ? 'Visual mode, at desk.' : 'Voice mode.';
+        const greeting = `${persona.name} online. Using ${modelLabel}. ${modeLabel}`;
+        if (visualOn) {
+          // In visual mode, post to text channel instead of speaking
+          const targetId = await resolveVisualChannel();
+          await postToChannel(targetId, `🖥️ **${persona.name} online** — ${modelLabel}. Visual mode (at-desk).`);
+        } else {
+          const audio = await synthesizeSpeech(greeting);
+          if (audio) { await playAudioEnhanced(audio); try { unlinkSync(audio); } catch {} }
+        }
         resetIdleSleepTimer(); // Reset after greeting TTS — idle timer starts at join, not after speech
       } catch {}
 
@@ -1854,6 +1873,15 @@ client.on('messageCreate', async (message) => {
   const isVoiceMessage = (message.flags?.bitfield & 8192) !== 0;
   if (!isVoiceMessage) return;
 
+  // Dedup: prevent triple-posting if Discord fires messageCreate multiple times
+  // for the same voice message (gateway reconnects, shard issues, overlapping restarts).
+  const vmDedupKey = `vm:${message.id}`;
+  if (_processedMsgIds.has(vmDedupKey)) {
+    logger.info(`⏭️  Voice-msg dedup: skipping already-transcribed message ${message.id}`);
+    return;
+  }
+  _processedMsgIds.add(vmDedupKey);
+
   const oggAttachment = message.attachments.find(a =>
     a.contentType?.includes('audio/ogg') || a.url?.endsWith('.ogg')
   );
@@ -1934,6 +1962,40 @@ async function postToTextChannel(message) {
     logger.error(`❌ Failed to post to channel: ${err.message}`);
     return false;
   }
+}
+
+/**
+ * Format text for Discord visual mode output.
+ * Gateway responses come with markdown that trimForVoice strips for TTS.
+ * This preserves and cleans that markdown for readable Discord messages.
+ *
+ * @param {string} text - Raw text from gateway (may contain markdown, <p> tags, etc.)
+ * @returns {string} Discord-formatted text
+ */
+function formatForDiscord(text) {
+  if (!text) return '';
+  let formatted = text
+    // Convert <p> tags to double newlines (paragraph breaks)
+    .replace(/<p>/g, '\n\n')
+    .replace(/<\/p>/g, '')
+    // Convert <br> to single newlines
+    .replace(/<br\s*\/?>/gi, '\n')
+    // Strip remaining HTML tags (but preserve markdown)
+    .replace(/<[^>]+>/g, '')
+    // Strip [[tts:...]] and [[reply_to:...]] tags
+    .replace(/\[\[tts:[^\]]*\]\]/g, '')
+    .replace(/\[\[\/tts:[^\]]*\]\]/g, '')
+    .replace(/\[\[reply_to[^\]]*\]\]/g, '')
+    .replace(/\[\[(?:tts|reply_to)[^\]]*$/g, '')
+    .replace(/^\]\]/g, '')
+    .replace(/\]\]\s*/g, '')
+    // Strip agent signals
+    .replace(/(?:^|\s)_?NO_?REPLY(?:\s|[.!?]|$)/gi, ' ')
+    .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
+    // Collapse excessive newlines (keep double for paragraphs)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return formatted;
 }
 
 /**
@@ -3052,17 +3114,22 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       } else if (dispatchResult.mode === 'visual' && dispatchResult.success) {
         if (dispatchResult.enabled) {
-          // Visual mode ON — announce via text (not speech)
+          // Visual mode ON = at-desk mode: text output, always listening, auto-open on Mac
           const channelLabel = dispatchResult.channelName ? ` Output → #${dispatchResult.channelName}` : '';
-          logger.info(`🖥️ Visual mode enabled${channelLabel}`);
+          logger.info(`🖥️ Visual mode enabled (at-desk)${channelLabel}`);
+
+          // Cancel sleep timers — at-desk mode stays ACTIVE indefinitely
+          cancelTaskAutoSleep();
+          resetIdleSleepTimer(); // will no-op due to visual mode check
+
           const targetId = await resolveVisualChannel();
-          await postToChannel(targetId, `🖥️ **Visual mode activated.** Responses will appear here as text.${channelLabel}`);
-          // Also send typing indicator as the new "ack"
+          await postToChannel(targetId, `🖥️ **Visual mode activated** — at-desk mode. I'll stay listening, post responses as text, and auto-open files on your Mac.${channelLabel}`);
           const ch = client.channels.cache.get(targetId);
           if (ch?.sendTyping) ch.sendTyping().catch(() => {});
         } else {
-          // Visual mode OFF — speak confirmation
+          // Visual mode OFF — restore voice, re-arm sleep timers
           logger.info('🔊 Visual mode disabled, voice restored');
+          resetIdleSleepTimer(); // re-arm normal idle/sleep timers
           const ack = await synthesizeSpeech('Voice mode restored. Speaking normally.');
           if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
         }
@@ -3115,8 +3182,40 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     if (dispatchResult.type === 'focus_clear') {
       logger.info('🎯 Focus cleared');
-      const ack = await synthesizeSpeech('Focus cleared. No channel context active.');
-      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      const { getPreviousFocus } = await import('./focus-state.js');
+      const prev = getPreviousFocus();
+      const hint = prev ? ` Say "refocus" to go back to ${prev.channelName}.` : '';
+      if (isVisualModeEnabled()) {
+        const targetId = await resolveVisualChannel();
+        await postToChannel(targetId, `🎯 Focus cleared. Back to #hud.${hint}`);
+      } else {
+        const ack = await synthesizeSpeech(`Focus cleared.${hint}`);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
+      return;
+    }
+
+    if (dispatchResult.type === 'focus_restore') {
+      const { focus } = dispatchResult;
+      logger.info(`🎯 Refocused on ${focus.channelName}`);
+      if (isVisualModeEnabled()) {
+        const targetId = await resolveVisualChannel();
+        await postToChannel(targetId, `🎯 Refocused on **${focus.channelName}**.`);
+      } else {
+        const ack = await synthesizeSpeech(`Back to ${focus.channelName}.`);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
+      return;
+    }
+
+    if (dispatchResult.type === 'focus_restore_empty') {
+      if (isVisualModeEnabled()) {
+        const targetId = await resolveVisualChannel();
+        await postToChannel(targetId, `🎯 No previous focus to go back to.`);
+      } else {
+        const ack = await synthesizeSpeech('No previous focus to go back to.');
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
       return;
     }
 
@@ -3553,26 +3652,33 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       // ── Visual mode gate: route to text channel instead of TTS ──────
       if (isVisualModeEnabled()) {
-        // Accumulate sentences for this task, post as a single rich message on completion
-        if (!_visualAccumulator.has(taskId)) _visualAccumulator.set(taskId, { chunks: [], startTime: Date.now(), editMsg: null });
+        // Accumulate sentences for this task, live-edit a Discord message
+        if (!_visualAccumulator.has(taskId)) _visualAccumulator.set(taskId, { chunks: [], startTime: Date.now(), editMsg: null, editLock: false });
         const acc = _visualAccumulator.get(taskId);
         acc.chunks.push(sentence);
 
-        // Live-edit: post first chunk immediately, then edit the message as more arrive
-        const fullText = acc.chunks.join(' ').replace(/<p>/g, '\n\n').trim();
-        // Use sync version — can't await in non-async callback
-        resolveVisualChannel().then(targetChannelId => {
-          if (!acc.editMsg) {
-            // First sentence — create the message
-            postToChannel(targetChannelId, `🖥️ ${fullText}`).then(msg => { acc.editMsg = msg; });
-          } else {
-            // Subsequent — edit in place (live typewriter)
-            acc.editMsg.edit({ content: `🖥️ ${fullText}`.substring(0, 2000) }).catch(err => {
-              logger.warn(`[visual-mode] Edit failed, posting new: ${err.message}`);
-              postToChannel(targetChannelId, `🖥️ ${fullText}`).then(msg => { acc.editMsg = msg; });
-            });
-          }
-        });
+        // Live-edit: show streaming text with a typing indicator
+        // Join with spaces for live preview (final formatted version comes at task completion)
+        const liveText = acc.chunks.join(' ').trim();
+        const liveContent = `${liveText}\n\n⏳ *responding...*`;
+
+        // Serialize edits — Discord rate-limits message edits and parallel edits race
+        if (!acc.editLock) {
+          acc.editLock = true;
+          resolveVisualChannel().then(async targetChannelId => {
+            try {
+              if (!acc.editMsg) {
+                acc.editMsg = await postToChannel(targetChannelId, liveContent.substring(0, 2000));
+              } else {
+                await acc.editMsg.edit({ content: liveContent.substring(0, 2000) }).catch(err => {
+                  logger.warn(`[visual-mode] Edit failed: ${err.message}`);
+                });
+              }
+            } finally {
+              acc.editLock = false;
+            }
+          });
+        }
         return; // Skip all TTS
       }
 
@@ -3625,6 +3731,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     if (result.aborted) {
       markFailed(taskId, 'aborted');  // Ledger: task aborted
       hudTaskUpdate(taskId, 'failed');
+      _visualAccumulator.delete(taskId); // Clean up visual state
       logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
       audioQueue.setGenerating(false);
@@ -3640,6 +3747,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // This is the primary indicator that a sub-agent was spawned.
     if (result.silent) {
       logger.info(`🤫 Task #${taskId} silent/NO_REPLY (${((Date.now() - startTime) / 1000).toFixed(1)}s) - sub-agent likely spawned`);
+      _visualAccumulator.delete(taskId); // Clean up visual state
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
@@ -3668,6 +3776,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // Empty response from gateway -- sub-agent spawned, callback expected via /speak
     if (result.empty) {
       logger.info(`📭 Task #${taskId} empty response (${((Date.now() - startTime) / 1000).toFixed(1)}s) - sub-agent spawned, awaiting /speak callback`);
+      _visualAccumulator.delete(taskId); // Clean up visual state
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
@@ -3729,6 +3838,31 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
       .trim();
     logger.info(`💬 Task #${taskId} done (${Date.now() - startTime}ms): "${fullText.substring(0, 80)}..."`);
+
+    // ── Visual mode: final edit with properly formatted text ──────────
+    if (isVisualModeEnabled() && _visualAccumulator.has(taskId)) {
+      const acc = _visualAccumulator.get(taskId);
+      // Prefer rawText (preserves markdown/structure) over voice-trimmed text
+      const rawSource = result.rawText || fullText;
+      const formatted = formatForDiscord(rawSource);
+      if (acc.editMsg && formatted) {
+        const finalContent = formatted.substring(0, 2000);
+        try {
+          await acc.editMsg.edit({ content: finalContent });
+          logger.info(`[visual-mode] Final edit for task #${taskId}: ${formatted.length} chars`);
+        } catch (err) {
+          logger.warn(`[visual-mode] Final edit failed, posting new: ${err.message}`);
+          const targetId = await resolveVisualChannel();
+          await postToChannel(targetId, finalContent);
+        }
+      } else if (formatted) {
+        // No edit message exists yet (edge case) — post fresh
+        const targetId = await resolveVisualChannel();
+        await postToChannel(targetId, formatted.substring(0, 2000));
+      }
+      _visualAccumulator.delete(taskId);
+    }
+
     // Post Jarvis response to CC - split if over 2000 chars
     if (fullText) {
       const cleanCC = fullText

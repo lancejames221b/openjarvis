@@ -20,6 +20,8 @@ import { execSync } from 'child_process';
 import logger from './logger.js';
 import { getNextMeeting, getCacheAgeMinutes } from './calendar-cache.js';
 import { openOnMac } from './mac-open.js';
+import { resolveProject, listProjects } from './cursor-projects.js';
+import { isVisualModeEnabled } from './visual-mode.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +79,71 @@ async function calendarOpenNextHandler(_transcript) {
   };
 }
 
+/**
+ * Open a project in Cursor on Mac.
+ * Extracts project name from the transcript and resolves via cursor-projects registry.
+ */
+async function cursorOpenHandler(transcript) {
+  // Extract project name from various phrasings
+  const projectMatch = transcript.match(
+    /(?:bring up|open|pull up|show|launch|load)\s+(?:the\s+)?(?:code\s+(?:for|in|of)\s+)?(.+?)(?:\s+(?:in|on|with)\s+cursor)?$/i
+  ) || transcript.match(
+    /(?:cursor|code)\s+(?:for|in)\s+(.+)/i
+  ) || transcript.match(
+    /(?:bring up|open|pull up|show)\s+(?:the\s+)?(.+?)\s+(?:code|project|repo)/i
+  );
+
+  // "bring up the code" with no project name → try to infer from recent context
+  const isGenericCodeRequest = /^(?:bring up|open|pull up|show me)\s+(?:the\s+)?code$/i.test(transcript.trim());
+
+  let projectName = projectMatch ? projectMatch[1].trim() : null;
+
+  // Strip trailing noise words
+  if (projectName) {
+    projectName = projectName.replace(/\s+(code|project|repo|repository|codebase|source)$/i, '').trim();
+  }
+
+  if (!projectName && !isGenericCodeRequest) {
+    return { handled: false };
+  }
+
+  // For generic "bring up the code" — fall through to LLM which has conversation context
+  if (isGenericCodeRequest) {
+    logger.info('⚡ shortcut: "bring up the code" without project name — falling through to LLM for context');
+    return { handled: false };
+  }
+
+  const result = resolveProject(projectName);
+  if (!result) {
+    logger.info({ projectName }, '⚡ shortcut: project not found in Cursor registry — falling through to LLM');
+    return { handled: false };
+  }
+
+  const { project, cmd } = result;
+  logger.info({ project: project.aliases[0], cmd }, '⚡ shortcut: opening project in Cursor');
+
+  try {
+    execSync(`ssh lj@100.88.41.102 '${cmd}'`, { timeout: 10000, stdio: 'pipe' });
+  } catch (err) {
+    logger.warn({ err: err.message, project: project.aliases[0] }, '⚡ shortcut: Cursor open via SSH failed');
+    // Try via openOnMac as fallback for local paths
+    if (!project.host) {
+      const opened = await openOnMac(project.path);
+      if (!opened) return { handled: false };
+    } else {
+      return { handled: false };
+    }
+  }
+
+  const speech = `Opening ${project.description} in Cursor`;
+
+  return {
+    handled: true,
+    speech: ON_SCREEN === 'no_ack' ? null : speech,
+    silent: ON_SCREEN === 'no_ack',
+  };
+}
+
 // ── Shortcut Registry ─────────────────────────────────────────────────
 
 const BUILTIN_SHORTCUTS = [
@@ -93,6 +160,18 @@ const BUILTIN_SHORTCUTS = [
       /open.*calendar.*next/i,
     ],
     handler: calendarOpenNextHandler,
+  },
+  {
+    id: 'cursor_open_project',
+    intents: ['ACTION', null],
+    patterns: [
+      /(?:bring up|open|pull up|show|launch|load)\s+(?:the\s+)?(?:code|project|repo)/i,
+      /(?:bring up|open|pull up|show|launch|load)\s+.+?\s+(?:in|with)\s+cursor/i,
+      /cursor\s+(?:for|open|launch)\s+/i,
+      /open\s+(?:in\s+)?cursor/i,
+      /(?:bring up|open|pull up|show)\s+.+?\s+(?:code|codebase|source)/i,
+    ],
+    handler: cursorOpenHandler,
   },
 ];
 

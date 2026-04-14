@@ -7,6 +7,7 @@
 import { getState, transition } from './bot-state.js';
 import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from './wakeword.js';
 import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from './intent-classifier.js';
+import { isVisualModeEnabled } from './visual-mode.js';
 import logger from './logger.js';
 
 // ── FSM Sleep/Idle Timers ─────────────────────────────────────────────
@@ -29,6 +30,11 @@ let _taskAutoSleepTimer = null;
  */
 export function startTaskAutoSleep() {
   if (TASK_AUTO_SLEEP_MS <= 0) return;
+  // Visual mode = at-desk mode: stay ACTIVE, always listening, never auto-sleep
+  if (isVisualModeEnabled()) {
+    logger.info('⏱️  Task auto-sleep SKIPPED — visual mode active (at-desk)');
+    return;
+  }
   cancelTaskAutoSleep(); // reset if already running
   _taskAutoSleepTimer = setTimeout(() => {
     _taskAutoSleepTimer = null;
@@ -121,6 +127,12 @@ export function wireFSMCallbacks({
 export function resetIdleSleepTimer() {
   if (_activeTimer) clearTimeout(_activeTimer);
   if (_idleTimer) clearTimeout(_idleTimer);
+
+  // Visual mode = at-desk mode: stay ACTIVE indefinitely, no idle/sleep timers
+  if (isVisualModeEnabled()) {
+    logger.info('⏱️  Idle/sleep timers SKIPPED — visual mode active (at-desk)');
+    return;
+  }
 
   const effectiveMs = Math.max(ACTIVE_TO_IDLE_BASE_MS, getEffectiveWindowMs());
 

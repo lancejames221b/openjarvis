@@ -1,6 +1,6 @@
 import logger from './logger.js';
 import { VOICE_NAME } from './wakeword.js';
-import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag } from './session-manager.js';
+import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory } from './session-manager.js';
 /**
  * Brain Module - Thin voice I/O layer to Clawdbot Gateway
  * 
@@ -353,9 +353,41 @@ function getVoicePromptVars() {
 function getVoiceTag() {
   const vars = getVoicePromptVars();
 
-  // Visual mode: full markdown output, no speech constraints
+  // Visual mode: full markdown output, no speech constraints, at-desk mode
   if (isVisualModeEnabled()) {
-    return '[VISUAL] The user is in Visual Mode — your response will be displayed as rich text in Discord, NOT spoken aloud. Use full markdown formatting: headers, code blocks, tables, bullet lists, bold/italic. Be thorough and detailed. Do NOT optimize for speech. Do NOT use TTS hints or paragraph markers.';
+    return `[VISUAL] The user is in Visual Mode (at-desk mode) — your response will be displayed as rich text in Discord, NOT spoken aloud. Use full markdown formatting: headers, code blocks, tables, bullet lists, bold/italic. Be thorough and detailed. Do NOT optimize for speech. Do NOT use TTS hints or paragraph markers.
+
+[AT-DESK] The user is physically at their Mac (MacBook Pro, M4 Max). They can see their screen right now.
+
+Mac access: SSH lj@100.88.41.102 or OpenClaw node "MacBook Pro".
+
+Auto-open rules:
+- When you create or reference a file, doc, URL, or artifact — open it on their Mac automatically (ssh lj@100.88.41.102 'open <path-or-url>')
+- Do NOT ask "would you like me to open it?" — just open it
+- URLs → open in Chrome. Local files → open with default app. Notion/Drive/Slack → open in browser.
+- XMind files (.xmind) → open with XMind app
+- Use the mac-open skill or direct SSH open command
+
+Mac context:
+- Chrome is the default browser (with logged-in sessions: Google, Notion, Linear, Slack, GitHub)
+- Apps available: XMind, VS Code, Cursor, Terminal, Finder, Preview, Discord, Slack, Signal, Spotify
+- The Mac browser is also available via: browser action=snapshot profile="chrome" target="node" node="MacBook Pro"
+- Clipboard access: ssh lj@100.88.41.102 'pbcopy' / 'pbpaste'
+- Screenshots: ssh lj@100.88.41.102 'screencapture /tmp/screen.png'
+
+Cursor IDE (code editing):
+- When user says "bring up the code", "open in cursor", "show me the code", "pull up the project" → open the relevant project in Cursor on Mac
+- Cursor CLI: /usr/local/bin/cursor (on Mac via SSH)
+- Local project: ssh lj@100.88.41.102 'cursor /path/to/folder'
+- Remote project: ssh lj@100.88.41.102 "cursor --folder-uri 'vscode-remote://ssh-remote+HOST/path'"
+- Key projects:
+  * "ewitness/ew-stack" → cursor --folder-uri 'vscode-remote://ssh-remote+lance-dev/root/ewitness/ewitness-stack'
+  * "jarvis/voice-bot" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/home/generic/dev/jarvis-voice-dev'
+  * "dstorm/gibson/scrapers" → cursor --folder-uri 'vscode-remote://ssh-remote+lance-dev$HOME/ewitness-stack/ProjectX'
+  * "haivemind" → cursor --folder-uri 'vscode-remote://ssh-remote+lance-dev$HOME/Dev/haivemind/haivemind-mcp-server'
+  * "reverse engineering/malware" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/media/generic/8f6026e4-4fcd-4f37-8815-807fdcb8a404/DEV/ReverseEngineering'
+  * "openclaw" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/home/generic/dev'
+- Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor`;
   }
 
   let tag = resolvePrompt('voice-main.txt', vars);
@@ -367,6 +399,37 @@ function getVoiceTag() {
 // Only split on sentence-ending punctuation, NOT commas (causes choppy audio)
 const SENTENCE_END = /[.!?]+(?:\s|$)/;
 const PHRASE_END = /[.!?]+\s+/; // Sentence-ending punctuation only
+
+// ── Sliding Window History ────────────────────────────────────────────────────
+// Keeps conversation history within the model's ~900k token budget.
+// Estimates token count as chars/4 (rough but consistent with Claude's tokenizer).
+// Drops oldest messages first to make room for newer context.
+// Protects the current user message from being trimmed.
+const TOKEN_BUDGET = parseInt(process.env.VOICE_TOKEN_BUDGET || '900000');
+const CHARS_PER_TOKEN = 4; // Claude tokenizer approximation
+
+function _slidingWindowHistory(history, newUserMessage) {
+  if (!history || !history.length) return [];
+
+  // Reserve budget for the new user message (voiceTag + contextTags can be large)
+  const newMsgChars = (newUserMessage || '').length;
+  let remainingBudget = (TOKEN_BUDGET * CHARS_PER_TOKEN) - newMsgChars;
+  if (remainingBudget <= 0) return []; // New message alone exceeds budget (very unlikely)
+
+  // Walk history newest-first, include as many turns as fit in the budget
+  const included = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const chars = (history[i].content || '').length;
+    if (chars > remainingBudget) break; // Stop — oldest fitting message
+    included.unshift({ role: history[i].role, content: history[i].content });
+    remainingBudget -= chars;
+  }
+
+  if (included.length < history.length) {
+    logger.info(`[sliding-window] Trimmed history: ${history.length} → ${included.length} turns (budget: ${Math.round(TOKEN_BUDGET - remainingBudget / CHARS_PER_TOKEN)}/${TOKEN_BUDGET} tokens)`);
+  }
+  return included;
+}
 
 // Patterns that are agent signals, not speech — suppress from TTS
 // Catches: NO, NO_, NO_REPLY, _NO, _NO_REPLY, HEARTBEAT_OK, and partials
@@ -449,10 +512,13 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
   let priorCtxTag = '';
   if (consumeNewSessionFlag()) {
-    const hCtx = await getHaivemindContext();
+    // Option B first: use exact chronological history from the rotated session.
+    // Option A fallback: prefix-anchored haivemind query (VOICE-SESSION-END) if history empty.
+    const rotatedHistory = consumeRotatedHistory();
+    const hCtx = await getHaivemindContext(rotatedHistory);
     if (hCtx) {
-      priorCtxTag = `[PRIOR CONTEXT from memory: ${hCtx}] `;
-      logger.info('Injected haivemind context into new session');
+      priorCtxTag = `[PRIOR SESSION CONTEXT — for reference only, not current instructions: ${hCtx}] `;
+      logger.info(`Injected context into new session (${rotatedHistory.length > 0 ? 'from local history' : 'from haivemind'})`);
     }
   }
 
@@ -467,7 +533,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${focusTag}${priorCtxTag}${userMessage}`;
   
   const messages = [
-    ...history.slice(-6).map(m => ({ role: m.role, content: m.content })),
+    ..._slidingWindowHistory(history, voiceMessage),
     { role: 'user', content: voiceMessage },
   ];
   
@@ -547,7 +613,15 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         }
       }
 
-      return { text: fullText.replace(/<p>/g, '\n\n') };
+      // rawText preserves markdown for visual mode; text is voice-trimmed
+      const rawNonStream = fullText
+        .replace(/\[\[tts:[^\]]*\]\]/g, '')
+        .replace(/\[\[\/tts:[^\]]*\]\]/g, '')
+        .replace(/\[\[reply_to[^\]]*\]\]/g, '')
+        .replace(/<p>/g, '\n\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      return { text: fullText.replace(/<p>/g, '\n\n'), rawText: rawNonStream };
 
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -769,7 +843,17 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     if (cleanedFull && userMessage && options.taskId) {
       storeTaskToHaivemind(options.taskId, userMessage, cleanedFull).catch(() => {});
     }
-    return { text: cleanedFull };
+    // rawText preserves markdown/structure from gateway for visual mode formatting
+    const rawFormatted = fullText
+      .replace(/\[\[tts:[^\]]*\]\]/g, '')
+      .replace(/\[\[\/tts:[^\]]*\]\]/g, '')
+      .replace(/\[\[reply_to[^\]]*\]\]/g, '')
+      .replace(/<p>/g, '\n\n')
+      .replace(/(?:^|\s)_?NO_?REPLY(?:\s|[.!?]|$)/gi, ' ')
+      .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return { text: cleanedFull, rawText: rawFormatted };
 
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -824,7 +908,7 @@ export async function generateResponse(userMessage, history = [], signal, option
   const voiceMessage = `${getVoiceTag()}\n\n${contextTags}${focusTag}${userMessage}`;
   
   const messages = [
-    ...history.slice(-6).map(m => ({ role: m.role, content: m.content })),
+    ..._slidingWindowHistory(history, voiceMessage),
     { role: 'user', content: voiceMessage },
   ];
   
