@@ -1768,6 +1768,21 @@ client.on('messageCreate', async (message) => {
 
   if (!content) return; // Empty mention, nothing to respond to
 
+  let recentContext = '';
+  try {
+    // Fetch last 5 messages for context so the bot can "read the room"
+    const messages = await message.channel.messages.fetch({ limit: 5, before: message.id });
+    if (messages.size > 0) {
+      const formattedMsgs = Array.from(messages.values())
+        .reverse()
+        .map(m => `${m.author.username}: ${m.content}`)
+        .join('\n');
+      recentContext = `[Recent channel history before this message:]\n${formattedMsgs}\n\n`;
+    }
+  } catch (e) {
+    logger.warn(`Failed to fetch recent messages for context: ${e.message}`);
+  }
+
   let repliedContentContext = '';
   if (isReplyToUs && message.reference) {
     try {
@@ -1778,7 +1793,7 @@ client.on('messageCreate', async (message) => {
     } catch (e) {}
   }
 
-  const finalPrompt = `${repliedContentContext}${content}`;
+  const finalPrompt = `${recentContext}${repliedContentContext}${content}`;
 
   logger.info(`@mention/reply from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
 
