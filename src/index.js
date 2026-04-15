@@ -1657,6 +1657,41 @@ setInterval(() => {
 // When webhook callback mode is on, gateway delivers responses to
 // #jarvis-voice-text. This listener picks them up and speaks them.
 
+
+// ── Shared Discord context builder ───────────────────────────────────────────
+// Fetches recent message history from the current channel or thread and formats
+// it as a compact context block for cursor-agent. Works for threads and channels.
+async function buildDiscordContext(message, limit = 10) {
+  try {
+    const ch = message.channel;
+    const isThread = ch?.isThread?.();
+    const threadName  = isThread ? ch.name : null;
+    const parentName  = isThread ? (ch.parent?.name || ch.parentId) : null;
+    const channelName = isThread ? `#${parentName} > thread: ${threadName}` : `#${ch.name}`;
+
+    const fetched = await ch.messages.fetch({ limit, before: message.id });
+    if (!fetched.size) return '';
+
+    const lines = Array.from(fetched.values())
+      .reverse()
+      .map(m => {
+        const who = m.author.bot ? `[bot] ${m.author.username}` : m.author.username;
+        const body = (m.content || '').substring(0, 300).replace(/\n/g, ' ');
+        return `${who}: ${body}`;
+      })
+      .join('\n');
+
+    const header = isThread
+      ? `[You are in a Discord thread. Thread: "${threadName}" inside ${parentName}. Recent messages:]`
+      : `[Recent messages in ${channelName}:]`;
+
+    return `${header}\n${lines}\n\n`;
+  } catch (e) {
+    logger.warn(`buildDiscordContext failed: ${e.message}`);
+    return '';
+  }
+}
+
 client.on('messageCreate', async (message) => {
   if (!WEBHOOK_CALLBACK_MODE) return;
 
@@ -1769,20 +1804,7 @@ client.on('messageCreate', async (message) => {
 
   if (!content) return; // Empty mention, nothing to respond to
 
-  let recentContext = '';
-  try {
-    // Fetch last 5 messages for context so the bot can "read the room"
-    const messages = await message.channel.messages.fetch({ limit: 5, before: message.id });
-    if (messages.size > 0) {
-      const formattedMsgs = Array.from(messages.values())
-        .reverse()
-        .map(m => `${m.author.username}: ${m.content}`)
-        .join('\n');
-      recentContext = `[Recent channel history before this message:]\n${formattedMsgs}\n\n`;
-    }
-  } catch (e) {
-    logger.warn(`Failed to fetch recent messages for context: ${e.message}`);
-  }
+  const recentContext = await buildDiscordContext(message, 10);
 
   let repliedContentContext = '';
   if (isReplyToUs && message.reference) {
@@ -2029,13 +2051,8 @@ client.on('messageCreate', async (message) => {
           statusMsg = await message.reply({ content: `⚙️ Task #${vmTaskId} — working...`, allowedMentions: { repliedUser: false } });
         } catch (_) {}
 
-        // Load channel context from haivemind (non-blocking, best-effort)
-        let channelContext = '';
-        try {
-          const channelQuery = `channel:${message.channelId}`;
-          const hmCtx = await getHaivemindContext();
-          if (hmCtx) channelContext = `[channel memory]\n${hmCtx}\n\n`;
-        } catch (_) {}
+        // Fetch recent Discord messages for context (channel or thread aware)
+        const channelContext = await buildDiscordContext(message, 10);
 
         // Store task creation to haivemind
         try {
