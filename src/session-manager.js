@@ -285,3 +285,60 @@ async function _haivemindSearch(query, { limit = 5, semantic = true } = {}) {
     return stdout.trim();
   }
 }
+
+async function _haivemindGetRecent(category, { hours = 2, limit = 5 } = {}) {
+  try {
+    if (HAIVEMIND_URL) {
+      const res = await fetch(`${HAIVEMIND_URL}/get_recent_memories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, hours, limit }),
+        signal: AbortSignal.timeout(1500),
+      });
+      return await res.text();
+    } else {
+      const { stdout } = await execAsync(
+        `${MCPORTER_PATH} call haivemind.get_recent_memories category="${category}" hours=${hours} limit=${limit}`,
+        { timeout: 1500, cwd: '/home/generic' }
+      );
+      return stdout.trim();
+    }
+  } catch (e) {
+    logger.warn({ err: e.message }, 'haivemind get_recent_memories failed (non-fatal)');
+    return null;
+  }
+}
+
+/**
+ * Fetch recent memories for a specific channel (temporal, not semantic).
+ * Returns compact string for context injection, or null.
+ */
+export async function getChannelContext(channelId) {
+  if (!HAIVEMIND_ENABLED || !channelId) return null;
+  try {
+    const raw = await _haivemindGetRecent(`channel:${channelId}`, { hours: 2, limit: 5 });
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const memories = data?.result?.memories || data?.memories || [];
+    if (!memories.length) return null;
+    return memories
+      .map(m => m.content || String(m))
+      .join(' | ')
+      .substring(0, 600);
+  } catch (e) {
+    logger.warn({ err: e.message }, 'getChannelContext failed (non-fatal)');
+    return null;
+  }
+}
+
+/**
+ * Store a completed interaction for a channel (temporal, fire-and-forget).
+ */
+export async function storeChannelMemory(channelId, userMessage, response) {
+  if (!HAIVEMIND_ENABLED || !channelId) return;
+  const ts       = new Date().toISOString().substring(0, 16);
+  const userSnip = (userMessage || '').substring(0, 120);
+  const respSnip = (response   || '').substring(0, 200);
+  const content  = `[${ts}] user: "${userSnip}" | response: "${respSnip}"`;
+  await _haivemindStore(content, `channel:${channelId}`);
+}

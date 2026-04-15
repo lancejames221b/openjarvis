@@ -1,6 +1,6 @@
 import logger from './logger.js';
 import { VOICE_NAME } from './wakeword.js';
-import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory } from './session-manager.js';
+import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory, getChannelContext, storeChannelMemory } from './session-manager.js';
 /**
  * Brain Module - Thin voice I/O layer to Clawdbot Gateway
  * 
@@ -1254,13 +1254,21 @@ export async function generateContextualInterim(userRequest) {
  * Routes through the same gateway session but with a [TEXT] tag instead of [VOICE].
  */
 export async function generateTextResponse(userMessage, options = {}) {
+  const channelId = options.channelId || _defaultTextChannel;
   const textTag = resolvePrompt('text-channel.txt', {
     VOICE_NAME,
-    TEXT_CHANNEL_ID: options.channelId || _defaultTextChannel,
+    TEXT_CHANNEL_ID: channelId,
   });
 
+  // Temporal channel context — recent memories for this channel, non-blocking
+  let channelCtx = '';
+  try {
+    const ctx = await getChannelContext(channelId);
+    if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
+  } catch (_) {}
+
   const messages = [
-    { role: 'user', content: `${textTag}\n\n${userMessage}` },
+    { role: 'user', content: `${textTag}\n\n${channelCtx}${userMessage}` },
   ];
 
   try {
@@ -1288,6 +1296,10 @@ export async function generateTextResponse(userMessage, options = {}) {
 
     const data = await res.json();
     const text = data.choices?.[0]?.message?.content || '';
+
+    // Store to haivemind after reply — fire and forget, same category as read
+    storeChannelMemory(channelId, userMessage, text).catch(() => {});
+
     return { text };
 
   } catch (err) {
