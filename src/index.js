@@ -3569,7 +3569,43 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const conv = conversations.get(userId);
     conv.lastActive = Date.now();
 
-    // Add user message to history immediately
+    // ── Cold-start context seed ──────────────────────────────────────────────
+    // On the first utterance of a session (history empty), fetch recent messages
+    // from the current focus channel so cursor-agent knows where things stand.
+    if (conv.history.length === 0) {
+      try {
+        const { getFocus } = await import('./focus-state.js');
+        const focus = getFocus();
+        const seedChannelId = focus?.channelId || null;
+        if (seedChannelId) {
+          const seedCh = await client.channels.fetch(seedChannelId).catch(() => null);
+          if (seedCh?.messages) {
+            const msgs = await seedCh.messages.fetch({ limit: 10 });
+            if (msgs.size > 0) {
+              const lines = Array.from(msgs.values())
+                .reverse()
+                .map(m => {
+                  const who = m.author.bot ? `[bot] ${m.author.username}` : m.author.username;
+                  return `${who}: ${(m.content || '').substring(0, 300).replace(/\n/g, ' ')}`;
+                })
+                .join('\n');
+              const label = seedCh.isThread?.()
+                ? `thread "${seedCh.name}" in #${seedCh.parent?.name || seedCh.parentId}`
+                : `#${seedCh.name}`;
+              conv.history.push({
+                role: 'assistant',
+                content: `[Voice session started. Recent messages from ${label}:]\n${lines}`,
+              });
+              logger.info(`[voice] Cold-start: seeded history from ${label} (${msgs.size} msgs)`);
+            }
+          }
+        }
+      } catch (e) {
+        logger.warn(`[voice] Cold-start seed failed: ${e.message}`);
+      }
+    }
+
+    // Add user message to history
     conv.history.push({ role: 'user', content: transcript });
     trimHistory(conv.history);
 
