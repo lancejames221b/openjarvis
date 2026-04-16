@@ -3641,6 +3641,24 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
+    // ── Voice spawn — create thread + stream agent, ack by voice ────────
+    if (dispatchResult.type === 'voice_spawn') {
+      markBotResponse(userId);
+      const ack = await synthesizeSpeech('Spawning agent in a thread.');
+      if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      const targetChannel = VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
+      const discordToken = process.env.DISCORD_TOKEN || '';
+      try {
+        const { runVoiceSpawn } = await import('./slash/spawn.js');
+        await runVoiceSpawn(dispatchResult.task, targetChannel, discordToken);
+      } catch (err) {
+        logger.error(`[voice_spawn] failed: ${err.message}`);
+        const errAck = await synthesizeSpeech('Could not spawn the agent. Check the logs.');
+        if (errAck) { await playAudioEnhanced(errAck); try { unlinkSync(errAck); } catch {} }
+      }
+      return;
+    }
+
     // dispatchResult.type === 'brain' - fall through to background brain call
     const transcript = dispatchResult.transcript || cleanedTranscript;
 

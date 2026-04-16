@@ -230,6 +230,22 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     }
   }
 
+  // ── Voice spawn ───────────────────────────────────────────────────
+  // "spawn monitor kafka", "start a thread check build errors",
+  // "create a thread summarize the logs", "run audit in a thread"
+  if (isAdmin) {
+    const spawnLeadMatch = cleanedTranscript.match(
+      /^(?:spawn|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(.+)$/i
+    );
+    const spawnTrailMatch = cleanedTranscript.match(
+      /^run\s+(.+?)\s+in\s+a(?:\s+new)?\s+thread$/i
+    );
+    const spawnTask = (spawnLeadMatch || spawnTrailMatch)?.[1]?.trim();
+    if (spawnTask) {
+      return { type: 'voice_spawn', task: spawnTask };
+    }
+  }
+
   // ── Interrupt/stop ────────────────────────────────────────────────
   if (isAdmin && isInterruptCommand(rawTranscript)) {
     return { type: 'interrupt' };
