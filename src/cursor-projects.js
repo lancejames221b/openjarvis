@@ -19,13 +19,13 @@ const PROJECTS = [
   // ── eWitness ──
   {
     aliases: ['ewitness', 'ew', 'ewitness-stack', 'ew-stack'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/root/ewitness/ewitness-stack',
     description: 'eWitness full stack',
   },
   {
     aliases: ['ew-api', 'ewitness-api', 'api'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/root/ewitness/ewitness-stack',
     description: 'eWitness API',
   },
@@ -55,7 +55,7 @@ const PROJECTS = [
   },
   {
     aliases: ['media-processor', 'media'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/root/media-processor',
     description: 'Media processor service',
   },
@@ -63,7 +63,7 @@ const PROJECTS = [
   // ── DStorm / Gibson ──
   {
     aliases: ['dstorm', 'gibson', 'scraper', 'scrapers'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/home/lj/ewitness-stack/DStorm',
     description: 'DStorm scrapers',
   },
@@ -95,7 +95,7 @@ const PROJECTS = [
   },
   {
     aliases: ['haivemind', 'memory', 'hivemind'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/home/lj/Dev/haivemind/haivemind-mcp-server',
     description: 'hAIveMind MCP server',
   },
@@ -135,25 +135,25 @@ const PROJECTS = [
   },
   {
     aliases: ['osaint', 'osint-tool'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/home/lj/OSAINT',
     description: 'OSAINT tool',
   },
   {
     aliases: ['aictf', 'ai-ctf'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/home/lj/Dev/AICTF',
     description: 'AI CTF project',
   },
   {
     aliases: ['krebs', 'krebs-analysis'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/root/krebs',
     description: 'Krebs analysis workspace',
   },
   {
     aliases: ['red-team', 'redteam'],
-    host: 'lance-dev',
+    host: 'generic-lan',
     path: '/root/red_team',
     description: 'Red team tools',
   },
