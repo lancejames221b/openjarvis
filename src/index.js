@@ -21,7 +21,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, dispatchViaCursorAgent, isCursorModel, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateTextResponseStreaming, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
@@ -52,6 +52,14 @@ import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriori
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
 import logger from './logger.js';
+import {
+  initDiscordMemory,
+  maybeRecordDiscordMessage,
+  isDiscordMemoryReady,
+  shouldServeDiscordMemoryForMessage,
+  ensureDiscordHistoryLoaded,
+  updateDiscordMessageContent,
+} from './discord-memory.js';
 
 const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Webhook server bind address - matches TAILSCALE_IP in alert-webhook.js (defaults to localhost for non-Tailscale users)
@@ -984,6 +992,21 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
+initDiscordMemory();
+
+client.on('messageCreate', (message) => {
+  maybeRecordDiscordMessage(message);
+});
+
+client.on('messageUpdate', (_before, message) => {
+  if (message.partial || !isDiscordMemoryReady()) {
+    return;
+  }
+  try {
+    updateDiscordMessageContent(message, message.client.user.id);
+  } catch {}
+});
+
 client.once('ready', async () => {
   logger.info(`🤖 Jarvis Voice Bot online as ${client.user.tag}`);
   logger.info(`📡 Guild: ${GUILD_ID} | Voice: ${VOICE_CHANNEL_ID} | Multi-user: ${MULTI_USER_ENABLED} | Callback: ${WEBHOOK_CALLBACK_MODE}`);
@@ -1661,7 +1684,7 @@ setInterval(() => {
 // ── Shared Discord context builder ───────────────────────────────────────────
 // Fetches recent message history from the current channel or thread and formats
 // it as a compact context block for cursor-agent. Works for threads and channels.
-async function buildDiscordContext(message, limit = 10) {
+async function buildDiscordContextFromApi(message, limit = 10) {
   try {
     const ch = message.channel;
     const isThread = ch?.isThread?.();
@@ -1672,22 +1695,24 @@ async function buildDiscordContext(message, limit = 10) {
     const fetched = await ch.messages.fetch({ limit, before: message.id });
     if (!fetched.size) return '';
 
+    const myUsername = message.client.user?.username ?? 'Jarvis Voice';
     const lines = Array.from(fetched.values())
       .reverse()
       .map(m => {
-        const who = m.author.bot ? `[bot] ${m.author.username}` : m.author.username;
-        const body = (m.content || '').substring(0, 300).replace(/\n/g, ' ');
+        const isMe = m.author.bot && m.author.username === myUsername;
+        const who = isMe ? 'You (assistant)' : m.author.username;
+        const body = (m.content || '').substring(0, 400).replace(/\n/g, ' ');
         return `${who}: ${body}`;
       })
       .join('\n');
 
     const header = isThread
-      ? `[You are in a Discord thread. Thread: "${threadName}" inside ${parentName}. Recent messages:]`
-      : `[Recent messages in ${channelName}:]`;
+      ? `[Conversation history in Discord thread "${threadName}" inside ${parentName}. "You (assistant)" entries are your own prior replies:]`
+      : `[Conversation history in ${channelName}. "You (assistant)" entries are your own prior replies:]`;
 
     return `${header}\n${lines}\n\n`;
   } catch (e) {
-    logger.warn(`buildDiscordContext failed: ${e.message}`);
+    logger.warn(`buildDiscordContextFromApi failed: ${e.message}`);
     return '';
   }
 }
@@ -1791,8 +1816,9 @@ client.on('messageCreate', async (message) => {
     } catch (e) {}
   }
 
-  // Only respond if we're actually mentioned or replied to
-  if (!isMentioned && !isReplyToUs) return;
+  // Allow implicit responses in the #hud channel without tagging, otherwise require a mention or reply
+  const isHudChannel = message.channel.id === process.env.HUD_CHANNEL_ID;
+  if (!isMentioned && !isReplyToUs && !isHudChannel) return;
 
   // Only respond to allowed users (same as voice)
   if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
@@ -1804,7 +1830,13 @@ client.on('messageCreate', async (message) => {
 
   if (!content) return; // Empty mention, nothing to respond to
 
-  const recentContext = await buildDiscordContext(message, 10);
+  let discordChatHistory = [];
+  if (isDiscordMemoryReady() && shouldServeDiscordMemoryForMessage(message)) {
+    const { history } = await ensureDiscordHistoryLoaded(message, client.user.id);
+    discordChatHistory = history;
+  }
+  const recentContext =
+    discordChatHistory.length === 0 ? await buildDiscordContextFromApi(message, 10) : '';
 
   let repliedContentContext = '';
   if (isReplyToUs && message.reference) {
@@ -1827,10 +1859,10 @@ client.on('messageCreate', async (message) => {
     const result = await generateTextResponse(finalPrompt, {
       channelId: message.channelId,
       sessionUser: `agent:main:discord:channel:${message.channelId}`,
+      discordChatHistory,
     });
 
     if (!result.text || result.text.length < 2) {
-      // Agent probably spawned a sub-agent -- it'll post back on its own
       logger.info(`@mention: empty response (sub-agent likely spawned)`);
       return;
     }
@@ -2045,14 +2077,17 @@ client.on('messageCreate', async (message) => {
         const vmTaskId = ++taskIdCounter;
         createTask(vmTaskId, text, message.author.id);
 
-        // Post working indicator to Discord so user sees something immediately
+        // No working indicator to reduce noise
         let statusMsg = null;
-        try {
-          statusMsg = await message.reply({ content: `⚙️ Task #${vmTaskId} — working...`, allowedMentions: { repliedUser: false } });
-        } catch (_) {}
 
         // Fetch recent Discord messages for context (channel or thread aware)
-        const channelContext = await buildDiscordContext(message, 10);
+        let discordChatHistory = [];
+        if (isDiscordMemoryReady() && shouldServeDiscordMemoryForMessage(message)) {
+          const { history } = await ensureDiscordHistoryLoaded(message, client.user.id);
+          discordChatHistory = history;
+        }
+        const channelContext =
+          discordChatHistory.length === 0 ? await buildDiscordContextFromApi(message, 10) : '';
 
         // Store task creation to haivemind
         try {
@@ -2064,6 +2099,7 @@ client.on('messageCreate', async (message) => {
           const result = await generateTextResponse(prompt, {
             channelId: message.channelId,
             sessionUser: "agent:main:discord:channel:" + message.channelId,
+            discordChatHistory,
           });
           if (result && result.text && result.text.length >= 2) {
             // Store completed task to haivemind
@@ -3778,21 +3814,18 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
           logger.warn(`⚠️ Contextual ack failed: ${e.message}`);
         }
       }
-
-      // Route to cursor-agent subagent when agentModel, dispatch model, or voice model is cursor-agent/*,
-      // otherwise use the OpenClaw gateway webhook path.
+      // Route all async action tasks through the gateway webhook so Jarvis has
+      // one observable delivery path instead of a detached direct cursor-agent fork.
       const _activeVoiceModel = process.env.VOICE_MODEL || '';
       const _defaultDispatchModel = process.env.DISPATCH_MODEL || _activeVoiceModel;
       const _targetAgentModel = brainOptions.agentModel || _defaultDispatchModel;
       const dispatchOptions = { ...brainOptions, taskId, model: _targetAgentModel };
-      const webhookResult = isCursorModel(_targetAgentModel)
-        ? dispatchViaCursorAgent(transcript, history, dispatchOptions)
-        : await dispatchViaWebhook(transcript, history, dispatchOptions);
+      const webhookResult = await dispatchViaWebhook(transcript, history, dispatchOptions);
 
       if (webhookResult.dispatched) {
         markWorking(taskId);  // Ledger: task is now working via webhook
         hudTaskUpdate(taskId, 'working');
-        const dispatchSource = isCursorModel(_targetAgentModel) ? `cursor-agent (pid: ${webhookResult.pid})` : 'webhook';
+        const dispatchSource = `gateway webhook (${_targetAgentModel})`;
         postActivity(`🚀 **Task #${taskId}** dispatched via ${dispatchSource} (${intentType}) - awaiting /speak callback`);
         logger.info(`📨 Task #${taskId} dispatched successfully - result will arrive via /speak`);
 

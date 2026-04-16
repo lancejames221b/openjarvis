@@ -199,64 +199,6 @@ export function setCircuitBreakerNotifyCallback(cb) {
   _circuitBreakerNotify = cb;
 }
 
-// ── Cursor-agent direct CLI path ─────────────────────────────────────
-const CURSOR_AGENT_BIN = process.env.CURSOR_AGENT_BIN || `${process.env.HOME}/.local/bin/cursor-agent`;
-const CURSOR_API_KEY = process.env.CURSOR_API_KEY || '';
-
-/** Returns true if the model string targets the cursor-agent CLI backend. */
-export function isCursorModel(model) {
-  return typeof model === 'string' && model.startsWith('cursor-agent/');
-}
-
-/**
- * Call cursor-agent CLI directly and return the text response.
- * Converts the messages array to a single prompt (system + last user turn).
- * Non-streaming — returns the full response string or throws.
- */
-function callCursorAgentDirect(messages, model, signal) {
-  const modelId = model.replace(/^cursor-agent\//, '');
-  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
-
-  // Strip sub-agent/tool-use instructions from the system prompt so cursor-agent
-  // doesn't attempt to execute curl /speak calls or spawn sub-agents even without --yolo.
-  const safeSystem = systemMsg
-    .replace(/SUB-AGENT SPOKEN UPDATES[\s\S]*?(?=\n\n[A-Z]|\n[A-Z][A-Z]|$)/g, '')
-    .replace(/When spawning a sub-agent[\s\S]*?(?=\n\n|\n[A-Z-]|$)/g, '')
-    .trim();
-
-  const CURSOR_VOICE_OVERRIDE = 'You are Jarvis, a voice assistant. Respond with PLAIN SPOKEN TEXT — no markdown, no code blocks, no bullet lists. Keep answers concise but substantive. You DO have the ability to dispatch tasks to sub-agents and run commands — the system handles that separately. Never claim you cannot do something because of "voice mode" — just answer naturally.';
-
-  // Collapse full conversation history into the prompt so the model retains context
-  // across multi-turn voice exchanges (the old gateway path sent a messages array;
-  // cursor-agent --print only accepts a flat string).
-  const nonSystem = messages.filter(m => m.role !== 'system');
-  const historyBlock = nonSystem
-    .map(m => `${m.role === 'user' ? 'User' : 'Jarvis'}: ${m.content}`)
-    .join('\n\n');
-
-  const prompt = safeSystem
-    ? `${CURSOR_VOICE_OVERRIDE}\n\n${safeSystem}\n\n${historyBlock}`
-    : `${CURSOR_VOICE_OVERRIDE}\n\n${historyBlock}`;
-
-  // No --yolo: voice responses must be plain text, not agentic tool execution
-  const args = ['--print', '--output-format', 'text', '--model', modelId, prompt];
-  const env = { ...process.env, CURSOR_API_KEY };
-
-  return new Promise((resolve, reject) => {
-    const child = execFile(CURSOR_AGENT_BIN, args, { env, timeout: GATEWAY_TIMEOUT_MS }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(`cursor-agent exited ${err.code}: ${stderr || err.message}`));
-        return;
-      }
-      resolve(stdout.trim());
-    });
-    // Honour AbortSignal so voice interruptions cancel the subprocess
-    if (signal) {
-      signal.addEventListener('abort', () => { try { child.kill(); } catch (_) {} }, { once: true });
-    }
-  });
-}
-
 const circuitBreaker = {
   failures: [],    // timestamps of recent failures
   tripped: false,  // true = stop trying
@@ -440,10 +382,10 @@ Cursor IDE (code editing):
 - Local project: ssh lj@100.88.41.102 'cursor /path/to/folder'
 - Remote project: ssh lj@100.88.41.102 "cursor --folder-uri 'vscode-remote://ssh-remote+HOST/path'"
 - Key projects:
-  * "ewitness/ew-stack" → cursor --folder-uri 'vscode-remote://ssh-remote+lance-dev/root/ewitness/ewitness-stack'
+  * "ewitness/ew-stack" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-lan/root/ewitness/ewitness-stack'
   * "jarvis/voice-bot" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/home/generic/dev/jarvis-voice-dev'
-  * "dstorm/gibson/scrapers" → cursor --folder-uri 'vscode-remote://ssh-remote+lance-dev$HOME/ewitness-stack/ProjectX'
-  * "haivemind" → cursor --folder-uri 'vscode-remote://ssh-remote+lance-dev$HOME/Dev/haivemind/haivemind-mcp-server'
+  * "dstorm/gibson/scrapers" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-lan$HOME/ewitness-stack/ProjectX'
+  * "haivemind" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-lan$HOME/Dev/haivemind/haivemind-mcp-server'
   * "reverse engineering/malware" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/media/generic/8f6026e4-4fcd-4f37-8815-807fdcb8a404/DEV/ReverseEngineering'
   * "openclaw" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/home/generic/dev'
 - Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor`;
@@ -605,39 +547,6 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   const activeModel = options.model || voiceModel;
   logger.info({ taskId: options.taskId, intentType, model: activeModel }, '🧠 Model selected');
 
-  // ── Cursor-agent direct CLI path ────────────────────────────────────
-  // cursor-agent doesn't expose an HTTP server — invoke CLI directly,
-  // collect full text, then feed sentence-by-sentence into TTS pipeline.
-  if (isCursorModel(activeModel)) {
-    try {
-      logger.info(`🤖 cursor-agent request (model: ${activeModel})`);
-      fullText = await callCursorAgentDirect(messages, activeModel, signal);
-      fullText = trimForVoice(fullText);
-
-      if (AGENT_SIGNAL_PATTERN.test(fullText.trim())) return { text: '', silent: true };
-      if (!fullText || fullText.length < 2) return { text: '', empty: true };
-
-      const paragraphs = fullText.split('<p>').map(p => p.trim()).filter(p => p.length > 0);
-      for (const para of paragraphs) {
-        const sentences = para.match(/[^.!?]+[.!?]+[\s]?|[^.!?]+$/g) || [para];
-        for (const sentence of sentences) {
-          const clean = trimForVoice(sentence.trim());
-          if (clean && clean.length > 1 && !AGENT_SIGNAL_PATTERN.test(clean)) onSentence(clean);
-        }
-      }
-      // Save to haivemind (re-using the logic from the streaming path)
-      if (fullText) {
-        storeTaskToHaivemind(options.taskId, messages, fullText);
-      }
-
-      return { text: fullText.replace(/<p>/g, '\n\n') };
-    } catch (err) {
-      if (err.name === 'AbortError' || signal?.aborted) return { text: '', aborted: true };
-      logger.error('cursor-agent failed:', err.message);
-      onSentence("cursor-agent isn't responding. Try again?");
-      return { text: "cursor-agent isn't responding. Try again?" };
-    }
-  }
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
   // CLI providers (cursor-agent) don't support SSE. Fetch full response,
@@ -1267,9 +1176,12 @@ export async function generateTextResponse(userMessage, options = {}) {
     if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
   } catch (_) {}
 
-  const messages = [
-    { role: 'user', content: `${textTag}\n\n${channelCtx}${userMessage}` },
-  ];
+  const prior = Array.isArray(options.discordChatHistory) ? options.discordChatHistory : [];
+  const messages = [{ role: 'system', content: textTag }];
+  if (prior.length) {
+    messages.push(...prior);
+  }
+  messages.push({ role: 'user', content: `${channelCtx}${userMessage}` });
 
   try {
     const res = await resilientFetch(COMPLETIONS_URL, {
@@ -1373,46 +1285,88 @@ Never skip this step. The voice session cannot see your filesystem — this is t
   }
 }
 
-export function dispatchViaCursorAgent(userMessage, history = [], options = {}) {
-  const _now = new Date();
-  const taskId = options.taskId || `task-${Date.now()}`;
-  const voiceReportChannel = process.env.DISCORD_REPORT_CHANNEL_ID || process.env.DISCORD_TEXT_CHANNEL_ID || '';
-  const focus = getFocus();
-  const targetChannelId = focus ? focus.channelId : voiceReportChannel;
-  const targetChannelName = focus ? focus.channelName : 'hud';
-
-  // Build context tags matching the webhook dispatch format
-  let contextTags = `[DATETIME: ${_now.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}] `;
-  if (options.speaker) contextTags += `[SPEAKER: ${options.speaker}] `;
-
-  // Convert recent history into a brief context block (last 4 turns)
-  const recentHistory = (history || []).slice(-4).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
-  const historyBlock = recentHistory ? `\nRecent conversation:\n${recentHistory}\n` : '';
-
-  const deliveryInstructions = `
-DELIVERY INSTRUCTIONS:
-1. Post detailed results to Discord #${targetChannelName} (channel: discord, target: channel:${targetChannelId}).
-2. Then speak a 1-2 sentence TL;DR summary via this curl:
-curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_TLDR_HERE","source":"task-progress","taskId":"${taskId}"}'
-Replace YOUR_TLDR_HERE with a brief spoken summary (properly JSON-escaped).
-3. ARTIFACT TRACKING (MANDATORY if you created/modified files or committed code):
-mcporter call haivemind.store_memory content="ARTIFACT [timestamp]: files=[list] | repo=[path] | commit=[hash] | branch=[branch] | summary=[what was built]" category="operations"`;
-
-  const fullPrompt = `${contextTags}${historyBlock}\nTASK: ${userMessage}\n${deliveryInstructions}`;
-
-  // Prefer DISPATCH_MODEL env over voice model — allows cheap voice + capable dispatch split
-  const modelId = (options.model || _dispatchModel).replace(/^cursor-agent\//, '') || 'auto';
-  const args = ['--print', '--output-format', 'text', '--yolo', '--model', modelId, fullPrompt];
-  const env = { ...process.env, CURSOR_API_KEY };
-
-  // Spawn detached — parent returns immediately; cursor-agent runs to completion on its own
-  const child = spawn(CURSOR_AGENT_BIN, args, {
-    env,
-    stdio: 'ignore',
-    detached: true,
+export async function generateTextResponseStreaming(userMessage, onChunk, options = {}) {
+  const channelId = options.channelId || _defaultTextChannel;
+  const textTag = resolvePrompt("text-channel.txt", {
+    VOICE_NAME,
+    TEXT_CHANNEL_ID: channelId,
   });
-  child.unref();
 
-  logger.info(`🤖 cursor-agent subagent spawned (model: ${modelId}, task: ${taskId}, pid: ${child.pid})`);
-  return { dispatched: true, pid: child.pid, taskId };
+  let channelCtx = "";
+  try {
+    const ctx = await getChannelContext(channelId);
+    if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
+  } catch (_) {}
+
+  const priorStream = Array.isArray(options.discordChatHistory) ? options.discordChatHistory : [];
+  const messages = [{ role: "system", content: textTag }];
+  if (priorStream.length) {
+    messages.push(...priorStream);
+  }
+  messages.push({ role: "user", content: `${channelCtx}${userMessage}` });
+
+  let fullText = "";
+
+  try {
+    const res = await resilientFetch(COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GATEWAY_TOKEN}`,
+        "X-OpenClaw-Scopes": "operator.write",
+        "x-openclaw-scopes": "operator.write",
+      },
+      body: JSON.stringify({
+        messages,
+        max_tokens: 8192,
+        user: options.sessionUser || getActiveSessionUser(),
+        model: "openclaw",
+        stream: true,
+        ...THINKING_PARAM,
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Gateway ${res.status}: ${body}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split("\n");
+      sseBuffer = lines.pop(); // Keep incomplete line
+      
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") continue;
+        
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            fullText += content;
+            if (onChunk) onChunk(content, fullText);
+          }
+        } catch (e) {
+          // Ignore JSON parse errors for incomplete chunks
+        }
+      }
+    }
+    
+    // Store to haivemind after reply — fire and forget
+    storeChannelMemory(channelId, userMessage, fullText).catch(() => {});
+    return { text: fullText };
+
+  } catch (err) {
+    logger.error("Text gateway streaming failed:", err.message);
+    return { text: "Having trouble connecting to the gateway right now." };
+  }
 }
