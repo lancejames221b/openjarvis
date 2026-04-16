@@ -35,24 +35,44 @@ export async function handleSpawnCommand(interaction) {
   const parentId = interaction.channelId;
   const taskSlug = prompt.slice(0, 48).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'agent session';
 
-  // Create a thread in the parent channel
+  // Resolve where to stream: create a thread if the channel supports it,
+  // otherwise stream directly into the current channel/thread.
+  const THREAD_TYPES     = new Set([10, 11, 12]); // already a thread — use as-is
+  const THREADABLE_TYPES = new Set([0, 5]);        // text / announcement — can create threads
+
   let threadId;
+  let newThread = false;
   try {
-    const res = await discordApi(`/channels/${parentId}/threads`, 'POST', {
-      name: taskSlug,
-      auto_archive_duration: 1440,
-      type: 11, // GUILD_PUBLIC_THREAD
-    });
-    const data = await res.json();
-    if (!data.id) throw new Error(JSON.stringify(data));
-    threadId = data.id;
+    const chanRes  = await discordApi(`/channels/${parentId}`);
+    const chanData = await chanRes.json();
+    const chanType = chanData.type;
+
+    if (THREAD_TYPES.has(chanType)) {
+      // Already inside a thread — stream here directly
+      threadId = parentId;
+    } else if (THREADABLE_TYPES.has(chanType)) {
+      const res = await discordApi(`/channels/${parentId}/threads`, 'POST', {
+        name: taskSlug,
+        auto_archive_duration: 1440,
+        type: 11, // GUILD_PUBLIC_THREAD
+      });
+      const data = await res.json();
+      if (!data.id) throw new Error(JSON.stringify(data));
+      threadId = data.id;
+      newThread = true;
+    } else {
+      // Voice, DM, stage, etc. — fall back to current channel
+      threadId = parentId;
+    }
   } catch (err) {
-    logger.error(`[spawn] thread creation failed: ${err.message}`);
-    await interaction.editReply(`Failed to create thread: ${err.message}`);
+    logger.error(`[spawn] channel setup failed: ${err.message}`);
+    await interaction.editReply(`Failed to set up agent channel: ${err.message}`);
     return;
   }
 
-  await interaction.editReply(`Agent spawned in <#${threadId}>`);
+  await interaction.editReply(
+    newThread ? `Agent spawned in <#${threadId}>` : 'Agent running in this thread...'
+  );
 
   // Start live stream in the new thread
   const ls = await createLiveStream(threadId, DISCORD_TOKEN);
