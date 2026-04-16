@@ -193,6 +193,9 @@ const GATEWAY_FIRST_TOKEN_TIMEOUT_MS = parseInt(process.env.GATEWAY_FIRST_TOKEN_
 const GATEWAY_RETRY_DELAY_MS = 2_000;  // 2s base before retry (+ up to 1s jitter)
 const CIRCUIT_BREAKER_THRESHOLD = 5;    // failures to trip (was 3 — loosened to avoid tripping on burst of slow cursor-agent tasks)
 const CIRCUIT_BREAKER_WINDOW_MS = 120_000; // 120s rolling window (was 60s)
+// Per-channel breakers — tighter threshold; one bad channel doesn't block others
+const PER_CHANNEL_CB_THRESHOLD = 3;
+const PER_CHANNEL_CB_WINDOW_MS = 60_000;
 
 // Circuit breaker state
 let _circuitBreakerNotify = null; // callback(type: 'open'|'close') — set by index.js
@@ -268,13 +271,20 @@ async function fetchWithTimeout(url, options, timeoutMs = GATEWAY_TIMEOUT_MS, ex
 }
 
 /**
- * Fetch with timeout + 3-retry exponential backoff + circuit breaker.
+ * Fetch with timeout + 3-retry exponential backoff + circuit breakers.
+ * Checks global breaker + optional per-channel breaker before each attempt.
  * Retries at 1 s / 2 s / 4 s ±300 ms jitter on 5xx and network errors; 4xx fails fast.
  * Returns the fetch Response on success, throws when all retries are exhausted.
+ *
+ * @param {string} channelKey - Optional channel key for per-channel circuit breaker.
  */
-async function resilientFetch(url, options, externalSignal) {
+async function resilientFetch(url, options, externalSignal, channelKey) {
   if (circuitBreaker.isOpen()) {
     throw new Error('Gateway unavailable (circuit breaker open)');
+  }
+  const chBreaker = channelKey ? getChannelBreaker(channelKey) : null;
+  if (chBreaker?.isOpen()) {
+    throw new Error('Gateway still recovering for this channel — try again shortly');
   }
 
   const RETRY_DELAYS = [1_000, 2_000, 4_000];
@@ -286,6 +296,7 @@ async function resilientFetch(url, options, externalSignal) {
       const res = await fetchWithTimeout(url, options, GATEWAY_TIMEOUT_MS, externalSignal);
       if (res.ok || (res.status >= 400 && res.status < 500)) {
         circuitBreaker.recordSuccess();
+        chBreaker?.recordSuccess();
         return res;
       }
       throw new Error(`Gateway ${res.status}`);
@@ -297,17 +308,60 @@ async function resilientFetch(url, options, externalSignal) {
         logger.warn(`Gateway attempt ${attempt + 1} failed: ${err.message} — retrying in ${delay}ms`);
         await new Promise(r => setTimeout(r, delay));
         if (circuitBreaker.isOpen()) throw new Error('Gateway unavailable (circuit breaker open)');
+        if (chBreaker?.isOpen()) throw new Error('Gateway still recovering for this channel — try again shortly');
       }
     }
   }
   circuitBreaker.recordFailure();
+  chBreaker?.recordFailure();
   if (circuitBreaker.isOpen()) throw new Error('Gateway unavailable (circuit breaker open)');
+  if (chBreaker?.isOpen()) throw new Error('Gateway still recovering for this channel — try again shortly');
   throw lastErr;
 }
 
 /** Check if gateway circuit breaker is currently tripped */
 export function isGatewayCircuitOpen() {
   return circuitBreaker.isOpen();
+}
+
+// ── Per-channel circuit breakers ─────────────────────────────────────────────
+// Map<channelKey, BreakerState>. A tripped per-channel breaker blocks only that
+// channel; the global breaker still blocks all channels if it trips.
+const _channelBreakers = new Map();
+
+function getChannelBreaker(channelKey) {
+  if (!_channelBreakers.has(channelKey)) {
+    _channelBreakers.set(channelKey, {
+      failures: [], tripped: false, trippedAt: null,
+      recordFailure() {
+        const now = Date.now();
+        this.failures = this.failures.filter(t => now - t < PER_CHANNEL_CB_WINDOW_MS);
+        this.failures.push(now);
+        if (!this.tripped && this.failures.length >= PER_CHANNEL_CB_THRESHOLD) {
+          this.tripped = true; this.trippedAt = now;
+          logger.warn(`[breaker] Channel ${channelKey} tripped — ${PER_CHANNEL_CB_THRESHOLD} failures in ${PER_CHANNEL_CB_WINDOW_MS / 1000}s`);
+        }
+      },
+      recordSuccess() {
+        if (this.tripped) { logger.info(`[breaker] Channel ${channelKey} reset`); }
+        this.failures = []; this.tripped = false; this.trippedAt = null;
+      },
+      isOpen() {
+        if (!this.tripped) return false;
+        if (Date.now() - this.trippedAt > PER_CHANNEL_CB_WINDOW_MS) {
+          this.tripped = false; this.trippedAt = null; return false;
+        }
+        return true;
+      },
+    });
+  }
+  return _channelBreakers.get(channelKey);
+}
+
+/** Check if a specific channel's circuit breaker is open */
+export function isChannelCircuitOpen(channelKey) {
+  if (!channelKey) return circuitBreaker.isOpen();
+  return circuitBreaker.isOpen() || (_channelBreakers.get(channelKey)?.isOpen() ?? false);
 }
 
 // Use the main Discord text channel session — same brain as chat
@@ -1192,7 +1246,7 @@ export async function generateTextResponse(userMessage, options = {}) {
         model: 'openclaw',
         ...THINKING_PARAM,
       }),
-    });
+    }, undefined, channelId);
 
     if (!res.ok) {
       const body = await res.text();
@@ -1317,7 +1371,7 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
         stream: true,
         ...THINKING_PARAM,
       }),
-    });
+    }, undefined, channelId);
 
     if (!res.ok) {
       const body = await res.text();
