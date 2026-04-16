@@ -994,8 +994,44 @@ const client = new Client({
 
 initDiscordMemory();
 
-client.on('messageCreate', (message) => {
+client.on('messageCreate', async (message) => {
+  // H1: always record to discord-memory
   maybeRecordDiscordMessage(message);
+
+  // H2: webhook callback — bot messages only, specific channel
+  if (WEBHOOK_CALLBACK_MODE &&
+      message.channelId === VOICE_CALLBACK_CHANNEL_ID &&
+      message.author.id === CLAWDBOT_BOT_ID &&
+      message.author.id !== client.user.id) {
+    return handleCallbackMessage(message);
+  }
+
+  // All remaining handlers: skip bots and non-allowed users
+  if (message.author.bot) return;
+  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
+
+  const content = (message.content || '').trim();
+
+  // H4a: explicit /focus or /handoff — handle and return
+  if (/^\/(handoff|focus)(\s|$)/i.test(content)) {
+    return handleExplicitFocus(message, content);
+  }
+
+  // H4b: auto-focus update — runs BEFORE @mention dispatch so gateway
+  // gets correct channel context (this is the race condition fix)
+  await handleAutoFocusUpdate(message, content);
+
+  // H3: @mention or reply-to-us
+  const isMentioned = message.mentions.has(client.user.id);
+  const isReplyToUs = await checkIsReplyToUs(message);
+  if (isMentioned || isReplyToUs) {
+    return handleMentionReply(message, content, isReplyToUs);
+  }
+
+  // H5: Discord voice message (flag 8192 + .ogg attachment)
+  if ((message.flags?.bitfield & 8192) !== 0) {
+    return handleVoiceTranscript(message);
+  }
 });
 
 client.on('messageUpdate', (_before, message) => {
@@ -1031,6 +1067,42 @@ client.once('ready', async () => {
     }
   } catch (err) {
     logger.warn(`[startup] Failed to inject Discord client into focus-state: ${err.message}`);
+  }
+
+  // ── Startup channel validation ──
+  // Warn loudly if any configured channel ID is missing or inaccessible.
+  {
+    const channelChecks = [
+      { id: TEXT_CHANNEL_ID,              label: 'DISCORD_TEXT_CHANNEL_ID',       required: true },
+      { id: VOICE_CHANNEL_ID,             label: 'DISCORD_VOICE_CHANNEL_ID',      required: true },
+      { id: ACTIVITY_CHANNEL_ID,          label: 'DISCORD_ACTIVITY_CHANNEL_ID',   required: false },
+      { id: VOICE_REPORT_CHANNEL_ID,      label: 'VOICE_REPORT_CHANNEL_ID',       required: false },
+      { id: CC_CHANNEL_ID,                label: 'DISCORD_CC_CHANNEL_ID',         required: false },
+      { id: RECORD_CHANNEL_ID,            label: 'RECORD_CHANNEL_ID',             required: false },
+      { id: VOICE_CALLBACK_CHANNEL_ID,    label: 'VOICE_CALLBACK_CHANNEL_ID',     required: WEBHOOK_CALLBACK_MODE },
+    ];
+    const bad = [];
+    for (const { id, label, required } of channelChecks) {
+      if (!id) {
+        if (required) bad.push(`${label}: not set`);
+        continue;
+      }
+      try {
+        const ch = client.channels.cache.get(id) || await client.channels.fetch(id).catch(() => null);
+        if (!ch) bad.push(`${label} (${id}): not found`);
+      } catch (e) {
+        bad.push(`${label} (${id}): ${e.message}`);
+      }
+    }
+    if (bad.length > 0) {
+      const warn = `[startup] Channel validation warnings:\n${bad.map(s => `  • ${s}`).join('\n')}`;
+      logger.warn(warn);
+      // Post to HUD so it's visible in Discord (best-effort — HUD may not be ready yet)
+      try {
+        const hudCh = client.channels.cache.get(process.env.HUD_CHANNEL_ID);
+        if (hudCh) await hudCh.send(`⚠️ **Startup channel warnings:**\n${bad.map(s => `• ${s}`).join('\n')}`).catch(() => {});
+      } catch (_) {}
+    }
   }
 
   // ── Voice Session HUD ──
@@ -1717,18 +1789,7 @@ async function buildDiscordContextFromApi(message, limit = 10) {
   }
 }
 
-client.on('messageCreate', async (message) => {
-  if (!WEBHOOK_CALLBACK_MODE) return;
-
-  // Only listen in the callback channel
-  if (message.channelId !== VOICE_CALLBACK_CHANNEL_ID) return;
-
-  // Only process messages from the Clawdbot bot
-  if (message.author.id !== CLAWDBOT_BOT_ID) return;
-
-  // Skip if it's a bot message from ourselves (voice bot)
-  if (message.author.id === client.user.id) return;
-
+async function handleCallbackMessage(message) {
   // Skip empty or signal messages
   const text = message.content?.trim();
   if (!text) return;
@@ -1791,38 +1852,28 @@ client.on('messageCreate', async (message) => {
     const userId = ALLOWED_USERS[0];
     await postToTextChannel(`<@${userId}> 🎙️ **Voice task complete:**\n${voiceText}`);
   }
-});
+}
 
 // ── @Mention Handler ─────────────────────────────────────────────────
 // Responds to @JARVISAI mentions in any Discord text channel.
 // Routes through the gateway with a [TEXT] tag (full markdown, no voice constraints).
 
-client.on('messageCreate', async (message) => {
-  // Skip bot messages (including our own)
-  if (message.author.bot) return;
+async function checkIsReplyToUs(message) {
+  if (!message.reference || !message.reference.messageId) return false;
+  try {
+    // Try cache first, fallback to fetch if not in cache
+    const repliedMsg = message.channel.messages.cache.get(message.reference.messageId) ||
+                       await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+    if (repliedMsg && repliedMsg.author.id === client.user.id) {
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
 
-  // Check if we were mentioned OR if this is a direct reply to one of our messages
-  const isMentioned = message.mentions.has(client.user.id);
-  let isReplyToUs = false;
-  
-  if (message.reference && message.reference.messageId) {
-    try {
-      // Try cache first, fallback to fetch if not in cache
-      const repliedMsg = message.channel.messages.cache.get(message.reference.messageId) || 
-                         await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
-      if (repliedMsg && repliedMsg.author.id === client.user.id) {
-        isReplyToUs = true;
-      }
-    } catch (e) {}
-  }
-
-  // Respond in all channels implicitly (no @mention required)
-
-  // Only respond to allowed users (same as voice)
-  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
-
-  // Strip the mention from the message content
-  const content = message.content
+async function handleMentionReply(message, rawContent, isReplyToUs) {
+  // Strip mention from content for the LLM prompt
+  const content = rawContent
     .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
     .trim();
 
@@ -1898,7 +1949,7 @@ client.on('messageCreate', async (message) => {
       await message.reply("Having trouble processing that right now, sir.");
     } catch (_) {}
   }
-});
+}
 
 // ── Chat Focus / Handoff Commands ───────────────────────────────────
 // Allows setting voice focus from Discord text, without using voice.
@@ -1911,76 +1962,67 @@ client.on('messageCreate', async (message) => {
 //   Auto-focus: if the owner posts in a registered channel while NOT in voice,
 //               silently update focus (no confirmation). Only active channels
 //               (score ≥ 40 in resolveChannel) trigger auto-focus.
-client.on('messageCreate', async (message) => {
-  // Skip bots
-  if (message.author.bot) return;
-  // Only respond to allowed users
-  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
+async function handleExplicitFocus(message, content) {
+  // ── Explicit /handoff or /focus command ────────────────────────
+  const { setFocusById, setFocusByName, resolveChannel } = await import('./focus-state.js');
 
-  const content = (message.content || '').trim();
-  const isExplicitFocus = /^\/(handoff|focus)(\s|$)/i.test(content);
+  let targetChannelId = null;
+  let targetChannelName = null;
 
-  if (isExplicitFocus) {
-    // ── Explicit /handoff or /focus command ────────────────────────
-    const { setFocusById, setFocusByName, resolveChannel } = await import('./focus-state.js');
+  // Check for a channel mention: /handoff #channel-name or /handoff <#channelId>
+  const mentionMatch = content.match(/<#(\d+)>/);
+  const nameMatch = content.match(/^\/(handoff|focus)\s+([^<#\s].+)/i);
 
-    let targetChannelId = null;
-    let targetChannelName = null;
-
-    // Check for a channel mention: /handoff #channel-name or /handoff <#channelId>
-    const mentionMatch = content.match(/<#(\d+)>/);
-    const nameMatch = content.match(/^\/(handoff|focus)\s+([^<#\s].+)/i);
-
-    if (mentionMatch) {
-      targetChannelId = mentionMatch[1];
-      const ch = client.channels.cache.get(targetChannelId);
+  if (mentionMatch) {
+    targetChannelId = mentionMatch[1];
+    const ch = client.channels.cache.get(targetChannelId);
+    targetChannelName = ch?.name || targetChannelId;
+  } else if (nameMatch) {
+    const query = nameMatch[2].replace(/^#/, '').trim();
+    const resolved = resolveChannel(query);
+    if (resolved) {
+      targetChannelId = resolved.channelId;
+      targetChannelName = resolved.channelName;
+    } else {
+      // Try as a raw channel ID
+      if (/^\d+$/.test(query)) {
+        targetChannelId = query;
+        const ch = client.channels.cache.get(query);
+        targetChannelName = ch?.name || query;
+      }
+    }
+  } else {
+    // No target specified - focus on the channel where the command was typed
+    targetChannelId = message.channelId;
+    // If it's a thread, use parent channel id for focus but note thread
+    const ch = message.channel;
+    if (ch?.isThread?.()) {
+      targetChannelId = ch.parentId || message.channelId;
+      targetChannelName = ch.parent?.name || targetChannelId;
+    } else {
       targetChannelName = ch?.name || targetChannelId;
-    } else if (nameMatch) {
-      const query = nameMatch[2].replace(/^#/, '').trim();
-      const resolved = resolveChannel(query);
-      if (resolved) {
-        targetChannelId = resolved.channelId;
-        targetChannelName = resolved.channelName;
-      } else {
-        // Try as a raw channel ID
-        if (/^\d+$/.test(query)) {
-          targetChannelId = query;
-          const ch = client.channels.cache.get(query);
-          targetChannelName = ch?.name || query;
-        }
-      }
-    } else {
-      // No target specified - focus on the channel where the command was typed
-      targetChannelId = message.channelId;
-      // If it's a thread, use parent channel id for focus but note thread
-      const ch = message.channel;
-      if (ch?.isThread?.()) {
-        targetChannelId = ch.parentId || message.channelId;
-        targetChannelName = ch.parent?.name || targetChannelId;
-      } else {
-        targetChannelName = ch?.name || targetChannelId;
-      }
     }
-
-    if (targetChannelId) {
-      const result = setFocusById(targetChannelId, targetChannelName);
-      // If it was typed in a thread, also store the thread
-      const ch = message.channel;
-      if (ch?.isThread?.()) {
-        const { setFocusWithThread } = await import('./focus-state.js');
-        await setFocusWithThread(targetChannelName, ch.name);
-      }
-      const focusName = result?.channelName || targetChannelName;
-      const ack = result?.threadName ? `🎯 Focused on **#${focusName}** › ${result.threadName}` : `🎯 Focused on **#${focusName}**`;
-      await message.react('🎯').catch(() => {});
-      await message.reply({ content: ack, allowedMentions: { repliedUser: false } }).catch(() => {});
-      logger.info(`[chat-focus] Explicit focus set: #${focusName} (from Discord message)`);
-    } else {
-      await message.reply({ content: "Couldn't find that channel, sir.", allowedMentions: { repliedUser: false } }).catch(() => {});
-    }
-    return;
   }
 
+  if (targetChannelId) {
+    const result = setFocusById(targetChannelId, targetChannelName);
+    // If it was typed in a thread, also store the thread
+    const ch = message.channel;
+    if (ch?.isThread?.()) {
+      const { setFocusWithThread } = await import('./focus-state.js');
+      await setFocusWithThread(targetChannelName, ch.name);
+    }
+    const focusName = result?.channelName || targetChannelName;
+    const ack = result?.threadName ? `🎯 Focused on **#${focusName}** › ${result.threadName}` : `🎯 Focused on **#${focusName}**`;
+    await message.react('🎯').catch(() => {});
+    await message.reply({ content: ack, allowedMentions: { repliedUser: false } }).catch(() => {});
+    logger.info(`[chat-focus] Explicit focus set: #${focusName} (from Discord message)`);
+  } else {
+    await message.reply({ content: "Couldn't find that channel, sir.", allowedMentions: { repliedUser: false } }).catch(() => {});
+  }
+}
+
+async function handleAutoFocusUpdate(message, content) {
   // ── Auto-focus: silently update focus when the owner posts in a known channel ──
   // Only fires when NOT in voice (don't interrupt an active session's focus).
   // Only fires for registered channels (resolveChannel by channel name/id).
@@ -2005,10 +2047,10 @@ client.on('messageCreate', async (message) => {
     // Known channel - update focus silently (no reply, no reaction)
     const { getFocus } = await import('./focus-state.js');
     const current = getFocus();
-    
+
     const threadId = isThread ? ch.id : null;
     const needsUpdate = !current || current.channelId !== effectiveChannelId || current.threadId !== threadId;
-    
+
     if (needsUpdate) {
       if (isThread) {
         const { setFocusWithThread } = await import('./focus-state.js');
@@ -2021,20 +2063,13 @@ client.on('messageCreate', async (message) => {
       }
     }
   }
-});
+}
 
 // ── Voice Message Transcript Replies ─────────────────────────────────
 // When a user sends a voice message (.ogg attachment) in any channel the bot
 // can see, transcribe it and reply with the text. This makes voice message
 // content visible in channel history for focus-read, reloads, and search.
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
-
-  // Discord voice messages have flags 8192 (IS_VOICE_MESSAGE) and an .ogg attachment
-  const isVoiceMessage = (message.flags?.bitfield & 8192) !== 0;
-  if (!isVoiceMessage) return;
-
+async function handleVoiceTranscript(message) {
   // Dedup: prevent triple-posting if Discord fires messageCreate multiple times
   // for the same voice message (gateway reconnects, shard issues, overlapping restarts).
   const vmDedupKey = `vm:${message.id}`;
@@ -2128,7 +2163,7 @@ client.on('messageCreate', async (message) => {
   } catch (err) {
     logger.warn(`[voice-transcript] Failed to transcribe voice message: ${err.message}`);
   }
-});
+}
 
 // ── Voice-to-Text Handoff ────────────────────────────────────────────
 

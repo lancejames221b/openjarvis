@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 
 const app = express();
@@ -26,18 +27,52 @@ const ALERT_WEBHOOK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || "";
 const ALERT_WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || "3335";
 const ALERT_WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || "127.0.0.1";
 const SPEAK_URL = process.env.ZEROCLAW_COMPAT_SPEAK_URL || `http://${ALERT_WEBHOOK_HOST}:${ALERT_WEBHOOK_PORT}/speak`;
+const SESSION_STORE_PATH = process.env.SESSION_STORE_PATH || "/tmp/zeroclaw-sessions.json";
+const CURSOR_AGENT_TIMEOUT_MS = 600_000; // 10 min — matches GATEWAY_TIMEOUT_MS in jarvis-voice
 
-// Per-channel cursor-agent session map: channelKey (req.body.user) -> chatId UUID
-const channelSessions = new Map();
+// ── Metrics counters ─────────────────────────────────────────────────────────
+const metrics = {
+  requests: 0,
+  requestsStreaming: 0,
+  timeouts: 0,
+  errors: 0,
+  sessionsCreated: 0,
+  sessionsResumed: 0,
+  hooksAgent: 0,
+};
 
-// Base args for all cursor-agent chat/ask calls
+// ── Session persistence ───────────────────────────────────────────────────────
+// channelSessions persists across service restarts via a JSON file.
+// On restart, cursor-agent silently starts fresh context if a UUID is stale.
+function loadSessions() {
+  try {
+    return new Map(Object.entries(JSON.parse(fs.readFileSync(SESSION_STORE_PATH, "utf8"))));
+  } catch {
+    return new Map();
+  }
+}
+function saveSessions() {
+  try {
+    fs.writeFileSync(SESSION_STORE_PATH, JSON.stringify(Object.fromEntries(channelSessions)));
+  } catch { /* non-fatal */ }
+}
+
+const channelSessions = loadSessions();
+// Per-channel in-flight Promise lock — prevents duplicate create-chat on concurrent requests
+const channelSessionLocks = new Map();
+
+// ── Child process tracking for clean shutdown ─────────────────────────────────
+const activeChildren = new Set();
+
+// ── Base args for all cursor-agent chat/ask calls ─────────────────────────────
 const BASE_ARGS = [
   "--print", "--trust",
   "--output-format", "stream-json", "--stream-partial-output",
 ];
 
-function log(...args) {
-  console.log("[zeroclaw-openclaw-compat]", ...args);
+function log(event, data = {}) {
+  const entry = { ts: new Date().toISOString(), svc: "zeroclaw-openclaw-compat", event, ...data };
+  console.log(JSON.stringify(entry));
 }
 
 function requireAuth(req, res, next) {
@@ -60,8 +95,14 @@ function contentToText(content) {
   return "";
 }
 
+// Collapse messages array to a flat prompt string.
+// System message is extracted and prepended as a context block so cursor-agent
+// can distinguish instructions from conversation history.
 function collapseMessages(messages = []) {
-  return messages
+  const sys = messages.find((m) => m?.role === "system");
+  const turns = messages.filter((m) => m?.role !== "system");
+  const sysText = sys ? contentToText(sys.content) : "";
+  const history = turns
     .map((msg) => {
       const role = String(msg?.role || "user").toUpperCase();
       const text = contentToText(msg?.content);
@@ -69,16 +110,20 @@ function collapseMessages(messages = []) {
     })
     .filter(Boolean)
     .join("\n\n");
+  return sysText ? `${sysText}\n\n---\n\n${history}` : history;
 }
 
 // Spawn cursor-agent with stream-json output; optionally resume a prior session.
 function spawnCursorStream(prompt, model, chatId) {
   const args = [...BASE_ARGS, "--model", model];
   if (chatId) args.push("--resume", chatId);
-  return spawn(CURSOR_AGENT_BIN, [...args, prompt], {
+  const child = spawn(CURSOR_AGENT_BIN, [...args, prompt], {
     env: { ...process.env, CURSOR_API_KEY },
-    timeout: 180_000,
+    timeout: CURSOR_AGENT_TIMEOUT_MS,
   });
+  activeChildren.add(child);
+  child.on("close", () => activeChildren.delete(child));
+  return child;
 }
 
 // Create a new cursor-agent chat session; returns the UUID chatId.
@@ -88,29 +133,57 @@ async function createChat() {
       env: { ...process.env, CURSOR_API_KEY },
       timeout: 10_000,
     });
+    activeChildren.add(child);
     let out = "";
     child.stdout.on("data", (d) => { out += d; });
     child.on("close", (code) => {
+      activeChildren.delete(child);
       const chatId = out.trim();
       if (code !== 0 || !chatId) return reject(new Error("create-chat failed"));
       resolve(chatId);
     });
-    child.on("error", reject);
+    child.on("error", (err) => { activeChildren.delete(child); reject(err); });
   });
 }
 
 // Return an existing chatId for the channel, or create a new one.
+// Uses a per-channel Promise lock to prevent duplicate create-chat on concurrent requests.
 async function getOrCreateChatId(channelKey) {
-  if (channelKey && channelSessions.has(channelKey)) return channelSessions.get(channelKey);
-  const chatId = await createChat();
-  if (channelKey) channelSessions.set(channelKey, chatId);
-  return chatId;
+  if (channelKey && channelSessions.has(channelKey)) {
+    metrics.sessionsResumed++;
+    return channelSessions.get(channelKey);
+  }
+  if (channelKey && channelSessionLocks.has(channelKey)) {
+    // Another request is already creating this session — wait for it
+    return channelSessionLocks.get(channelKey);
+  }
+  const p = createChat().then((chatId) => {
+    if (channelKey) {
+      channelSessions.set(channelKey, chatId);
+      saveSessions();
+    }
+    channelSessionLocks.delete(channelKey);
+    metrics.sessionsCreated++;
+    return chatId;
+  }).catch((err) => {
+    channelSessionLocks.delete(channelKey);
+    throw err;
+  });
+  if (channelKey) channelSessionLocks.set(channelKey, p);
+  return p;
+}
+
+function setSession(channelKey, sessionId) {
+  if (!channelKey || !sessionId) return;
+  channelSessions.set(channelKey, sessionId);
+  saveSessions();
 }
 
 // Buffer the full response from cursor-agent (non-streaming path).
 // Parses NDJSON lines; extracts text from result event and session_id from system:init.
 async function callCursorAgent(prompt, modelOverride, chatId) {
   const model = resolveModel(modelOverride) || DEFAULT_CURSOR_MODEL;
+  const start = Date.now();
   return new Promise((resolve, reject) => {
     const child = spawnCursorStream(prompt, model, chatId);
     let buf = "";
@@ -118,6 +191,7 @@ async function callCursorAgent(prompt, modelOverride, chatId) {
     child.stderr.on("data", (d) => { stderr += d; });
     child.stdout.on("data", (d) => { buf += d; });
     child.on("close", (code) => {
+      const durationMs = Date.now() - start;
       let resultText = "";
       let sessionId = chatId || null;
       for (const line of buf.split("\n")) {
@@ -132,11 +206,18 @@ async function callCursorAgent(prompt, modelOverride, chatId) {
         } catch { /* skip malformed lines */ }
       }
       if (code !== 0 && !resultText) {
-        return reject(new Error(`cursor-agent exited ${code}: ${stderr.slice(0, 300)}`));
+        if (code === 143) metrics.timeouts++;
+        else metrics.errors++;
+        const msg = code === 143
+          ? `cursor-agent timed out after ${CURSOR_AGENT_TIMEOUT_MS / 1000}s — task may need more time`
+          : `cursor-agent exited ${code}: ${stderr.slice(0, 300)}`;
+        log("cursor_agent_error", { code, durationMs, model, error: msg });
+        return reject(new Error(msg));
       }
+      log("cursor_agent_done", { code, durationMs, model, chars: resultText.length });
       resolve({ text: resultText, model: `cursor-agent/${model}`, sessionId });
     });
-    child.on("error", reject);
+    child.on("error", (err) => { metrics.errors++; reject(err); });
   });
 }
 
@@ -145,6 +226,7 @@ async function callCursorAgent(prompt, modelOverride, chatId) {
 async function streamCursorToSSE(prompt, model, chatId, res) {
   const completionId = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
+  const start = Date.now();
 
   return new Promise((resolve, reject) => {
     const child = spawnCursorStream(prompt, model, chatId);
@@ -184,10 +266,20 @@ async function streamCursorToSSE(prompt, model, chatId, res) {
     child.stderr.on("data", () => {});
     child.on("close", (code) => {
       if (lineBuf.trim()) handleLine(lineBuf);
-      if (code !== 0) return reject(new Error(`cursor-agent exited ${code}`));
+      const durationMs = Date.now() - start;
+      if (code !== 0) {
+        if (code === 143) metrics.timeouts++;
+        else metrics.errors++;
+        const msg = code === 143
+          ? `cursor-agent timed out after ${CURSOR_AGENT_TIMEOUT_MS / 1000}s — task may need more time`
+          : `cursor-agent exited ${code}`;
+        log("cursor_agent_error", { code, durationMs, model, streaming: true, error: msg });
+        return reject(new Error(msg));
+      }
+      log("cursor_agent_done", { code, durationMs, model, streaming: true });
       resolve(resolvedSessionId);
     });
-    child.on("error", reject);
+    child.on("error", (err) => { metrics.errors++; reject(err); });
   });
 }
 
@@ -265,13 +357,26 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.get("/metrics", (_req, res) => {
+  res.json({
+    ...metrics,
+    activeSessions: channelSessions.size,
+    activeChildren: activeChildren.size,
+    pendingLocks: channelSessionLocks.size,
+    uptime: process.uptime(),
+  });
+});
+
 app.post("/v1/chat/completions", requireAuth, async (req, res) => {
+  metrics.requests++;
   try {
     const requestedModel = String(req.body?.model || "openclaw");
     const model = resolveModel(requestedModel) || DEFAULT_CURSOR_MODEL;
     const prompt = collapseMessages(req.body?.messages || []);
     const channelKey = String(req.body?.user || "").trim() || null;
     const wantStream = Boolean(req.body?.stream);
+
+    if (wantStream) metrics.requestsStreaming++;
 
     const chatId = await getOrCreateChatId(channelKey);
 
@@ -285,14 +390,14 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
       try {
         resolvedSessionId = await streamCursorToSSE(prompt, model, chatId, res);
       } catch (streamError) {
-        log("stream error", streamError.message);
+        log("stream_error", { channelKey, model, error: streamError.message });
         res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
         res.write("data: [DONE]\n\n");
         res.end();
         return;
       }
 
-      if (channelKey && resolvedSessionId) channelSessions.set(channelKey, resolvedSessionId);
+      setSession(channelKey, resolvedSessionId);
 
       res.write(`data: ${JSON.stringify({
         id: `chatcmpl-${crypto.randomUUID()}`,
@@ -308,15 +413,17 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
 
     // Non-streaming path
     const result = await callCursorAgent(prompt, requestedModel, chatId);
-    if (channelKey && result.sessionId) channelSessions.set(channelKey, result.sessionId);
+    setSession(channelKey, result.sessionId);
     res.json(openAiCompletionResponse(requestedModel, result.text));
   } catch (error) {
-    log("chat completion failed", error.message || error);
+    metrics.errors++;
+    log("completions_error", { error: String(error.message || error) });
     res.status(502).json({ error: String(error.message || error) });
   }
 });
 
 app.post("/hooks/agent", requireAuth, async (req, res) => {
+  metrics.hooksAgent++;
   const message = String(req.body?.message || "");
   const taskId = extractTaskId(message);
   const channelId = extractTargetChannelId(message);
@@ -328,16 +435,16 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
       result = await callCursorAgent(message);
     } catch (error) {
       const failure = `Task ${taskId || ""} failed: ${error.message || error}`.trim();
-      log("async task cursor-agent call failed", failure);
+      log("hooks_agent_error", { taskId, channelId, error: String(error.message || error) });
       try {
         if (channelId) await postDiscordMessage(channelId, failure);
       } catch (discordError) {
-        log("async task discord failure post failed", discordError.message || discordError);
+        log("discord_post_error", { taskId, error: String(discordError.message || discordError) });
       }
       try {
         await postSpeakSummary("The cursor-agent task failed.", taskId);
       } catch (speakError) {
-        log("async task speak failure post failed", speakError.message || speakError);
+        log("speak_post_error", { taskId, error: String(speakError.message || speakError) });
       }
       return;
     }
@@ -347,16 +454,16 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
         await postDiscordMessage(channelId, result.text || "Task completed with no text response.");
       }
     } catch (discordError) {
-      log("async task discord delivery failed", discordError.message || discordError);
+      log("discord_post_error", { taskId, error: String(discordError.message || discordError) });
     }
 
     try {
       await postSpeakSummary(summarize(result.text), taskId);
     } catch (speakError) {
-      log("async task speak delivery failed", speakError.message || speakError);
+      log("speak_post_error", { taskId, error: String(speakError.message || speakError) });
     }
 
-    log("async task delivered", { taskId, channelId, model: result.model });
+    log("hooks_agent_done", { taskId, channelId, model: result.model });
   });
 });
 
@@ -364,6 +471,24 @@ app.use((_req, res) => {
   res.status(405).json({ error: "Unsupported route" });
 });
 
-app.listen(PORT, "127.0.0.1", () => {
-  log(`listening on http://127.0.0.1:${PORT}`, `-> cursor-agent (${CURSOR_AGENT_BIN}) model=${DEFAULT_CURSOR_MODEL}`);
+// ── Graceful shutdown — kill all active cursor-agent children ─────────────────
+function shutdown(signal) {
+  log("shutdown", { signal, activeChildren: activeChildren.size });
+  for (const child of activeChildren) {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 3000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+const server = app.listen(PORT, "127.0.0.1", () => {
+  log("startup", {
+    port: PORT,
+    bin: CURSOR_AGENT_BIN,
+    model: DEFAULT_CURSOR_MODEL,
+    sessions: channelSessions.size,
+    sessionStore: SESSION_STORE_PATH,
+  });
 });

@@ -180,6 +180,9 @@ const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // default O
 // Agent dispatch ack — contextual, Jarvis-style spoken ack when a sub-agent is spawned.
 // Fires ONLY on sessions_spawn detection (not for direct answers).
 const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // default ON
+// First-token interim speech — speaks "give me a moment..." if gateway hasn't streamed
+// any token within GATEWAY_FIRST_TOKEN_TIMEOUT_MS. Independent of AGENT_DISPATCH_ACK_ENABLED.
+const GATEWAY_INTERIM_ENABLED = process.env.GATEWAY_INTERIM_ENABLED !== 'false'; // default ON
 // Streaming feature flag. CLI-based providers (cursor-agent) don't support SSE streaming.
 // VOICE_STREAMING=false → full response fetched at once, then split into sentences for TTS.
 // VOICE_STREAMING=true (default) → standard SSE streaming with real-time sentence emission.
@@ -188,8 +191,8 @@ const GATEWAY_TIMEOUT_MS = parseInt(process.env.GATEWAY_TIMEOUT_MS || '90000'); 
 const GATEWAY_CALLBACK_TIMEOUT_MS = 300_000;  // 300s for webhook callback mode (unchanged)
 const GATEWAY_FIRST_TOKEN_TIMEOUT_MS = parseInt(process.env.GATEWAY_FIRST_TOKEN_TIMEOUT_MS || '8000'); // 8s — if no streaming token in 8s, speak interim feedback
 const GATEWAY_RETRY_DELAY_MS = 2_000;  // 2s base before retry (+ up to 1s jitter)
-const CIRCUIT_BREAKER_THRESHOLD = 3;   // failures to trip
-const CIRCUIT_BREAKER_WINDOW_MS = 60_000; // 60s rolling window
+const CIRCUIT_BREAKER_THRESHOLD = 5;    // failures to trip (was 3 — loosened to avoid tripping on burst of slow cursor-agent tasks)
+const CIRCUIT_BREAKER_WINDOW_MS = 120_000; // 120s rolling window (was 60s)
 
 // Circuit breaker state
 let _circuitBreakerNotify = null; // callback(type: 'open'|'close') — set by index.js
@@ -666,7 +669,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         if (!firstTokenReceived && !signal?.aborted) {
           firstTokenTimerFired = true;
           // Try contextual interim; fall back to generic if it fails or is disabled
-          if (AGENT_DISPATCH_ACK_ENABLED) {
+          if (GATEWAY_INTERIM_ENABLED) {
             try {
               const interim = await generateContextualInterim(userMessage);
               logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- contextual interim: "${interim}"`);
@@ -676,7 +679,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
               onSentence('One moment.');
             }
           } else {
-            logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- ack disabled, skipping interim`);
+            logger.info(`First-token timeout (${GATEWAY_FIRST_TOKEN_TIMEOUT_MS}ms) -- interim disabled, skipping`);
           }
         }
       }, GATEWAY_FIRST_TOKEN_TIMEOUT_MS);

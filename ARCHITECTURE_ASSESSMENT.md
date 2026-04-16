@@ -1,51 +1,128 @@
-# Jarvis Architecture Assessment: The Path to "Zero-Claw"
+# Jarvis / OpenClaw / ZeroClaw Migration Assessment
 
-## 1. Current State & The Cost Problem
+## Current Runtime State
 
-Right now, the architecture is a hybrid that is accidentally expensive:
-*   **Jarvis Voice (Frontend):** Handles wake word, STT (Whisper), TTS (Kokoro/Piper), and Discord integration.
-*   **OpenClaw (Middleman):** Currently used for conversational responses (`generateResponse`) and some legacy webhook dispatching. OpenClaw is heavy—it wraps requests in agent loops and isn't optimized for raw, cheap conversational routing.
-*   **Cursor Agent (Backend Hack):** Because Anthropic blocked Claude Code, we are routing heavy tasks to `cursor-agent`. This uses your company Cursor Pro account (which has a hard limit of ~500 fast requests).
-*   **hAIveMind & MCP:** Jarvis is already starting to manage memory directly via `mcporter` or direct HTTP fetches, bypassing OpenClaw's memory.
+The live runtime is now:
 
-**The Danger Zone:** Heartbeats, cron jobs, and frequent conversational turns hitting OpenClaw (and by extension, heavy models or Cursor) will silently drain your Cursor Pro quota and run up API bills. 
+- `jarvis-voice` remains the only Discord bot surface.
+- OpenClaw Discord stays disabled in `~/.openclaw/openclaw.json`.
+- OpenClaw direct ownership is retired from the active request path.
+- ZeroClaw serves the backend agent runtime on `127.0.0.1:22101`.
+- A thin compatibility adapter serves the legacy OpenClaw-shaped contract on `127.0.0.1:22100` for Jarvis.
+- `jarvis-voice` still points at `http://127.0.0.1:22100`, so no frontend env churn was required for the cutover.
+- `openclaw-gateway.service` and `openclaw-config-guard.timer` are disabled.
 
-## 2. Moving to "Zero-Claw" (Bypassing OpenClaw)
+## What Was Stabilized First
 
-Moving to a "Zero-Claw" architecture (removing OpenClaw entirely from the Jarvis stack) is highly recommended. You've already done 50% of the work by implementing `dispatchViaCursorAgent` directly in `brain.js`.
+Before any migration work, the OpenClaw baseline was tightened so the cutover point was deterministic:
 
-### Is it a big lift?
-**No, it's a medium-to-small lift.** 
-Jarvis Voice already does almost everything. The only things OpenClaw still does for you are:
-1.  **Conversational Chat Generation:** `brain.js` calls OpenClaw's `/v1/chat/completions`. We can easily swap this to point directly to a cheap API (like OpenRouter for Gemini 3.1 Pro/Haiku) or a local Ollama model.
-2.  **Tool Execution for Conversational Queries:** OpenClaw provides tools to the conversational model. But we can handle simple tools (like time, weather) locally, and route everything else to a `cursor-agent` sub-task.
+- `jarvis-voice` became the only Discord owner.
+- OpenClaw config drift remained enforced by `jarvis-health.sh` plus `openclaw-config-lock.sh`.
+- `cursor-agent-wrapper` injects `--trust` for headless runs.
+- OpenClaw CLI watchdog timeouts were raised to 15 minutes.
+- Jarvis no longer has a live detached direct `cursor-agent` execution path for voice tasks.
+- Async action tasks were normalized to a single webhook-style dispatch path.
 
-### The "Lean & Useful" Zero-Claw Architecture
+## Migration Findings That Matter
 
-To protect your Cursor account and wallet, we need a strict tiered routing system entirely contained within Jarvis:
+### 1. ZeroClaw's OpenClaw migration command is not a full gateway/config migration
 
-*   **Tier 1: Conversational / Chit-Chat / ACKs (Extremely Cheap/Free)**
-    *   **Tech:** Local Ollama (Qwen3 4B/8B) or a direct API to Gemini 3.1 Flash / Claude 3.5 Haiku.
-    *   **Cost:** $0 (Local) or fractions of a cent (API).
-    *   **Role:** Answering "how are you", providing fast ACKs ("On it, sir"), checking the time, and determining *if* a heavy agent needs to be spawned.
+On this build, `zeroclaw migrate openclaw --dry-run` only previews import candidates from the OpenClaw workspace memory tree.
 
-*   **Tier 2: Background Tasks / Cron / Heartbeats (Cheap)**
-    *   **Tech:** Direct API to Gemini 3.1 Pro or Claude 3.5 Sonnet (using personal API keys, strictly metered), or powerful local models (Qwen 32B).
-    *   **Role:** Periodic system checks, reading logs, summarizing Discord. These should *never* use `cursor-agent` to protect the 500 fast-request pool.
+Observed dry-run result:
 
-*   **Tier 3: Heavy Lifting / Coding / Deep Investigations (Premium)**
-    *   **Tech:** `cursor-agent` CLI (using Cursor Pro quota) or Claude 3.7 Sonnet / Opus.
-    *   **Role:** Executed *only* on explicit command (e.g., "Jarvis, fix the bug in the proxy").
+- source: `~/.openclaw/workspace`
+- target: `~/.zeroclaw/workspace`
+- candidates: 8 markdown entries
+- no provider/channel/gateway translation report
 
-## 3. Cursor Agent & Gemini Pricing
+That means the public “full import” story is not enough for this stack. Runtime migration must be treated as manual staging plus adapter work.
 
-*   **Cursor Agent Quota:** You have 500 "fast" requests per month on Pro. Agent loops burn through these extremely fast because each tool call/step in an agent's thought process is a separate request. Using it for background tasks will drain it in hours.
-*   **Gemini 3.1 Pro:** While Gemini is generally cheaper than Claude via direct API, when routed through `cursor-agent`, it still consumes your premium Cursor request quota. To save money, we should only use `cursor-agent` when we actually need it to edit your codebase.
+### 2. ZeroClaw's gateway contract does not match Jarvis's OpenClaw contract directly
 
-## 4. Next Steps for Implementation
+Validated on the live cutover host:
 
-If we pull the trigger on "Zero-Claw", here is the immediate roadmap:
+- `GET /health` exists and works natively.
+- `POST /webhook` exists and works natively.
+- `POST /v1/chat/completions` is not provided by this ZeroClaw gateway build.
+- `POST /hooks/agent` is not provided by this ZeroClaw gateway build.
+- ZeroClaw's `/webhook` uses the configured runtime model, not a per-request model override.
 
-1.  **Rip out OpenClaw routing:** Change `COMPLETIONS_URL` in `brain.js` to hit a direct LLM API (OpenRouter/Anthropic/Google) or Local Ollama instead of OpenClaw.
-2.  **Move Tool Logic:** Implement a lightweight local tool-router in `jarvis-voice` for basic commands (check memory, read calendar) so it doesn't need to spawn a full agent just to check your schedule.
-3.  **Strict Isolation:** Ensure `cursor-agent` is strictly gated behind an explicit "Task Dispatch" intent, ensuring it is never accidentally triggered by a conversational heartbeat.
+That is why the compatibility adapter exists.
+
+## Compatibility Adapter
+
+The adapter lives at:
+
+- `jarvis-voice/scripts/zeroclaw-openclaw-compat.js`
+
+It provides:
+
+- `GET /health` passthrough to ZeroClaw
+- `POST /v1/chat/completions` with OpenAI-style response wrapping
+- SSE-shaped streaming response for Jarvis's existing streaming code path
+- `POST /hooks/agent` immediate acceptance with background execution against ZeroClaw `/webhook`
+- async result delivery to Discord and `/speak` without relying on OpenClaw tool-side curl behavior
+
+This is the thin sidecar that closed the migration gap without forcing a broad Jarvis rewrite.
+
+## Parity Matrix
+
+| Area | Current Runtime | ZeroClaw Status | Final Classification |
+| --- | --- | --- | --- |
+| Discord text routing | Jarvis frontend | kept in Jarvis | native frontend concern |
+| Discord voice handoff | Jarvis frontend | kept in Jarvis | native frontend concern |
+| Conversational backend | ZeroClaw via compat adapter | working | adapter |
+| Async task dispatch | ZeroClaw via compat adapter | working | adapter |
+| `/health` | ZeroClaw native | working | native |
+| `/v1/chat/completions` | compat adapter -> ZeroClaw `/webhook` | working | adapter |
+| `/hooks/agent` | compat adapter -> ZeroClaw `/webhook` | working | adapter |
+| Session continuity | Jarvis session keys + adapter stateless pass-through | acceptable baseline | adapter-kept |
+| Discord memory continuity | `discord-memory.js` | unchanged | keep in Jarvis |
+| Cron/config import from OpenClaw | manual | incomplete | blocker for automatic migration |
+| Browser/device-pair plugins | OpenClaw-specific | not migrated | out-of-scope blocker |
+| Config guard / drift scripts | OpenClaw-only | retired from active runtime | decommissioned |
+
+## Validation Matrix Used
+
+### Direct backend checks
+
+- `GET http://127.0.0.1:22101/health`
+- `POST http://127.0.0.1:22101/webhook`
+- `GET http://127.0.0.1:22100/health`
+- `POST http://127.0.0.1:22100/v1/chat/completions`
+- `POST http://127.0.0.1:22100/hooks/agent`
+
+### Runtime checks
+
+- ZeroClaw gateway systemd user service starts and stays healthy.
+- Compatibility adapter systemd user service starts and stays healthy.
+- Jarvis restarts cleanly after the cutover.
+- OpenClaw services are disabled and inactive.
+
+## Remaining Risks
+
+- The adapter is intentionally narrow. If Jarvis starts depending on more of OpenClaw's private gateway surface, more shim work will be needed.
+- The current ZeroClaw backend uses the environment-provided OpenAI key and a single configured model (`gpt-4o-mini`). Per-request model switching is not preserved.
+- OpenClaw browser/device-pair features were not migrated into ZeroClaw.
+- The automatic OpenClaw migration CLI did not import runtime config/channels for this stack.
+
+## Operational End State
+
+Enabled services:
+
+- `jarvis-voice.service`
+- `zeroclaw-gateway.service`
+- `zeroclaw-openclaw-compat.service`
+
+Disabled services:
+
+- `openclaw-gateway.service`
+- `openclaw-config-guard.timer`
+
+Rollback path:
+
+1. Stop `zeroclaw-openclaw-compat.service`.
+2. Stop `zeroclaw-gateway.service`.
+3. Re-enable and start `openclaw-gateway.service`.
+4. Re-enable `openclaw-config-guard.timer` if config locking is needed again.
