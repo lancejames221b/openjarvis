@@ -268,39 +268,20 @@ async function fetchWithTimeout(url, options, timeoutMs = GATEWAY_TIMEOUT_MS, ex
 }
 
 /**
- * Fetch with timeout + single retry + circuit breaker.
- * Returns the fetch Response on success, throws on final failure.
+ * Fetch with timeout + 3-retry exponential backoff + circuit breaker.
+ * Retries at 1 s / 2 s / 4 s ±300 ms jitter on 5xx and network errors; 4xx fails fast.
+ * Returns the fetch Response on success, throws when all retries are exhausted.
  */
 async function resilientFetch(url, options, externalSignal) {
   if (circuitBreaker.isOpen()) {
     throw new Error('Gateway unavailable (circuit breaker open)');
   }
 
-  try {
-    const res = await fetchWithTimeout(url, options, GATEWAY_TIMEOUT_MS, externalSignal);
-    if (res.ok || (res.status >= 400 && res.status < 500)) {
-      // Success or client error (don't retry 4xx)
-      circuitBreaker.recordSuccess();
-      return res;
-    }
-    // Server error — fall through to retry
-    throw new Error(`Gateway ${res.status}`);
-  } catch (firstErr) {
-    if (firstErr.name === 'AbortError' && externalSignal?.aborted) {
-      throw firstErr; // User-initiated cancel — don't retry
-    }
+  const RETRY_DELAYS = [1_000, 2_000, 4_000];
+  const jitter = () => Math.floor(Math.random() * 600) - 300; // ±300 ms
+  let lastErr;
 
-    logger.warn(`⚠️  Gateway attempt 1 failed: ${firstErr.message} — retrying in ${GATEWAY_RETRY_DELAY_MS}ms`);
-    circuitBreaker.recordFailure();
-
-    if (circuitBreaker.isOpen()) {
-      throw new Error('Gateway unavailable (circuit breaker open)');
-    }
-
-    // Wait then retry once (with jitter to avoid thundering herd)
-    const jitter = Math.floor(Math.random() * 1000);
-    await new Promise(r => setTimeout(r, GATEWAY_RETRY_DELAY_MS + jitter));
-
+  for (let attempt = 0; attempt <= 3; attempt++) {
     try {
       const res = await fetchWithTimeout(url, options, GATEWAY_TIMEOUT_MS, externalSignal);
       if (res.ok || (res.status >= 400 && res.status < 500)) {
@@ -308,11 +289,20 @@ async function resilientFetch(url, options, externalSignal) {
         return res;
       }
       throw new Error(`Gateway ${res.status}`);
-    } catch (retryErr) {
-      circuitBreaker.recordFailure();
-      throw retryErr;
+    } catch (err) {
+      if (err.name === 'AbortError' && externalSignal?.aborted) throw err;
+      lastErr = err;
+      if (attempt < 3) {
+        const delay = Math.max(RETRY_DELAYS[attempt] + jitter(), 100);
+        logger.warn(`Gateway attempt ${attempt + 1} failed: ${err.message} — retrying in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        if (circuitBreaker.isOpen()) throw new Error('Gateway unavailable (circuit breaker open)');
+      }
     }
   }
+  circuitBreaker.recordFailure();
+  if (circuitBreaker.isOpen()) throw new Error('Gateway unavailable (circuit breaker open)');
+  throw lastErr;
 }
 
 /** Check if gateway circuit breaker is currently tripped */

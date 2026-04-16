@@ -11,11 +11,21 @@ const ZEROCLAW_BASE_URL = process.env.ZEROCLAW_BASE_URL || "http://127.0.0.1:221
 const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN || "";
 const CURSOR_AGENT_BIN = process.env.CURSOR_AGENT_BIN || `${process.env.HOME}/.local/bin/cursor-agent`;
 const CURSOR_API_KEY = process.env.CURSOR_API_KEY || "";
-// Strip cursor-agent/ prefix if present; placeholders like "openclaw" resolve to default
+// Logical model aliases — brain.js sends 'openclaw' etc.; cursor-agent needs real model names.
+// DISPATCH_MODEL env vars use 'cursor-agent/' prefix which resolveModel strips.
+const MODEL_ALIASES = {
+  openclaw:            process.env.DISPATCH_MODEL          || "cursor-agent/auto",
+  "openclaw-deep":     process.env.DISPATCH_MODEL_DEEP     || "cursor-agent/claude-4.6-opus-high",
+  "openclaw-thinking": process.env.DISPATCH_MODEL_THINKING || "cursor-agent/claude-4.6-sonnet-medium-thinking",
+};
 const CURSOR_MODEL_RE = /^(claude-|gpt-|gemini-|o[0-9]|auto$|composer|anthropic)/;
 function resolveModel(raw) {
   if (!raw) return "";
-  const m = String(raw);
+  const m = String(raw).trim();
+  if (Object.prototype.hasOwnProperty.call(MODEL_ALIASES, m)) {
+    const alias = MODEL_ALIASES[m];
+    return alias.startsWith("cursor-agent/") ? alias.slice("cursor-agent/".length) : alias;
+  }
   if (m.startsWith("cursor-agent/")) return m.slice("cursor-agent/".length);
   if (CURSOR_MODEL_RE.test(m)) return m;
   return "";
@@ -38,7 +48,9 @@ const metrics = {
   errors: 0,
   sessionsCreated: 0,
   sessionsResumed: 0,
+  sessionsRotated: 0,
   hooksAgent: 0,
+  rssKills: 0,
 };
 
 // ── Session persistence ───────────────────────────────────────────────────────
@@ -58,6 +70,22 @@ function saveSessions() {
 }
 
 const channelSessions = loadSessions();
+// Per-channel turn counters (persisted alongside sessions in SESSION_STORE_PATH)
+function loadJsonFile(path) {
+  try { return JSON.parse(fs.readFileSync(path, "utf8")); } catch { return {}; }
+}
+const channelTurns = new Map(Object.entries(loadJsonFile(SESSION_STORE_PATH + ".turns")));
+function saveTurns() {
+  try { fs.writeFileSync(SESSION_STORE_PATH + ".turns", JSON.stringify(Object.fromEntries(channelTurns))); } catch {}
+}
+const CURSOR_MAX_TURNS_PER_CHAT = parseInt(process.env.CURSOR_MAX_TURNS || "150");
+const CURSOR_MAX_AGE_MS = parseInt(process.env.CURSOR_MAX_AGE_MS || String(3 * 24 * 3600 * 1000)); // 3 days
+// createdAt timestamps per channel for age-based rotation
+const channelCreatedAt = new Map(Object.entries(loadJsonFile(SESSION_STORE_PATH + ".created")));
+function saveCreatedAt() {
+  try { fs.writeFileSync(SESSION_STORE_PATH + ".created", JSON.stringify(Object.fromEntries(channelCreatedAt))); } catch {}
+}
+
 // Per-channel in-flight Promise lock — prevents duplicate create-chat on concurrent requests
 const channelSessionLocks = new Map();
 
@@ -83,14 +111,14 @@ function requireAuth(req, res, next) {
 }
 
 function contentToText(content) {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return content.replace(/\0/g, "");
   if (Array.isArray(content)) {
     return content.map((item) => {
       if (typeof item === "string") return item;
       if (item && typeof item.text === "string") return item.text;
       if (item && item.type === "text" && typeof item.text === "string") return item.text;
       return "";
-    }).filter(Boolean).join("\n");
+    }).filter(Boolean).join("\n").replace(/\0/g, "");
   }
   return "";
 }
@@ -114,10 +142,13 @@ function collapseMessages(messages = []) {
 }
 
 // Spawn cursor-agent with stream-json output; optionally resume a prior session.
+// Prompt is passed via stdin to avoid null-byte/arg-length issues with large prompts.
 function spawnCursorStream(prompt, model, chatId) {
   const args = [...BASE_ARGS, "--model", model];
   if (chatId) args.push("--resume", chatId);
-  const child = spawn(CURSOR_AGENT_BIN, [...args, prompt], {
+  // Sanitize: strip null bytes that cause Node.js spawn to reject the arg
+  const safePrompt = prompt.replace(/\0/g, "");
+  const child = spawn(CURSOR_AGENT_BIN, [...args, safePrompt], {
     env: { ...process.env, CURSOR_API_KEY },
     timeout: CURSOR_AGENT_TIMEOUT_MS,
   });
@@ -148,19 +179,31 @@ async function createChat() {
 
 // Return an existing chatId for the channel, or create a new one.
 // Uses a per-channel Promise lock to prevent duplicate create-chat on concurrent requests.
+// Rotates automatically if turn count or age limits are exceeded.
 async function getOrCreateChatId(channelKey) {
   if (channelKey && channelSessions.has(channelKey)) {
-    metrics.sessionsResumed++;
-    return channelSessions.get(channelKey);
+    const turns = channelTurns.get(channelKey) || 0;
+    const age = Date.now() - (channelCreatedAt.get(channelKey) || 0);
+    if (turns >= CURSOR_MAX_TURNS_PER_CHAT || age > CURSOR_MAX_AGE_MS) {
+      log("chat_rotation", { channelKey, turns, ageMs: age, reason: turns >= CURSOR_MAX_TURNS_PER_CHAT ? "turns" : "age" });
+      channelSessions.delete(channelKey);
+      channelTurns.delete(channelKey);
+      channelCreatedAt.delete(channelKey);
+      saveSessions(); saveTurns(); saveCreatedAt();
+    } else {
+      metrics.sessionsResumed++;
+      return channelSessions.get(channelKey);
+    }
   }
   if (channelKey && channelSessionLocks.has(channelKey)) {
-    // Another request is already creating this session — wait for it
     return channelSessionLocks.get(channelKey);
   }
   const p = createChat().then((chatId) => {
     if (channelKey) {
       channelSessions.set(channelKey, chatId);
-      saveSessions();
+      channelTurns.set(channelKey, 0);
+      channelCreatedAt.set(channelKey, Date.now());
+      saveSessions(); saveTurns(); saveCreatedAt();
     }
     channelSessionLocks.delete(channelKey);
     metrics.sessionsCreated++;
@@ -176,8 +219,29 @@ async function getOrCreateChatId(channelKey) {
 function setSession(channelKey, sessionId) {
   if (!channelKey || !sessionId) return;
   channelSessions.set(channelKey, sessionId);
-  saveSessions();
+  channelTurns.set(channelKey, (channelTurns.get(channelKey) || 0) + 1);
+  saveSessions(); saveTurns();
 }
+
+// ── RSS watchdog — kills cursor-agent children that grow beyond 2.5 GB ───────
+const MAX_CHILD_RSS_BYTES = parseFloat(process.env.CURSOR_MAX_RSS_GB || "2.5") * 1024 ** 3;
+function getChildRss(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+    const m = stat.match(/VmRSS:\s+(\d+)\s+kB/);
+    return m ? parseInt(m[1]) * 1024 : 0;
+  } catch { return 0; }
+}
+setInterval(() => {
+  for (const child of activeChildren) {
+    if (!child.pid) continue;
+    const rss = getChildRss(child.pid);
+    if (rss > MAX_CHILD_RSS_BYTES) {
+      log("rss_watchdog_kill", { pid: child.pid, rssGb: (rss / 1e9).toFixed(2), limitGb: MAX_CHILD_RSS_BYTES / 1e9 });
+      try { child.kill("SIGKILL"); } catch {}
+    }
+  }
+}, 30_000).unref();
 
 // Buffer the full response from cursor-agent (non-streaming path).
 // Parses NDJSON lines; extracts text from result event and session_id from system:init.
@@ -363,6 +427,8 @@ app.get("/metrics", (_req, res) => {
     activeSessions: channelSessions.size,
     activeChildren: activeChildren.size,
     pendingLocks: channelSessionLocks.size,
+    maxTurnsPerChat: CURSOR_MAX_TURNS_PER_CHAT,
+    maxRssGb: MAX_CHILD_RSS_BYTES / 1e9,
     uptime: process.uptime(),
   });
 });
@@ -471,14 +537,22 @@ app.use((_req, res) => {
   res.status(405).json({ error: "Unsupported route" });
 });
 
-// ── Graceful shutdown — kill all active cursor-agent children ─────────────────
-function shutdown(signal) {
-  log("shutdown", { signal, activeChildren: activeChildren.size });
-  for (const child of activeChildren) {
-    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+// ── Graceful shutdown — drain in-flight cursor-agent children before exiting ──
+// Waits up to 30 s for active children to finish, then force-kills stragglers.
+// TimeoutStopSec=45s in the service unit gives this enough runway.
+async function shutdown(signal) {
+  log("shutdown_start", { signal, activeChildren: activeChildren.size });
+  server.close();
+  const deadline = Date.now() + 30_000;
+  while (activeChildren.size > 0 && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 500));
   }
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 3000).unref();
+  if (activeChildren.size > 0) {
+    log("shutdown_drain_timeout", { remaining: activeChildren.size });
+    for (const child of activeChildren) { try { child.kill("SIGKILL"); } catch {} }
+  }
+  log("shutdown_done", { signal });
+  process.exit(0);
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
