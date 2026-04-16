@@ -166,6 +166,40 @@ async function _runStreamingAgent(prompt, threadId, ls, ac) {
   await ls.finish(finalText);
 }
 
+/**
+ * Voice-triggered spawn: create a thread in textChannelId, stream agent, post result.
+ * Returns the threadId so the caller can mention it in a voice ack.
+ * @param {string} task           - the task/prompt from voice transcript
+ * @param {string} textChannelId  - Discord text channel to create the thread in
+ * @param {string} botToken       - Discord bot token
+ * @returns {Promise<string>}     - threadId of the created thread
+ */
+export async function runVoiceSpawn(task, textChannelId, botToken) {
+  const taskSlug = task.slice(0, 48).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'agent session';
+
+  // Create thread
+  const res = await fetch(`https://discord.com/api/v10/channels/${textChannelId}/threads`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bot ${botToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name: taskSlug, auto_archive_duration: 1440, type: 11 }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const data = await res.json();
+  if (!data.id) throw new Error(`Thread creation failed: ${JSON.stringify(data)}`);
+  const threadId = data.id;
+
+  // Start live stream and fire off agent (background — does not block caller)
+  const ls = await createLiveStream(threadId, botToken);
+  const ac = new AbortController();
+  _activeSessions.set(threadId, { ac, ls });
+  _runStreamingAgent(task, threadId, ls, ac).finally(() => _activeSessions.delete(threadId));
+
+  return threadId;
+}
+
 function discordApi(path, method = 'GET', body) {
   return fetch(`https://discord.com/api/v10${path}`, {
     method,
