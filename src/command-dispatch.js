@@ -235,7 +235,7 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   // "create a thread summarize the logs", "run audit in a thread"
   if (isAdmin) {
     const spawnLeadMatch = cleanedTranscript.match(
-      /^(?:spawn|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(.+)$/i
+      /^(?:spa[wnm]+|spon|sp[ao]n|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(.+)$/i
     );
     const spawnTrailMatch = cleanedTranscript.match(
       /^run\s+(.+?)\s+in\s+a(?:\s+new)?\s+thread$/i
