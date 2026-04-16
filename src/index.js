@@ -1901,10 +1901,19 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   // Show typing indicator while we process
   try { await message.channel.sendTyping(); } catch (_) {}
 
+  // Threads are pods inside their parent channel container — separate cursor-agent
+  // session per thread, but haivemind context shared with the parent channel.
+  const _isThread = message.channel?.isThread?.();
+  const _parentChannelId = _isThread ? (message.channel.parentId || message.channelId) : message.channelId;
+  const _threadId = _isThread ? message.channelId : null;
+  const _sessionUser = _threadId
+    ? `agent:main:discord:channel:${_parentChannelId}:thread:${_threadId}`
+    : `agent:main:discord:channel:${_parentChannelId}`;
+
   try {
     const result = await generateTextResponse(finalPrompt, {
-      channelId: message.channelId,
-      sessionUser: `agent:main:discord:channel:${message.channelId}`,
+      channelId: _parentChannelId,
+      sessionUser: _sessionUser,
       discordChatHistory,
     });
 
@@ -2125,10 +2134,16 @@ async function handleVoiceTranscript(message) {
         } catch (_) {}
 
         try {
+          const _vmIsThread = message.channel?.isThread?.();
+          const _vmParentId = _vmIsThread ? (message.channel.parentId || message.channelId) : message.channelId;
+          const _vmThreadId = _vmIsThread ? message.channelId : null;
+          const _vmSessionUser = _vmThreadId
+            ? `agent:main:discord:channel:${_vmParentId}:thread:${_vmThreadId}`
+            : `agent:main:discord:channel:${_vmParentId}`;
           const prompt = channelContext + text;
           const result = await generateTextResponse(prompt, {
-            channelId: message.channelId,
-            sessionUser: "agent:main:discord:channel:" + message.channelId,
+            channelId: _vmParentId,
+            sessionUser: _vmSessionUser,
             discordChatHistory,
           });
           if (result && result.text && result.text.length >= 2) {

@@ -37,7 +37,12 @@ const ALERT_WEBHOOK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || "";
 const ALERT_WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || "3335";
 const ALERT_WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || "127.0.0.1";
 const SPEAK_URL = process.env.ZEROCLAW_COMPAT_SPEAK_URL || `http://${ALERT_WEBHOOK_HOST}:${ALERT_WEBHOOK_PORT}/speak`;
-const SESSION_STORE_PATH = process.env.SESSION_STORE_PATH || "/tmp/zeroclaw-sessions.json";
+// Persist sessions to ~/.local/state so chatIds survive service restarts and reboots.
+// /tmp is wiped on reboot; every restart meant fresh cursor-agent contexts.
+const _defaultSessionDir = `${process.env.HOME}/.local/state/jarvis-voice`;
+const SESSION_STORE_PATH = process.env.SESSION_STORE_PATH || `${_defaultSessionDir}/zeroclaw-sessions.json`;
+// Ensure the state directory exists (harmless if already present)
+try { fs.mkdirSync(_defaultSessionDir, { recursive: true }); } catch {}
 const CURSOR_AGENT_TIMEOUT_MS = 600_000; // 10 min — matches GATEWAY_TIMEOUT_MS in jarvis-voice
 
 // ── Metrics counters ─────────────────────────────────────────────────────────
@@ -177,6 +182,29 @@ async function createChat() {
   });
 }
 
+// Summarize the old chatId to haivemind before rotation so context survives.
+// Fire-and-forget — does not block the rotation; new chat starts fresh immediately.
+async function summarizeAndStoreChat(channelKey, oldChatId) {
+  const SUMMARY_PROMPT = "In 400 words or less, summarize the key state of this conversation: decisions made, open tasks, blockers, and any important context the next session should know. Be specific and terse.";
+  try {
+    const result = await callCursorAgent(SUMMARY_PROMPT, DEFAULT_CURSOR_MODEL, oldChatId);
+    if (!result.text) return;
+    // Store to haivemind under channel namespace — getChannelContext() will pick this up next turn
+    const channelId = (channelKey.match(/channel:(\d+)/) || [])[1];
+    if (channelId && DISCORD_TOKEN) {
+      await fetch(`http://127.0.0.1:${process.env.HAIVEMIND_PORT || 8900}/store_memory`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `[SESSION SUMMARY] ${result.text}`, category: `channel:${channelId}` }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => {});
+    }
+    log("chat_summary_stored", { channelKey, channelId, chars: result.text.length });
+  } catch (e) {
+    log("chat_summary_failed", { channelKey, error: e.message });
+  }
+}
+
 // Return an existing chatId for the channel, or create a new one.
 // Uses a per-channel Promise lock to prevent duplicate create-chat on concurrent requests.
 // Rotates automatically if turn count or age limits are exceeded.
@@ -185,7 +213,11 @@ async function getOrCreateChatId(channelKey) {
     const turns = channelTurns.get(channelKey) || 0;
     const age = Date.now() - (channelCreatedAt.get(channelKey) || 0);
     if (turns >= CURSOR_MAX_TURNS_PER_CHAT || age > CURSOR_MAX_AGE_MS) {
+      const oldChatId = channelSessions.get(channelKey);
       log("chat_rotation", { channelKey, turns, ageMs: age, reason: turns >= CURSOR_MAX_TURNS_PER_CHAT ? "turns" : "age" });
+      // Summarize old session to haivemind (fire-and-forget, does not block rotation)
+      summarizeAndStoreChat(channelKey, oldChatId).catch(() => {});
+      metrics.sessionsRotated++;
       channelSessions.delete(channelKey);
       channelTurns.delete(channelKey);
       channelCreatedAt.delete(channelKey);
