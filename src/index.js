@@ -1021,17 +1021,14 @@ client.on('messageCreate', async (message) => {
   // gets correct channel context (this is the race condition fix)
   await handleAutoFocusUpdate(message, content);
 
-  // H3: @mention or reply-to-us
-  const isMentioned = message.mentions.has(client.user.id);
-  const isReplyToUs = await checkIsReplyToUs(message);
-  if (isMentioned || isReplyToUs) {
-    return handleMentionReply(message, content, isReplyToUs);
-  }
-
-  // H5: Discord voice message (flag 8192 + .ogg attachment)
+  // H5: Discord voice message (flag 8192 + .ogg attachment) — check before text handler
   if ((message.flags?.bitfield & 8192) !== 0) {
     return handleVoiceTranscript(message);
   }
+
+  // H3: respond to all text messages (no @mention required), passing reply context
+  const isReplyToUs = await checkIsReplyToUs(message);
+  return handleMentionReply(message, content, isReplyToUs);
 });
 
 client.on('messageUpdate', (_before, message) => {
