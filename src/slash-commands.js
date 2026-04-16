@@ -1,14 +1,24 @@
 /**
- * Slash Commands — /visual
+ * Slash Commands — /visual, /spawn, /stop
  *
  * Registers and handles Discord slash commands for the voice bot.
- * Currently supports /visual for toggling visual mode from any text channel.
  */
 
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
 import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { setFocusByName } from './focus-state.js';
+import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import logger from './logger.js';
+
+const SPAWN_CMD = new SlashCommandBuilder()
+  .setName('spawn')
+  .setDescription('Spawn a dedicated cursor-agent session in a new thread')
+  .addStringOption(opt =>
+    opt.setName('prompt').setDescription('Task or prompt for the agent').setRequired(true));
+
+const STOP_CMD = new SlashCommandBuilder()
+  .setName('stop')
+  .setDescription('Stop the active agent in this thread');
 
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
@@ -38,9 +48,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual command');
+    logger.info('[slash] Registered /visual, /spawn, /stop commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -51,6 +61,25 @@ export async function registerSlashCommands(client) {
  */
 export async function handleSlashCommand(interaction, allowedUsers) {
   if (!interaction.isChatInputCommand()) return false;
+
+  if (interaction.commandName === 'spawn') {
+    if (!allowedUsers.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    await handleSpawnCommand(interaction);
+    return true;
+  }
+
+  if (interaction.commandName === 'stop') {
+    if (!allowedUsers.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    await handleStopCommand(interaction);
+    return true;
+  }
+
   if (interaction.commandName !== 'visual') return false;
 
   // Auth check — only allowed users
