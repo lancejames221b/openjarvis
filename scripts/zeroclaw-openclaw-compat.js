@@ -34,7 +34,6 @@ const channelSessions = new Map();
 const BASE_ARGS = [
   "--print", "--trust",
   "--output-format", "stream-json", "--stream-partial-output",
-  "--mode", "ask",
 ];
 
 function log(...args) {
