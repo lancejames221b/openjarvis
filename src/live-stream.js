@@ -100,7 +100,7 @@ export async function createLiveStream(channelId, botToken) {
     await _edit('```\n[done]\n```');
 
     // Post final result as a new message (chunked if needed)
-    const text = (finalText || '').trim() || '(no output)';
+    const text = _dedupSentences((finalText || '').trim()) || '(no output)';
     const chunks = _chunkText(text, 1_900);
     for (const chunk of chunks) {
       try {
@@ -117,6 +117,17 @@ export async function createLiveStream(channelId, botToken) {
   }
 
   return { update, finish, stop };
+}
+
+// Remove consecutively repeated sentences (model stutter artifact).
+// Splits on sentence boundaries, drops exact consecutive duplicates.
+function _dedupSentences(text) {
+  const parts = text.split(/(?<=[.!?])\s+/);
+  const out = [];
+  for (const p of parts) {
+    if (out.length === 0 || p !== out[out.length - 1]) out.push(p);
+  }
+  return out.join(' ');
 }
 
 function _truncate(s) {
