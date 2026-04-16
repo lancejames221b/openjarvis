@@ -1816,9 +1816,7 @@ client.on('messageCreate', async (message) => {
     } catch (e) {}
   }
 
-  // Allow implicit responses in the #hud channel without tagging, otherwise require a mention or reply
-  const isHudChannel = message.channel.id === process.env.HUD_CHANNEL_ID;
-  if (!isMentioned && !isReplyToUs && !isHudChannel) return;
+  // Respond in all channels implicitly (no @mention required)
 
   // Only respond to allowed users (same as voice)
   if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
