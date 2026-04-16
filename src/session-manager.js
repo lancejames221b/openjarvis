@@ -38,6 +38,39 @@ const HAIVEMIND_ENABLED = (process.env.VOICE_MEMORY_ENABLED ?? 'true').toLowerCa
 const MCPORTER_PATH = process.env.MCPORTER_PATH || 'mcporter';
 // Optional direct HTTP URL — bypasses mcporter subprocess when set
 const HAIVEMIND_URL = process.env.HAIVEMIND_URL || '';
+// Hard timeout on all haivemind calls — prevents ECONNREFUSED from stalling dispatch
+const HAIVEMIND_TIMEOUT_MS = 3_000;
+
+// ── haivemind circuit breaker ─────────────────────────────────────────────────
+// 3 failures in 60 s → open for 5 min. Fails fast so gateway stalls don't cascade.
+const _hmBreaker = {
+  failures: [],
+  openUntil: 0,
+  isOpen() {
+    if (!this.openUntil) return false;
+    if (Date.now() < this.openUntil) return true;
+    this.openUntil = 0;
+    this.failures = [];
+    logger.info('[haivemind] circuit breaker closed');
+    return false;
+  },
+  recordFailure() {
+    const now = Date.now();
+    this.failures = this.failures.filter(t => now - t < 60_000);
+    this.failures.push(now);
+    if (this.failures.length >= 3 && !this.openUntil) {
+      this.openUntil = now + 300_000; // open for 5 min
+      logger.warn('[haivemind] circuit breaker opened — 3 failures in 60 s, backing off 5 min');
+    }
+  },
+  recordSuccess() {
+    if (this.openUntil) {
+      this.openUntil = 0;
+      this.failures = [];
+      logger.info('[haivemind] circuit breaker closed after recovery');
+    }
+  },
+};
 
 // ── Local memory file ─────────────────────────────────────────────────────────
 // data/memory.md — append-only log of completed tasks, no external dependency.
@@ -248,62 +281,79 @@ async function _appendMemoryFile(ts, taskId, userSnip, resultSnip) {
 // Otherwise fall back to mcporter CLI.
 
 async function _haivemindStore(content, category = 'voice-session') {
+  if (_hmBreaker.isOpen()) return;
   try {
     if (HAIVEMIND_URL) {
       await fetch(`${HAIVEMIND_URL}/store_memory`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, category }),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
       });
     } else {
       const escaped = content.replace(/'/g, "'\\''");
       await execAsync(
         `${MCPORTER_PATH} call haivemind.store_memory content='${escaped}' category='${category}'`,
-        { timeout: 8000, cwd: '/home/generic' }
+        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: '/home/generic' }
       );
     }
+    _hmBreaker.recordSuccess();
   } catch (e) {
+    _hmBreaker.recordFailure();
     logger.warn({ err: e.message }, 'haivemind store failed (non-fatal)');
   }
 }
 
 async function _haivemindSearch(query, { limit = 5, semantic = true } = {}) {
-  if (HAIVEMIND_URL) {
-    const res = await fetch(`${HAIVEMIND_URL}/search_memories`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, limit, semantic }),
-      signal: AbortSignal.timeout(6000),
-    });
-    return await res.text();
-  } else {
-    const { stdout } = await execAsync(
-      `${MCPORTER_PATH} call haivemind.search_memories query="${query}" limit=${limit} semantic=${semantic}`,
-      { timeout: 6000, cwd: '/home/generic' }
-    );
-    return stdout.trim();
+  if (_hmBreaker.isOpen()) throw new Error('haivemind circuit open');
+  try {
+    let result;
+    if (HAIVEMIND_URL) {
+      const res = await fetch(`${HAIVEMIND_URL}/search_memories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, limit, semantic }),
+        signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
+      });
+      result = await res.text();
+    } else {
+      const { stdout } = await execAsync(
+        `${MCPORTER_PATH} call haivemind.search_memories query="${query}" limit=${limit} semantic=${semantic}`,
+        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: '/home/generic' }
+      );
+      result = stdout.trim();
+    }
+    _hmBreaker.recordSuccess();
+    return result;
+  } catch (e) {
+    _hmBreaker.recordFailure();
+    throw e;
   }
 }
 
 async function _haivemindGetRecent(category, { hours = 2, limit = 5 } = {}) {
+  if (_hmBreaker.isOpen()) return null;
   try {
+    let result;
     if (HAIVEMIND_URL) {
       const res = await fetch(`${HAIVEMIND_URL}/get_recent_memories`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ category, hours, limit }),
-        signal: AbortSignal.timeout(1500),
+        signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
       });
-      return await res.text();
+      result = await res.text();
     } else {
       const { stdout } = await execAsync(
         `${MCPORTER_PATH} call haivemind.get_recent_memories category="${category}" hours=${hours} limit=${limit}`,
-        { timeout: 1500, cwd: '/home/generic' }
+        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: '/home/generic' }
       );
-      return stdout.trim();
+      result = stdout.trim();
     }
+    _hmBreaker.recordSuccess();
+    return result;
   } catch (e) {
+    _hmBreaker.recordFailure();
     logger.warn({ err: e.message }, 'haivemind get_recent_memories failed (non-fatal)');
     return null;
   }
