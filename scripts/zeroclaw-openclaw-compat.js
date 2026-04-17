@@ -445,7 +445,7 @@ const REMEMBER_RE = /^(?:jarvis[,\s]+)?(?:remember|store|save|note)\s+(?:this[:\
 async function storeMemory(content, category = "global") {
   const res = await fetch(`${HAIVEMIND_URL}/mcp`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
     body: JSON.stringify({
       jsonrpc: "2.0", id: 1, method: "tools/call",
       params: { name: "store_memory", arguments: { content, category } },
