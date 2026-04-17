@@ -188,6 +188,7 @@ const GATEWAY_INTERIM_ENABLED = process.env.GATEWAY_INTERIM_ENABLED !== 'false';
 // VOICE_STREAMING=true (default) → standard SSE streaming with real-time sentence emission.
 const VOICE_STREAMING = process.env.VOICE_STREAMING !== 'false'; // default ON
 const GATEWAY_TIMEOUT_MS = parseInt(process.env.GATEWAY_TIMEOUT_MS || '90000');        // 90s for voice (down from 300s)
+const MAC_SSH_HOST = process.env.MAC_SSH_HOST || '';
 const GATEWAY_CALLBACK_TIMEOUT_MS = 300_000;  // 300s for webhook callback mode (unchanged)
 const GATEWAY_FIRST_TOKEN_TIMEOUT_MS = parseInt(process.env.GATEWAY_FIRST_TOKEN_TIMEOUT_MS || '8000'); // 8s — if no streaming token in 8s, speak interim feedback
 const GATEWAY_RETRY_DELAY_MS = 2_000;  // 2s base before retry (+ up to 1s jitter)
@@ -407,10 +408,10 @@ function getVoiceTag() {
 
 [AT-DESK] The user is physically at their Mac (MacBook Pro, M4 Max). They can see their screen right now.
 
-Mac access: SSH lj@100.88.41.102 or OpenClaw node "MacBook Pro".
+Mac access: SSH ${MAC_SSH_HOST} (set MAC_SSH_HOST in .env).
 
 Auto-open rules:
-- When you create or reference a file, doc, URL, or artifact — open it on their Mac automatically (ssh lj@100.88.41.102 'open <path-or-url>')
+- When you create or reference a file, doc, URL, or artifact — open it on their Mac automatically (ssh ${MAC_SSH_HOST} 'open <path-or-url>')
 - Do NOT ask "would you like me to open it?" — just open it
 - URLs → open in Chrome. Local files → open with default app. Notion/Drive/Slack → open in browser.
 - XMind files (.xmind) → open with XMind app
@@ -420,21 +421,15 @@ Mac context:
 - Chrome is the default browser (with logged-in sessions: Google, Notion, Linear, Slack, GitHub)
 - Apps available: XMind, VS Code, Cursor, Terminal, Finder, Preview, Discord, Slack, Signal, Spotify
 - The Mac browser is also available via: browser action=snapshot profile="chrome" target="node" node="MacBook Pro"
-- Clipboard access: ssh lj@100.88.41.102 'pbcopy' / 'pbpaste'
-- Screenshots: ssh lj@100.88.41.102 'screencapture /tmp/screen.png'
+- Clipboard access: ssh ${MAC_SSH_HOST} 'pbcopy' / 'pbpaste'
+- Screenshots: ssh ${MAC_SSH_HOST} 'screencapture /tmp/screen.png'
 
 Cursor IDE (code editing):
 - When user says "bring up the code", "open in cursor", "show me the code", "pull up the project" → open the relevant project in Cursor on Mac
 - Cursor CLI: /usr/local/bin/cursor (on Mac via SSH)
-- Local project: ssh lj@100.88.41.102 'cursor /path/to/folder'
-- Remote project: ssh lj@100.88.41.102 "cursor --folder-uri 'vscode-remote://ssh-remote+HOST/path'"
-- Key projects:
-  * "ewitness/ew-stack" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-lan/root/ewitness/ewitness-stack'
-  * "jarvis/voice-bot" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/home/generic/dev/jarvis-voice-dev'
-  * "dstorm/gibson/scrapers" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-lan/home/lj/ewitness-stack/DStorm'
-  * "haivemind" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-lan/home/lj/Dev/haivemind/haivemind-mcp-server'
-  * "reverse engineering/malware" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/media/generic/8f6026e4-4fcd-4f37-8815-807fdcb8a404/DEV/ReverseEngineering'
-  * "openclaw" → cursor --folder-uri 'vscode-remote://ssh-remote+generic-linux/home/generic/dev'
+- Local project: ssh ${MAC_SSH_HOST} 'cursor /path/to/folder'
+- Remote project: ssh ${MAC_SSH_HOST} "cursor --folder-uri 'vscode-remote://ssh-remote+HOST/path'"
+- Key projects are loaded from config/projects.json — see cursor-projects.js
 - Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor`;
   }
 
