@@ -10,10 +10,19 @@
 import { createLiveStream } from '../live-stream.js';
 import logger from '../logger.js';
 
-const GATEWAY_URL    = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
-const GATEWAY_TOKEN  = process.env.CLAWDBOT_GATEWAY_TOKEN || '';
-const DISCORD_TOKEN  = process.env.DISCORD_TOKEN || '';
+const GATEWAY_URL      = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const COMPLETIONS_URL  = `${GATEWAY_URL}/v1/chat/completions`;
+const GATEWAY_TOKEN    = process.env.CLAWDBOT_GATEWAY_TOKEN || '';
+const DISCORD_TOKEN    = process.env.DISCORD_TOKEN || '';
+const MODEL_DEFAULT    = process.env.DISPATCH_MODEL || 'openclaw';
+const MODEL_DEEP       = process.env.DISPATCH_MODEL_DEEP || MODEL_DEFAULT;
+
+// Prompts matching these keywords get the deep/opus model; others get the default.
+const DEEP_INTENT_RE = /\b(analyz|audit|research|investigat|deep\s+dive|review|explain|compare|architect|design|refactor|debug|diagnos|secur|vulnerab|threaten?|incident|forensic)\b/i;
+
+function _selectModel(prompt) {
+  return DEEP_INTENT_RE.test(prompt) ? MODEL_DEEP : MODEL_DEFAULT;
+}
 
 // Active spawns keyed by threadId → AbortController, so /stop can cancel
 const _activeSessions = new Map();
@@ -70,12 +79,26 @@ export async function handleSpawnCommand(interaction) {
     return;
   }
 
+  // B7 guard: refuse to double-spawn into a thread that already has an active session
+  if (_activeSessions.has(threadId)) {
+    await interaction.editReply(`Agent already running in <#${threadId}>. Use /stop first.`);
+    return;
+  }
+
   await interaction.editReply(
     newThread ? `Agent spawned in <#${threadId}>` : 'Agent running in this thread...'
   );
 
-  // Start live stream in the new thread
-  const ls = await createLiveStream(threadId, DISCORD_TOKEN);
+  // Start live stream in the new thread. Throws if Discord rejects the pin-message
+  // create call — surface the error rather than running agent against a no-op sink.
+  let ls;
+  try {
+    ls = await createLiveStream(threadId, DISCORD_TOKEN);
+  } catch (err) {
+    logger.error(`[spawn] live-stream init failed: ${err.message}`);
+    await interaction.editReply(`Failed to start live stream: ${err.message}`);
+    return;
+  }
 
   const ac = new AbortController();
   _activeSessions.set(threadId, { ac, ls });
@@ -105,7 +128,9 @@ export async function handleStopCommand(interaction) {
 
 async function _runStreamingAgent(prompt, threadId, ls, ac) {
   const channelKey = `spawn:${threadId}`;
+  const model = _selectModel(prompt);
   let finalText = '';
+  logger.info(`[spawn] model=${model} thread=${threadId}`);
 
   try {
     const res = await fetch(COMPLETIONS_URL, {
@@ -115,7 +140,7 @@ async function _runStreamingAgent(prompt, threadId, ls, ac) {
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
       },
       body: JSON.stringify({
-        model: 'openclaw',
+        model,
         stream: true,
         user: channelKey,
         messages: [{ role: 'user', content: prompt }],
@@ -191,7 +216,16 @@ export async function runVoiceSpawn(task, textChannelId, botToken) {
   if (!data.id) throw new Error(`Thread creation failed: ${JSON.stringify(data)}`);
   const threadId = data.id;
 
-  // Start live stream and fire off agent (background — does not block caller)
+  // B7 guard: fresh thread can't already have an active session, but be defensive
+  // in case the caller retries with the same threadId on transient errors.
+  if (_activeSessions.has(threadId)) {
+    logger.warn(`[spawn] runVoiceSpawn: thread ${threadId} already active, skipping duplicate`);
+    return threadId;
+  }
+
+  // Start live stream and fire off agent (background — does not block caller).
+  // createLiveStream throws if Discord rejects the pin-message create call —
+  // let it propagate so the caller can post a plain-text fallback.
   const ls = await createLiveStream(threadId, botToken);
   const ac = new AbortController();
   _activeSessions.set(threadId, { ac, ls });

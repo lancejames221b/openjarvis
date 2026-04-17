@@ -35,17 +35,24 @@ export async function createLiveStream(channelId, botToken) {
       signal: AbortSignal.timeout(8_000),
     });
 
-  // Create the initial placeholder message
+  // Create the initial placeholder message.
+  // Throws on failure so the caller can surface the error instead of running
+  // the agent against a no-op sink (silent blind-agent bug).
   let msgId;
   try {
     const res = await api(`/channels/${channelId}/messages`, 'POST', {
       content: '```\nAgent starting...\n```',
     });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Discord ${res.status}: ${body.slice(0, 200)}`);
+    }
     const data = await res.json();
+    if (!data?.id) throw new Error(`Discord returned no message id: ${JSON.stringify(data).slice(0, 200)}`);
     msgId = data.id;
   } catch (err) {
     logger.warn(`[live-stream] Failed to create live message: ${err.message}`);
-    return _noop();
+    throw err;
   }
 
   // Pin it
@@ -142,12 +149,4 @@ function _chunkText(text, max) {
     text = text.slice(max);
   }
   return out;
-}
-
-function _noop() {
-  return {
-    update() {},
-    async finish() {},
-    stop() {},
-  };
 }

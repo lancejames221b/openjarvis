@@ -8,6 +8,7 @@ import { SlashCommandBuilder, REST, Routes } from 'discord.js';
 import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
+import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -19,6 +20,14 @@ const SPAWN_CMD = new SlashCommandBuilder()
 const STOP_CMD = new SlashCommandBuilder()
   .setName('stop')
   .setDescription('Stop the active agent in this thread');
+
+const CRED_CMD = new SlashCommandBuilder()
+  .setName('cred')
+  .setDescription('Store a credential securely (message auto-deleted)')
+  .addStringOption(opt =>
+    opt.setName('name').setDescription('Credential name / label').setRequired(true))
+  .addStringOption(opt =>
+    opt.setName('value').setDescription('Credential value (key, token, password)').setRequired(true));
 
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
@@ -48,9 +57,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /spawn, /stop commands');
+    logger.info('[slash] Registered /visual, /spawn, /stop, /cred commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -77,6 +86,29 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       return true;
     }
     await handleStopCommand(interaction);
+    return true;
+  }
+
+  if (interaction.commandName === 'cred') {
+    if (!allowedUsers.includes(interaction.user.id)) {
+      await interaction.reply({ content: '🚫 Not authorized.', ephemeral: true });
+      return true;
+    }
+    const name = interaction.options.getString('name');
+    const value = interaction.options.getString('value');
+    // Defer ephemerally — slash command interactions auto-delete the invocation
+    await interaction.deferReply({ ephemeral: true });
+    // Build a fake parsed object matching handleCredCommand's expectation
+    const parsed = { isCredCommand: true, subcommand: 'store', name, value };
+    // For slash commands the interaction itself is ephemeral, so no message to delete.
+    // Pass a fake message-like object that no-ops on delete().
+    const fakeMessage = {
+      id: interaction.id,
+      channel: { send: (content) => interaction.followUp({ content, ephemeral: true }) },
+      reply: (content) => interaction.followUp({ content, ephemeral: true }),
+      delete: async () => {},
+    };
+    await handleCredCommand(fakeMessage, parsed);
     return true;
   }
 
