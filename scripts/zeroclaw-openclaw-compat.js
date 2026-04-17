@@ -103,6 +103,7 @@ const activeChildren = new Set();
 //   Emits partial assistant events as content accumulates (used for SSE delta forwarding).
 const BASE_ARGS = [
   "-p", "--verbose", "--dangerously-skip-permissions",
+  "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config",
   "--output-format", "stream-json", "--include-partial-messages",
 ];
 
