@@ -9,28 +9,26 @@ app.use(express.json({ limit: "1mb" }));
 const PORT = Number(process.env.ZEROCLAW_COMPAT_PORT || 22103);
 const ZEROCLAW_BASE_URL = process.env.ZEROCLAW_BASE_URL || "http://127.0.0.1:22101";
 const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN || "";
-const CURSOR_AGENT_BIN = process.env.CURSOR_AGENT_BIN || `${process.env.HOME}/.local/bin/cursor-agent`;
-const CURSOR_API_KEY = process.env.CURSOR_API_KEY || "";
-// Logical model aliases — brain.js sends 'openclaw' etc.; cursor-agent needs real model names.
-// DISPATCH_MODEL env vars use 'cursor-agent/' prefix which resolveModel strips.
+// Shell aliases (like `claude --dangerously-skip-permissions`) don't survive spawn().
+// Use the actual binary path and pass flags explicitly.
+const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
+// Logical model aliases — brain.js sends 'openclaw' etc.; map to Anthropic model IDs.
+// Legacy 'cursor-agent/' prefixes in env vars are stripped automatically.
 const MODEL_ALIASES = {
-  openclaw:            process.env.DISPATCH_MODEL          || "cursor-agent/auto",
-  "openclaw-deep":     process.env.DISPATCH_MODEL_DEEP     || "cursor-agent/claude-4.6-opus-high",
-  "openclaw-thinking": process.env.DISPATCH_MODEL_THINKING || "cursor-agent/claude-4.6-sonnet-medium-thinking",
+  openclaw:            process.env.DISPATCH_MODEL          || "claude-sonnet-4-6",
+  "openclaw-deep":     process.env.DISPATCH_MODEL_DEEP     || "claude-opus-4-7",
+  "openclaw-thinking": process.env.DISPATCH_MODEL_THINKING || "claude-sonnet-4-6",
 };
-const CURSOR_MODEL_RE = /^(claude-|gpt-|gemini-|o[0-9]|auto$|composer|anthropic)/;
+const CLAUDE_MODEL_RE = /^claude-/;
 function resolveModel(raw) {
   if (!raw) return "";
   const m = String(raw).trim();
-  if (Object.prototype.hasOwnProperty.call(MODEL_ALIASES, m)) {
-    const alias = MODEL_ALIASES[m];
-    return alias.startsWith("cursor-agent/") ? alias.slice("cursor-agent/".length) : alias;
-  }
+  if (Object.prototype.hasOwnProperty.call(MODEL_ALIASES, m)) return MODEL_ALIASES[m];
   if (m.startsWith("cursor-agent/")) return m.slice("cursor-agent/".length);
-  if (CURSOR_MODEL_RE.test(m)) return m;
+  if (CLAUDE_MODEL_RE.test(m)) return m;
   return "";
 }
-const DEFAULT_CURSOR_MODEL = resolveModel(process.env.CURSOR_AGENT_MODEL) || resolveModel(process.env.DISPATCH_MODEL) || "claude-4.6-sonnet-medium";
+const DEFAULT_CLAUDE_MODEL = resolveModel(process.env.DISPATCH_MODEL) || "claude-sonnet-4-6";
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || "";
 const DEFAULT_REPORT_CHANNEL = process.env.DISCORD_REPORT_CHANNEL_ID || process.env.DISCORD_TEXT_CHANNEL_ID || "";
 const ALERT_WEBHOOK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || "";
@@ -98,15 +96,14 @@ const channelSessionLocks = new Map();
 // ── Child process tracking for clean shutdown ─────────────────────────────────
 const activeChildren = new Set();
 
-// ── Base args for all cursor-agent chat/ask calls ─────────────────────────────
-// --force auto-approves tool-use queries (WebFetch, shell writes). In headless
-// mode cursor-agent emits `webFetchRequestQuery` events expecting interactive
-// approval; without --force these are auto-rejected as "User Rejected" and the
-// agent reports "web access blocked" even though the network works fine.
-// --approve-mcps auto-approves MCP server connections (haivemind, etc.).
+// ── Base args for all claude -p calls ────────────────────────────────────────
+// --dangerously-skip-permissions: equivalent to --trust + --force in cursor-agent.
+//   Auto-approves tool use and MCP connections in headless mode.
+// --include-partial-messages: equivalent to --stream-partial-output.
+//   Emits partial assistant events as content accumulates (used for SSE delta forwarding).
 const BASE_ARGS = [
-  "--print", "--trust", "--force", "--approve-mcps",
-  "--output-format", "stream-json", "--stream-partial-output",
+  "-p", "--verbose", "--dangerously-skip-permissions",
+  "--output-format", "stream-json", "--include-partial-messages",
 ];
 
 function log(event, data = {}) {
@@ -152,40 +149,23 @@ function collapseMessages(messages = []) {
   return sysText ? `${sysText}\n\n---\n\n${history}` : history;
 }
 
-// Spawn cursor-agent with stream-json output; optionally resume a prior session.
-// Prompt is passed via stdin to avoid null-byte/arg-length issues with large prompts.
-function spawnCursorStream(prompt, model, chatId) {
+// Spawn claude -p with stream-json output; optionally resume a prior session.
+// Prompt is written to stdin to avoid ARG_MAX limits on large conversation histories.
+function spawnClaudeStream(prompt, model, chatId) {
   const args = [...BASE_ARGS, "--model", model];
   if (chatId) args.push("--resume", chatId);
-  // Sanitize: strip null bytes that cause Node.js spawn to reject the arg
-  const safePrompt = prompt.replace(/\0/g, "");
-  const child = spawn(CURSOR_AGENT_BIN, [...args, safePrompt], {
-    env: { ...process.env, CURSOR_API_KEY },
+  // Strip ANTHROPIC_BASE_URL so claude uses its own stored OAuth credentials,
+  // not any proxy configured for the jarvis-voice service itself.
+  const { ANTHROPIC_BASE_URL: _drop, ...cleanEnv } = process.env;
+  const child = spawn(CLAUDE_BIN, args, {
+    env: cleanEnv,
     timeout: CURSOR_AGENT_TIMEOUT_MS,
+    stdio: ["pipe", "pipe", "pipe"],
   });
+  child.stdin.end(prompt.replace(/\0/g, ""), "utf8");
   activeChildren.add(child);
   child.on("close", () => activeChildren.delete(child));
   return child;
-}
-
-// Create a new cursor-agent chat session; returns the UUID chatId.
-async function createChat() {
-  return new Promise((resolve, reject) => {
-    const child = spawn(CURSOR_AGENT_BIN, ["create-chat"], {
-      env: { ...process.env, CURSOR_API_KEY },
-      timeout: 10_000,
-    });
-    activeChildren.add(child);
-    let out = "";
-    child.stdout.on("data", (d) => { out += d; });
-    child.on("close", (code) => {
-      activeChildren.delete(child);
-      const chatId = out.trim();
-      if (code !== 0 || !chatId) return reject(new Error("create-chat failed"));
-      resolve(chatId);
-    });
-    child.on("error", (err) => { activeChildren.delete(child); reject(err); });
-  });
 }
 
 // Summarize the old chatId to haivemind before rotation so context survives.
@@ -193,7 +173,7 @@ async function createChat() {
 async function summarizeAndStoreChat(channelKey, oldChatId) {
   const SUMMARY_PROMPT = "In 400 words or less, summarize the key state of this conversation: decisions made, open tasks, blockers, and any important context the next session should know. Be specific and terse.";
   try {
-    const result = await callCursorAgent(SUMMARY_PROMPT, DEFAULT_CURSOR_MODEL, oldChatId);
+    const result = await callClaudeAgent(SUMMARY_PROMPT, DEFAULT_CLAUDE_MODEL, oldChatId);
     if (!result.text) return;
     // Store to haivemind under channel namespace — getChannelContext() will pick this up next turn
     const channelId = (channelKey.match(/channel:(\d+)/) || [])[1];
@@ -233,31 +213,18 @@ async function getOrCreateChatId(channelKey) {
       return channelSessions.get(channelKey);
     }
   }
-  if (channelKey && channelSessionLocks.has(channelKey)) {
-    return channelSessionLocks.get(channelKey);
-  }
-  const p = createChat().then((chatId) => {
-    if (channelKey) {
-      channelSessions.set(channelKey, chatId);
-      channelTurns.set(channelKey, 0);
-      channelCreatedAt.set(channelKey, Date.now());
-      saveSessions(); saveTurns(); saveCreatedAt();
-    }
-    channelSessionLocks.delete(channelKey);
-    metrics.sessionsCreated++;
-    return chatId;
-  }).catch((err) => {
-    channelSessionLocks.delete(channelKey);
-    throw err;
-  });
-  if (channelKey) channelSessionLocks.set(channelKey, p);
-  return p;
+  // No existing session — return null. claude -p will create a fresh session
+  // and return a session_id in the system init event; setSession() stores it.
+  metrics.sessionsCreated++;
+  return null;
 }
 
 function setSession(channelKey, sessionId) {
   if (!channelKey || !sessionId) return;
+  const isNew = !channelSessions.has(channelKey);
   channelSessions.set(channelKey, sessionId);
   channelTurns.set(channelKey, (channelTurns.get(channelKey) || 0) + 1);
+  if (isNew) { channelCreatedAt.set(channelKey, Date.now()); saveCreatedAt(); }
   saveSessions(); saveTurns();
 }
 
@@ -281,13 +248,13 @@ setInterval(() => {
   }
 }, 30_000).unref();
 
-// Buffer the full response from cursor-agent (non-streaming path).
+// Buffer the full response from claude -p (non-streaming path).
 // Parses NDJSON lines; extracts text from result event and session_id from system:init.
-async function callCursorAgent(prompt, modelOverride, chatId) {
-  const model = resolveModel(modelOverride) || DEFAULT_CURSOR_MODEL;
+async function callClaudeAgent(prompt, modelOverride, chatId) {
+  const model = resolveModel(modelOverride) || DEFAULT_CLAUDE_MODEL;
   const start = Date.now();
   return new Promise((resolve, reject) => {
-    const child = spawnCursorStream(prompt, model, chatId);
+    const child = spawnClaudeStream(prompt, model, chatId);
     let buf = "";
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += d; });
@@ -300,9 +267,9 @@ async function callCursorAgent(prompt, modelOverride, chatId) {
         if (!line.trim()) continue;
         try {
           const ev = JSON.parse(line);
-          if (ev.type === "system" && ev.session_id) sessionId = ev.session_id;
+          if (ev.session_id) sessionId = ev.session_id;
           if (ev.type === "result") {
-            if (ev.is_error) return reject(new Error(ev.result || "cursor-agent error"));
+            if (ev.is_error) return reject(new Error(ev.result || "claude error"));
             resultText = ev.result || "";
           }
         } catch { /* skip malformed lines */ }
@@ -311,30 +278,31 @@ async function callCursorAgent(prompt, modelOverride, chatId) {
         if (code === 143) metrics.timeouts++;
         else metrics.errors++;
         const msg = code === 143
-          ? `cursor-agent timed out after ${CURSOR_AGENT_TIMEOUT_MS / 1000}s — task may need more time`
-          : `cursor-agent exited ${code}: ${stderr.slice(0, 300)}`;
-        log("cursor_agent_error", { code, durationMs, model, error: msg });
+          ? `claude timed out after ${CURSOR_AGENT_TIMEOUT_MS / 1000}s — task may need more time`
+          : `claude exited ${code}: ${stderr.slice(0, 300)}`;
+        log("claude_agent_error", { code, durationMs, model, error: msg });
         return reject(new Error(msg));
       }
-      log("cursor_agent_done", { code, durationMs, model, chars: resultText.length });
-      resolve({ text: resultText, model: `cursor-agent/${model}`, sessionId });
+      log("claude_agent_done", { code, durationMs, model, chars: resultText.length });
+      resolve({ text: resultText, model: `claude/${model}`, sessionId });
     });
     child.on("error", (err) => { metrics.errors++; reject(err); });
   });
 }
 
-// Stream cursor-agent NDJSON deltas directly to an SSE response.
+// Stream claude -p NDJSON deltas directly to an SSE response.
 // Returns the resolvedSessionId once the stream completes.
-async function streamCursorToSSE(prompt, model, chatId, res, req) {
+async function streamClaudeToSSE(prompt, model, chatId, res, req) {
   const completionId = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const start = Date.now();
 
   return new Promise((resolve, reject) => {
-    const child = spawnCursorStream(prompt, model, chatId);
+    const child = spawnClaudeStream(prompt, model, chatId);
     let lineBuf = "";
     let resolvedSessionId = chatId;
     let clientAborted = false;
+    let lastTextLen = 0;  // tracks how many chars we've already forwarded as deltas
 
     // Client-disconnect handler — kill the cursor-agent child when the HTTP
     // client aborts the stream. Without this, aborted requests orphan the
@@ -362,7 +330,7 @@ async function streamCursorToSSE(prompt, model, chatId, res, req) {
         id: completionId,
         object: "chat.completion.chunk",
         created,
-        model: `cursor-agent/${model}`,
+        model: `claude/${model}`,
         choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
       };
       res.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -372,13 +340,17 @@ async function streamCursorToSSE(prompt, model, chatId, res, req) {
       if (!line.trim()) return;
       let ev;
       try { ev = JSON.parse(line); } catch { return; }
-      if (ev.type === "system" && ev.session_id) resolvedSessionId = ev.session_id;
-      // Partial deltas have timestamp_ms; final assembled assistant event does not — skip it
-      if (ev.type === "assistant" && ev.timestamp_ms !== undefined) {
-        const text = ev.message?.content?.[0]?.text;
-        if (text) sendDelta(text);
+      // session_id appears on every event type in claude CLI output
+      if (ev.session_id) resolvedSessionId = ev.session_id;
+      // claude CLI accumulates text across assistant events; emit only the new chars each time
+      if (ev.type === "assistant") {
+        const text = ev.message?.content?.[0]?.text ?? "";
+        if (text.length > lastTextLen) {
+          sendDelta(text.slice(lastTextLen));
+          lastTextLen = text.length;
+        }
       }
-      if (ev.type === "result" && ev.is_error) reject(new Error(ev.result || "cursor-agent stream error"));
+      if (ev.type === "result" && ev.is_error) reject(new Error(ev.result || "claude stream error"));
     }
 
     child.stdout.on("data", (chunk) => {
@@ -397,12 +369,12 @@ async function streamCursorToSSE(prompt, model, chatId, res, req) {
         if (code === 143) metrics.timeouts++;
         else metrics.errors++;
         const msg = code === 143
-          ? `cursor-agent timed out after ${CURSOR_AGENT_TIMEOUT_MS / 1000}s — task may need more time`
-          : `cursor-agent exited ${code}`;
-        log("cursor_agent_error", { code, durationMs, model, streaming: true, error: msg });
+          ? `claude timed out after ${CURSOR_AGENT_TIMEOUT_MS / 1000}s — task may need more time`
+          : `claude exited ${code}`;
+        log("claude_agent_error", { code, durationMs, model, streaming: true, error: msg });
         return reject(new Error(msg));
       }
-      log("cursor_agent_done", { code, durationMs, model, streaming: true });
+      log("claude_agent_done", { code, durationMs, model, streaming: true });
       resolve(resolvedSessionId);
     });
     child.on("error", (err) => {
@@ -503,7 +475,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
   metrics.requests++;
   try {
     const requestedModel = String(req.body?.model || "openclaw");
-    const model = resolveModel(requestedModel) || DEFAULT_CURSOR_MODEL;
+    const model = resolveModel(requestedModel) || DEFAULT_CLAUDE_MODEL;
     const prompt = collapseMessages(req.body?.messages || []);
     const channelKey = String(req.body?.user || "").trim() || null;
     const wantStream = Boolean(req.body?.stream);
@@ -520,7 +492,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
 
       let resolvedSessionId;
       try {
-        resolvedSessionId = await streamCursorToSSE(prompt, model, chatId, res, req);
+        resolvedSessionId = await streamClaudeToSSE(prompt, model, chatId, res, req);
       } catch (streamError) {
         // Don't try to write to a closed/aborted socket.
         if (streamError.message === "client disconnected" || res.writableEnded || req.destroyed) return;
@@ -546,7 +518,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     }
 
     // Non-streaming path
-    const result = await callCursorAgent(prompt, requestedModel, chatId);
+    const result = await callClaudeAgent(prompt, requestedModel, chatId);
     setSession(channelKey, result.sessionId);
     res.json(openAiCompletionResponse(requestedModel, result.text));
   } catch (error) {
@@ -566,7 +538,7 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
   queueMicrotask(async () => {
     let result;
     try {
-      result = await callCursorAgent(message);
+      result = await callClaudeAgent(message);
     } catch (error) {
       const failure = `Task ${taskId || ""} failed: ${error.message || error}`.trim();
       log("hooks_agent_error", { taskId, channelId, error: String(error.message || error) });
@@ -576,7 +548,7 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
         log("discord_post_error", { taskId, error: String(discordError.message || discordError) });
       }
       try {
-        await postSpeakSummary("The cursor-agent task failed.", taskId);
+        await postSpeakSummary("The task failed.", taskId);
       } catch (speakError) {
         log("speak_post_error", { taskId, error: String(speakError.message || speakError) });
       }
@@ -628,8 +600,8 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 const server = app.listen(PORT, "127.0.0.1", () => {
   log("startup", {
     port: PORT,
-    bin: CURSOR_AGENT_BIN,
-    model: DEFAULT_CURSOR_MODEL,
+    bin: CLAUDE_BIN,
+    model: DEFAULT_CLAUDE_MODEL,
     sessions: channelSessions.size,
     sessionStore: SESSION_STORE_PATH,
   });
