@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/generic/dev/jarvis-gpu-services
+WorkingDirectory=%h/jarvis-gpu-services
 Environment=CHATTERBOX_PORT=3340
 Environment=CHATTERBOX_DEFAULT_VOICE=jarvis
 Environment=CHATTERBOX_VOICE_JARVIS=${HOME}/voice-clones/jarvis/jarvis_reference_15s.wav

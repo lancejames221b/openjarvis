@@ -1,0 +1,22 @@
+# Jarvis Gateway — Claude CLI adapter (OpenAI-compatible HTTP bridge)
+# Install: cp scripts/jarvis-gateway.service ~/.config/systemd/user/
+#          systemctl --user daemon-reload
+#          systemctl --user enable --now jarvis-gateway
+
+[Unit]
+Description=Jarvis Gateway (Claude CLI adapter)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/jarvis-voice
+ExecStart=/usr/bin/node %h/jarvis-voice/scripts/jarvis-gateway.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+EnvironmentFile=%h/jarvis-voice/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

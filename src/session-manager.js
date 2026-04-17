@@ -294,7 +294,7 @@ async function _haivemindStore(content, category = 'voice-session') {
       const escaped = content.replace(/'/g, "'\\''");
       await execAsync(
         `${MCPORTER_PATH} call haivemind.store_memory content='${escaped}' category='${category}'`,
-        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: '/home/generic' }
+        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: process.env.HOME || '/tmp' }
       );
     }
     _hmBreaker.recordSuccess();
@@ -319,7 +319,7 @@ async function _haivemindSearch(query, { limit = 5, semantic = true } = {}) {
     } else {
       const { stdout } = await execAsync(
         `${MCPORTER_PATH} call haivemind.search_memories query="${query}" limit=${limit} semantic=${semantic}`,
-        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: '/home/generic' }
+        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: process.env.HOME || '/tmp' }
       );
       result = stdout.trim();
     }
@@ -346,7 +346,7 @@ async function _haivemindGetRecent(category, { hours = 2, limit = 5 } = {}) {
     } else {
       const { stdout } = await execAsync(
         `${MCPORTER_PATH} call haivemind.get_recent_memories category="${category}" hours=${hours} limit=${limit}`,
-        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: '/home/generic' }
+        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: process.env.HOME || '/tmp' }
       );
       result = stdout.trim();
     }

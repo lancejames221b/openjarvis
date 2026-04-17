@@ -24,7 +24,6 @@ function resolveModel(raw) {
   if (!raw) return "";
   const m = String(raw).trim();
   if (Object.prototype.hasOwnProperty.call(MODEL_ALIASES, m)) return MODEL_ALIASES[m];
-  if (m.startsWith("cursor-agent/")) return m.slice("cursor-agent/".length);
   if (CLAUDE_MODEL_RE.test(m)) return m;
   return "";
 }
@@ -39,9 +38,44 @@ const SPEAK_URL = process.env.ZEROCLAW_COMPAT_SPEAK_URL || `http://${ALERT_WEBHO
 // /tmp is wiped on reboot; every restart meant fresh cursor-agent contexts.
 const _defaultSessionDir = `${process.env.HOME}/.local/state/jarvis-voice`;
 const SESSION_STORE_PATH = process.env.SESSION_STORE_PATH || `${_defaultSessionDir}/zeroclaw-sessions.json`;
+const CHANNEL_ACCOUNTS_PATH = process.env.CHANNEL_ACCOUNTS_PATH || `${_defaultSessionDir}/channel-accounts.json`;
 // Ensure the state directory exists (harmless if already present)
 try { fs.mkdirSync(_defaultSessionDir, { recursive: true }); } catch {}
 const CURSOR_AGENT_TIMEOUT_MS = 600_000; // 10 min — matches GATEWAY_TIMEOUT_MS in jarvis-voice
+
+// ── Per-channel account profiles ─────────────────────────────────────────────
+// Maps channels to separate CLAUDE_CONFIG_DIR paths for multi-account routing.
+// Each configDir must be pre-authenticated via: CLAUDE_CONFIG_DIR=<path> claude login
+function loadChannelAccounts() {
+  try {
+    return JSON.parse(fs.readFileSync(CHANNEL_ACCOUNTS_PATH, "utf8"));
+  } catch {
+    return { profiles: { default: { configDir: null, label: "primary (process owner)" } }, channels: {} };
+  }
+}
+let channelAccounts = loadChannelAccounts();
+
+function resolveProfile(channelKey) {
+  if (!channelKey) return channelAccounts.profiles?.default ?? null;
+  const profileName = channelAccounts.channels?.[channelKey] || "default";
+  return channelAccounts.profiles?.[profileName] ?? channelAccounts.profiles?.default ?? null;
+}
+
+function validateProfiles() {
+  const profiles = channelAccounts.profiles || {};
+  let valid = 0; let invalid = 0;
+  for (const [name, p] of Object.entries(profiles)) {
+    if (!p.configDir) { valid++; continue; }
+    try {
+      fs.accessSync(`${p.configDir}/.credentials.json`, fs.constants.R_OK);
+      valid++;
+    } catch {
+      log("profile_warn", { profile: name, configDir: p.configDir, msg: "credentials not found — run: CLAUDE_CONFIG_DIR=<path> claude login" });
+      invalid++;
+    }
+  }
+  return { total: Object.keys(profiles).length, valid, invalid };
+}
 
 // ── Metrics counters ─────────────────────────────────────────────────────────
 const metrics = {
@@ -70,7 +104,7 @@ function loadSessions() {
 function saveSessions() {
   try {
     fs.writeFileSync(SESSION_STORE_PATH, JSON.stringify(Object.fromEntries(channelSessions)));
-  } catch { /* non-fatal */ }
+  } catch (e) { log("session_save_warn", { path: SESSION_STORE_PATH, error: e.message }); }
 }
 
 const channelSessions = loadSessions();
@@ -80,14 +114,16 @@ function loadJsonFile(path) {
 }
 const channelTurns = new Map(Object.entries(loadJsonFile(SESSION_STORE_PATH + ".turns")));
 function saveTurns() {
-  try { fs.writeFileSync(SESSION_STORE_PATH + ".turns", JSON.stringify(Object.fromEntries(channelTurns))); } catch {}
+  try { fs.writeFileSync(SESSION_STORE_PATH + ".turns", JSON.stringify(Object.fromEntries(channelTurns))); }
+  catch (e) { log("turns_save_warn", { error: e.message }); }
 }
-const CURSOR_MAX_TURNS_PER_CHAT = parseInt(process.env.CURSOR_MAX_TURNS || "150");
-const CURSOR_MAX_AGE_MS = parseInt(process.env.CURSOR_MAX_AGE_MS || String(3 * 24 * 3600 * 1000)); // 3 days
+const CURSOR_MAX_TURNS_PER_CHAT = parseInt(process.env.JARVIS_MAX_TURNS || process.env.CURSOR_MAX_TURNS || "150");
+const CURSOR_MAX_AGE_MS = parseInt(process.env.JARVIS_MAX_AGE_MS || process.env.CURSOR_MAX_AGE_MS || String(3 * 24 * 3600 * 1000)); // 3 days
 // createdAt timestamps per channel for age-based rotation
 const channelCreatedAt = new Map(Object.entries(loadJsonFile(SESSION_STORE_PATH + ".created")));
 function saveCreatedAt() {
-  try { fs.writeFileSync(SESSION_STORE_PATH + ".created", JSON.stringify(Object.fromEntries(channelCreatedAt))); } catch {}
+  try { fs.writeFileSync(SESSION_STORE_PATH + ".created", JSON.stringify(Object.fromEntries(channelCreatedAt))); }
+  catch (e) { log("created_save_warn", { error: e.message }); }
 }
 
 // Per-channel in-flight Promise lock — prevents duplicate create-chat on concurrent requests
@@ -108,7 +144,7 @@ const BASE_ARGS = [
 ];
 
 function log(event, data = {}) {
-  const entry = { ts: new Date().toISOString(), svc: "zeroclaw-openclaw-compat", event, ...data };
+  const entry = { ts: new Date().toISOString(), svc: "jarvis-gateway", event, ...data };
   console.log(JSON.stringify(entry));
 }
 
@@ -152,12 +188,15 @@ function collapseMessages(messages = []) {
 
 // Spawn claude -p with stream-json output; optionally resume a prior session.
 // Prompt is written to stdin to avoid ARG_MAX limits on large conversation histories.
-function spawnClaudeStream(prompt, model, chatId) {
+function spawnClaudeStream(prompt, model, chatId, channelKey) {
   const args = [...BASE_ARGS, "--model", model];
   if (chatId) args.push("--resume", chatId);
   // Strip proxy/token overrides so claude uses its own stored OAuth credentials
   // from ~/.claude/ rather than any stale env vars set by the parent service.
   const { ANTHROPIC_BASE_URL: _a, CLAUDE_CODE_OAUTH_TOKEN: _b, ...cleanEnv } = process.env;
+  const profile = resolveProfile(channelKey);
+  if (profile?.configDir) cleanEnv.CLAUDE_CONFIG_DIR = profile.configDir;
+  log("claude_spawn", { model, chatId: chatId || null, channelKey, profile: profile?.label || "default", configDir: profile?.configDir || null });
   const child = spawn(CLAUDE_BIN, args, {
     env: cleanEnv,
     timeout: CURSOR_AGENT_TIMEOUT_MS,
@@ -251,11 +290,11 @@ setInterval(() => {
 
 // Buffer the full response from claude -p (non-streaming path).
 // Parses NDJSON lines; extracts text from result event and session_id from system:init.
-async function callClaudeAgent(prompt, modelOverride, chatId) {
+async function callClaudeAgent(prompt, modelOverride, chatId, channelKey) {
   const model = resolveModel(modelOverride) || DEFAULT_CLAUDE_MODEL;
   const start = Date.now();
   return new Promise((resolve, reject) => {
-    const child = spawnClaudeStream(prompt, model, chatId);
+    const child = spawnClaudeStream(prompt, model, chatId, channelKey);
     let buf = "";
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += d; });
@@ -293,13 +332,13 @@ async function callClaudeAgent(prompt, modelOverride, chatId) {
 
 // Stream claude -p NDJSON deltas directly to an SSE response.
 // Returns the resolvedSessionId once the stream completes.
-async function streamClaudeToSSE(prompt, model, chatId, res, req) {
+async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey) {
   const completionId = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const start = Date.now();
 
   return new Promise((resolve, reject) => {
-    const child = spawnClaudeStream(prompt, model, chatId);
+    const child = spawnClaudeStream(prompt, model, chatId, channelKey);
     let lineBuf = "";
     let resolvedSessionId = chatId;
     let clientAborted = false;
@@ -475,14 +514,8 @@ async function postSpeakSummary(message, taskId) {
   });
 }
 
-app.get("/health", async (_req, res) => {
-  try {
-    const response = await fetch(`${ZEROCLAW_BASE_URL}/health`);
-    const body = await response.text();
-    res.status(response.status).type("application/json").send(body);
-  } catch (error) {
-    res.status(502).json({ status: "error", error: String(error.message || error) });
-  }
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", uptime: process.uptime(), sessions: channelSessions.size, activeChildren: activeChildren.size });
 });
 
 app.get("/metrics", (_req, res) => {
@@ -497,10 +530,17 @@ app.get("/metrics", (_req, res) => {
   });
 });
 
+app.post("/admin/reload-accounts", requireAuth, (_req, res) => {
+  channelAccounts = loadChannelAccounts();
+  const stats = validateProfiles();
+  log("accounts_reloaded", stats);
+  res.json({ ok: true, profiles: stats });
+});
+
 app.post("/v1/chat/completions", requireAuth, async (req, res) => {
   metrics.requests++;
   try {
-    const requestedModel = String(req.body?.model || "openclaw");
+    const requestedModel = String(req.body?.model || DEFAULT_CLAUDE_MODEL);
     const model = resolveModel(requestedModel) || DEFAULT_CLAUDE_MODEL;
     const prompt = collapseMessages(req.body?.messages || []);
     const channelKey = String(req.body?.user || "").trim() || null;
@@ -545,7 +585,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
 
       let resolvedSessionId;
       try {
-        resolvedSessionId = await streamClaudeToSSE(prompt, model, chatId, res, req);
+        resolvedSessionId = await streamClaudeToSSE(prompt, model, chatId, res, req, channelKey);
       } catch (streamError) {
         // Don't try to write to a closed/aborted socket.
         if (streamError.message === "client disconnected" || res.writableEnded || req.destroyed) return;
@@ -571,7 +611,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     }
 
     // Non-streaming path
-    const result = await callClaudeAgent(prompt, requestedModel, chatId);
+    const result = await callClaudeAgent(prompt, requestedModel, chatId, channelKey);
     setSession(channelKey, result.sessionId);
     res.json(openAiCompletionResponse(requestedModel, result.text));
   } catch (error) {
@@ -586,7 +626,7 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
   const message = String(req.body?.message || "");
   const taskId = extractTaskId(message);
   const channelId = extractTargetChannelId(message);
-  res.status(202).json({ accepted: true, taskId, backend: "zeroclaw-openclaw-compat" });
+  res.status(202).json({ accepted: true, taskId, backend: "jarvis-gateway" });
 
   queueMicrotask(async () => {
     let result;
@@ -650,12 +690,29 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
+// ── Startup validation ────────────────────────────────────────────────────────
+import { accessSync, constants as fsConstants } from "node:fs";
+function validateStartup() {
+  try {
+    accessSync(CLAUDE_BIN, fsConstants.X_OK);
+  } catch {
+    log("fatal", { msg: `Claude CLI not found or not executable at ${CLAUDE_BIN}. Run: claude login` });
+    process.exit(1);
+  }
+  if (!GATEWAY_TOKEN) {
+    log("warn", { msg: "JARVIS_GATEWAY_TOKEN not set — all requests will be rejected as Unauthorized" });
+  }
+}
+validateStartup();
+
 const server = app.listen(PORT, "127.0.0.1", () => {
+  const profileStats = validateProfiles();
   log("startup", {
     port: PORT,
     bin: CLAUDE_BIN,
     model: DEFAULT_CLAUDE_MODEL,
     sessions: channelSessions.size,
     sessionStore: SESSION_STORE_PATH,
+    profiles_loaded: profileStats,
   });
 });

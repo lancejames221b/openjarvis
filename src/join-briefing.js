@@ -26,8 +26,8 @@ import { getFocus, isFocusFresh } from './focus-state.js';
 
 const execAsync = promisify(_exec);
 
-const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-const HOOKS_TOKEN = process.env.CLAWDBOT_HOOKS_TOKEN || '';
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || process.env.CLAWDBOT_HOOKS_TOKEN || '';
 
 // Master toggle
 const BRIEFING_ENABLED = process.env.JOIN_BRIEFING_ENABLED !== 'false';
