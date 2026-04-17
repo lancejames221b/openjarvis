@@ -155,9 +155,9 @@ function collapseMessages(messages = []) {
 function spawnClaudeStream(prompt, model, chatId) {
   const args = [...BASE_ARGS, "--model", model];
   if (chatId) args.push("--resume", chatId);
-  // Strip ANTHROPIC_BASE_URL so claude uses its own stored OAuth credentials,
-  // not any proxy configured for the jarvis-voice service itself.
-  const { ANTHROPIC_BASE_URL: _drop, ...cleanEnv } = process.env;
+  // Strip proxy/token overrides so claude uses its own stored OAuth credentials
+  // from ~/.claude/ rather than any stale env vars set by the parent service.
+  const { ANTHROPIC_BASE_URL: _a, CLAUDE_CODE_OAUTH_TOKEN: _b, ...cleanEnv } = process.env;
   const child = spawn(CLAUDE_BIN, args, {
     env: cleanEnv,
     timeout: CURSOR_AGENT_TIMEOUT_MS,
