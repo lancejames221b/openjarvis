@@ -453,9 +453,14 @@ async function storeMemory(content, category = "global") {
     signal: AbortSignal.timeout(5_000),
   });
   if (!res.ok) throw new Error(`haivemind ${res.status}`);
-  const body = await res.json();
-  const text = body?.result?.content?.[0]?.text || "{}";
-  return JSON.parse(text);
+  const raw = await res.text();
+  // haivemind responds with SSE — extract the data: line
+  const dataLine = raw.split("\n").find(l => l.startsWith("data:"));
+  const body = JSON.parse(dataLine ? dataLine.slice(5).trim() : raw);
+  const text = body?.result?.content?.[0]?.text || body?.result?.structuredContent?.result || "{}";
+  // Extract memory ID from text like "Memory stored with ID: <uuid>"
+  const idMatch = text.match(/[0-9a-f-]{36}/);
+  return idMatch ? { memory_id: idMatch[0] } : {};
 }
 
 async function postSpeakSummary(message, taskId) {
