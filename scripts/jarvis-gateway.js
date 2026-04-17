@@ -12,12 +12,12 @@ const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_G
 // Shell aliases (like `claude --dangerously-skip-permissions`) don't survive spawn().
 // Use the actual binary path and pass flags explicitly.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
-// Logical model aliases — brain.js sends 'openclaw' etc.; map to Anthropic model IDs.
-// Legacy 'cursor-agent/' prefixes in env vars are stripped automatically.
+// Logical model aliases — map short names to Anthropic model IDs.
 const MODEL_ALIASES = {
-  openclaw:            process.env.DISPATCH_MODEL          || "claude-sonnet-4-6",
-  "openclaw-deep":     process.env.DISPATCH_MODEL_DEEP     || "claude-opus-4-7",
-  "openclaw-thinking": process.env.DISPATCH_MODEL_THINKING || "claude-sonnet-4-6",
+  claude:  process.env.DISPATCH_MODEL      || "claude-sonnet-4-6",
+  sonnet:  process.env.DISPATCH_MODEL      || "claude-sonnet-4-6",
+  opus:    process.env.DISPATCH_MODEL_DEEP || "claude-opus-4-7",
+  haiku:   "claude-haiku-4-5-20251001",
 };
 const CLAUDE_MODEL_RE = /^claude-/;
 function resolveModel(raw) {
@@ -516,6 +516,13 @@ async function postSpeakSummary(message, taskId) {
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", uptime: process.uptime(), sessions: channelSessions.size, activeChildren: activeChildren.size });
+});
+
+app.get("/models", requireAuth, (_req, res) => {
+  res.json({
+    aliases: Object.entries(MODEL_ALIASES).map(([alias, model]) => ({ alias, model })),
+    default: DEFAULT_CLAUDE_MODEL,
+  });
 });
 
 app.get("/metrics", (_req, res) => {

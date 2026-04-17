@@ -7,6 +7,23 @@
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
 import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { isVerboseModeEnabled, setVerboseMode } from './verbose-mode.js';
+import { getVoiceModel, setVoiceModel } from './brain.js';
+import { readFileSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __slashDirname = dirname(fileURLToPath(import.meta.url));
+const _ENV_FILE = `${__slashDirname}/../.env`;
+const KNOWN_MODELS = ['claude', 'sonnet', 'opus', 'haiku'];
+
+function _persistModel(alias) {
+  try {
+    let env = readFileSync(_ENV_FILE, 'utf-8');
+    const line = `VOICE_MODEL=${alias}`;
+    env = env.match(/^VOICE_MODEL=.*/m) ? env.replace(/^VOICE_MODEL=.*/m, line) : env + `\n${line}`;
+    writeFileSync(_ENV_FILE, env, 'utf-8');
+  } catch { /* non-fatal */ }
+}
 import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
@@ -29,6 +46,25 @@ const CRED_CMD = new SlashCommandBuilder()
     opt.setName('name').setDescription('Credential name / label').setRequired(true))
   .addStringOption(opt =>
     opt.setName('value').setDescription('Credential value (key, token, password)').setRequired(true));
+
+const MODEL_CMD = new SlashCommandBuilder()
+  .setName('model')
+  .setDescription('Switch the active voice model')
+  .addSubcommand(sub => sub.setName('list').setDescription('Show available model aliases'))
+  .addSubcommand(sub =>
+    sub.setName('set')
+      .setDescription('Switch to a model alias')
+      .addStringOption(opt =>
+        opt.setName('name')
+          .setDescription('Model alias: claude, sonnet, opus, haiku')
+          .setRequired(true)
+          .addChoices(
+            { name: 'claude (sonnet, default)', value: 'claude' },
+            { name: 'sonnet', value: 'sonnet' },
+            { name: 'opus (heavy tasks)', value: 'opus' },
+            { name: 'haiku (fast/light)', value: 'haiku' },
+          )))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show current active model'));
 
 const VERBOSE_CMD = new SlashCommandBuilder()
   .setName('verbose')
@@ -65,9 +101,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /spawn, /stop, /cred commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -117,6 +153,31 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       delete: async () => {},
     };
     await handleCredCommand(fakeMessage, parsed);
+    return true;
+  }
+
+  if (interaction.commandName === 'model') {
+    if (!allowedUsers.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === 'list') {
+      const current = getVoiceModel();
+      const lines = KNOWN_MODELS.map(m => `${m === current ? '▶' : '·'} **${m}**`).join('\n');
+      await interaction.reply({ content: `**Available models:**\n${lines}`, ephemeral: true });
+    } else if (sub === 'set') {
+      const name = interaction.options.getString('name');
+      if (!KNOWN_MODELS.includes(name)) {
+        await interaction.reply({ content: `Unknown model \`${name}\`. Choose: ${KNOWN_MODELS.join(', ')}`, ephemeral: true });
+        return true;
+      }
+      setVoiceModel(name);
+      _persistModel(name);
+      await interaction.reply({ content: `🔄 Voice model switched to **${name}**`, ephemeral: false });
+    } else if (sub === 'status') {
+      await interaction.reply({ content: `Active model: **${getVoiceModel()}**`, ephemeral: true });
+    }
     return true;
   }
 

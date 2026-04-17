@@ -148,7 +148,9 @@ const SPEAK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || '';
 const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
 const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
-const voiceModel = process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude'; // module-level so all functions share it
+let voiceModel = process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude'; // mutable — /model set updates at runtime
+export function getVoiceModel() { return voiceModel; }
+export function setVoiceModel(m) { voiceModel = m; logger.info(`[model] active model → ${m}`); }
 const _dispatchModel = process.env.DISPATCH_MODEL || process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude-sonnet-4-6';
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
