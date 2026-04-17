@@ -6,6 +6,7 @@
 
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
 import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
+import { isVerboseModeEnabled, setVerboseMode } from './verbose-mode.js';
 import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
@@ -28,6 +29,13 @@ const CRED_CMD = new SlashCommandBuilder()
     opt.setName('name').setDescription('Credential name / label').setRequired(true))
   .addStringOption(opt =>
     opt.setName('value').setDescription('Credential value (key, token, password)').setRequired(true));
+
+const VERBOSE_CMD = new SlashCommandBuilder()
+  .setName('verbose')
+  .setDescription('Stream every voice response to a live Discord thread (TTS still plays)')
+  .addSubcommand(sub => sub.setName('on').setDescription('Enable verbose mode'))
+  .addSubcommand(sub => sub.setName('off').setDescription('Disable verbose mode'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Check current verbose mode state'));
 
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
@@ -57,9 +65,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /spawn, /stop, /cred commands');
+    logger.info('[slash] Registered /visual, /verbose, /spawn, /stop, /cred commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -109,6 +117,25 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       delete: async () => {},
     };
     await handleCredCommand(fakeMessage, parsed);
+    return true;
+  }
+
+  if (interaction.commandName === 'verbose') {
+    if (!allowedUsers.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === 'on') {
+      setVerboseMode(true);
+      await interaction.reply({ content: '📡 **Verbose mode ON** — every voice response streams to a live thread. TTS still plays.', ephemeral: false });
+    } else if (sub === 'off') {
+      setVerboseMode(false);
+      await interaction.reply({ content: '🔇 **Verbose mode OFF** — voice only, no thread streaming.', ephemeral: false });
+    } else if (sub === 'status') {
+      const on = isVerboseModeEnabled();
+      await interaction.reply({ content: on ? '📡 **Verbose mode is ON** — responses stream to threads.' : '🔇 **Verbose mode is OFF**', ephemeral: true });
+    }
     return true;
   }
 

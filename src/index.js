@@ -40,6 +40,7 @@ import { shouldBrief, markBriefingDelivered, generateBriefing } from './join-bri
 import { initHud, hudTaskUpdate, hudQueueUpdate, hudRefresh } from './hud.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { isVisualModeEnabled, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
+import { isVerboseModeEnabled } from './verbose-mode.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand } from './slash-commands.js';
@@ -337,6 +338,7 @@ const _spokeLostTrackFor = new Set();
 // onSentence calls are silently dropped.  /speak callback still delivers.
 const _staleInlineTasks = new Set();
 const _visualAccumulator = new Map(); // taskId → { chunks[], startTime, editMsg }
+const _verboseStreams = new Map();    // taskId → LiveStream instance (verbose mode)
 setInterval(() => {
   try {
     const now = Date.now();
@@ -4057,6 +4059,36 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         return; // Skip all TTS
       }
 
+      // ── Verbose mode: also stream to a live Discord thread ───────────
+      if (isVerboseModeEnabled()) {
+        if (!_verboseStreams.has(taskId)) {
+          // Lazy-create thread + live stream on first sentence
+          const targetChannel = VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
+          const threadName = transcript.slice(0, 48).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'voice response';
+          import('./live-stream.js').then(({ createLiveStream }) => {
+            // Create thread in the target channel first
+            const discordToken = process.env.DISCORD_TOKEN || '';
+            fetch(`https://discord.com/api/v10/channels/${targetChannel}/threads`, {
+              method: 'POST',
+              headers: { Authorization: `Bot ${discordToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: threadName, auto_archive_duration: 60, type: 11 }),
+              signal: AbortSignal.timeout(8000),
+            }).then(r => r.json()).then(async data => {
+              if (!data.id) { logger.warn(`[verbose] thread create failed: ${JSON.stringify(data)}`); return; }
+              try {
+                const ls = await createLiveStream(data.id, discordToken);
+                _verboseStreams.set(taskId, ls);
+                ls.update(sentence);
+              } catch (err) {
+                logger.warn(`[verbose] live-stream init failed: ${err.message}`);
+              }
+            }).catch(err => logger.warn(`[verbose] thread create error: ${err.message}`));
+          });
+        } else {
+          _verboseStreams.get(taskId)?.update(sentence);
+        }
+      }
+
       if (!tldrModeEnabled) {
         if (userDisconnected) {
           postToTextChannel(`🎙️ ${sentence}`);
@@ -4107,6 +4139,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       markFailed(taskId, 'aborted');  // Ledger: task aborted
       hudTaskUpdate(taskId, 'failed');
       _visualAccumulator.delete(taskId); // Clean up visual state
+      _verboseStreams.get(taskId)?.stop(); _verboseStreams.delete(taskId);
       logger.info(`Task #${taskId} aborted`);
       ttsPipeline.clear();
       audioQueue.setGenerating(false);
@@ -4123,6 +4156,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     if (result.silent) {
       logger.info(`🤫 Task #${taskId} silent/NO_REPLY (${((Date.now() - startTime) / 1000).toFixed(1)}s) - sub-agent likely spawned`);
       _visualAccumulator.delete(taskId); // Clean up visual state
+      _verboseStreams.get(taskId)?.stop(); _verboseStreams.delete(taskId);
       // ── Speak contextual dispatch ack ──
       if (contextualAckPromise) {
         try {
@@ -4213,6 +4247,16 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
       .trim();
     logger.info(`💬 Task #${taskId} done (${Date.now() - startTime}ms): "${fullText.substring(0, 80)}..."`);
+
+    // ── Verbose mode: finalize the live thread ────────────────────────
+    if (_verboseStreams.has(taskId)) {
+      const ls = _verboseStreams.get(taskId);
+      const rawSource = result.rawText || fullText;
+      ls.finish(rawSource || '(no response)').catch(err =>
+        logger.warn(`[verbose] finish failed: ${err.message}`)
+      );
+      _verboseStreams.delete(taskId);
+    }
 
     // ── Visual mode: final edit with properly formatted text ──────────
     if (isVisualModeEnabled() && _visualAccumulator.has(taskId)) {
