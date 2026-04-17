@@ -588,6 +588,12 @@ export async function generateResponseStreaming(userMessage, history = [], signa
   let buffer = ''; // Declare outside try so catch handler can access it
   let fullText = ''; // Declare outside try so catch handler can check if anything was spoken
 
+  // C3: declare timers + reader outside try so finally can clean them up on every exit path
+  let firstTokenTimer = null;
+  let pauseCheckInterval = null;
+  let reader = null;
+  let firstTokenTimerFired = false;
+
   // ── Model — single model for all intents ────────────────────────────
   const intentType = options.intentType || null;
   // voiceModel is module-level, but can be overridden per-request via options.model
@@ -596,8 +602,8 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
-  // CLI providers (cursor-agent) don't support SSE. Fetch full response,
-  // split into sentences, feed to onSentence() for TTS pipeline.
+  // Fallback: fetch full response at once, split into sentences for TTS.
+  // zeroclaw-openclaw-compat on :22100 does support SSE; prefer streaming path.
   if (!VOICE_STREAMING) {
     try {
       logger.info(`🔄 Non-streaming request to gateway (model: ${voiceModel})`);
@@ -702,12 +708,11 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     fullText = '';
     let firstSentenceEmitted = false;
     let firstTokenReceived = false;
-    let firstTokenTimerFired = false;
     let lastTokenTime = Date.now(); // Track when we last received a token
     const PAUSE_THRESHOLD_MS = parseInt(process.env.VOICE_PAUSE_THRESHOLD_MS || '600', 10); // flush buffer if no tokens for this long
 
     // First-token timeout: if no streaming token arrives in 15s, speak interim feedback
-    let firstTokenTimer = null;
+    // firstTokenTimer + firstTokenTimerFired are declared at function scope so finally can clean up.
     if (GATEWAY_FIRST_TOKEN_TIMEOUT_MS > 0) {
       firstTokenTimer = setTimeout(async () => {
         if (!firstTokenReceived && !signal?.aborted) {
@@ -729,10 +734,9 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       }, GATEWAY_FIRST_TOKEN_TIMEOUT_MS);
     }
     
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = '';
-    let pauseCheckInterval = null;
     
     // Check for pauses while streaming.
     // IMPORTANT: Only flush on pause if the buffer looks like a complete sentence
@@ -759,13 +763,10 @@ export async function generateResponseStreaming(userMessage, history = [], signa
             return; // Not a complete sentence yet — wait for more tokens
           }
 
-          // If interim was already spoken, skip the first sentence to avoid duplicate ack
-          if (firstTokenTimerFired && !firstSentenceEmitted) {
-            buffer = '';
-            firstSentenceEmitted = true; // Mark as emitted so subsequent sentences play
-            lastTokenTime = Date.now();
-            return;
-          }
+          // C5: do NOT skip the first sentence when interim fired. Previous logic
+          // silently dropped single-paragraph responses (user heard only the filler).
+          // The interim ("One moment.") is a benign prefix; let the full response play.
+          firstSentenceEmitted = true;
           onSentence(phrase);
           buffer = '';
           lastTokenTime = Date.now(); // Reset timer
@@ -828,33 +829,24 @@ export async function generateResponseStreaming(userMessage, history = [], signa
             paragraph = trimForVoice(paragraph);
             if (!paragraph || paragraph.length < 2 || AGENT_SIGNAL_PATTERN.test(paragraph)) continue;
 
-            // If interim was already spoken, skip the first sentence to avoid duplicate ack
-            if (firstTokenTimerFired && !firstSentenceEmitted) {
-              firstSentenceEmitted = true;
-              continue;
-            }
-
+            // C5: always emit paragraphs — even when interim fired. Previous
+            // first-paragraph skip silently suppressed single-paragraph responses.
             firstSentenceEmitted = true;
             onSentence(paragraph);
           }
         } catch {}
       }
     }
-    
-    // Clean up timers
-    clearInterval(pauseCheckInterval);
+
+    // Clean up timers (the finally block also covers this for error paths)
+    if (pauseCheckInterval) { clearInterval(pauseCheckInterval); pauseCheckInterval = null; }
     if (firstTokenTimer) { clearTimeout(firstTokenTimer); firstTokenTimer = null; }
-    
-    // Flush remaining buffer as final sentence
+
+    // Flush remaining buffer as final sentence — always emit if substantial.
     if (buffer.trim()) {
       const final = trimForVoice(buffer.trim());
       if (final && final.length > 1 && !AGENT_SIGNAL_PATTERN.test(final)) {
-        // If interim was already spoken and nothing else was emitted yet, skip — it's the dup ack
-        if (firstTokenTimerFired && !firstSentenceEmitted) {
-          // suppress — interim already covered it
-        } else {
-          onSentence(final);
-        }
+        onSentence(final);
       }
     }
     
@@ -912,6 +904,12 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     }
 
     return { text: "I'm having trouble connecting right now. Try again?" };
+  } finally {
+    // C3: always clean up timers + reader, regardless of how we exit.
+    // Prevents socket leaks and orphaned timers on error/abort paths.
+    if (firstTokenTimer) { try { clearTimeout(firstTokenTimer); } catch {} }
+    if (pauseCheckInterval) { try { clearInterval(pauseCheckInterval); } catch {} }
+    if (reader) { try { reader.cancel(); } catch {} }
   }
 }
 
@@ -1353,6 +1351,7 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
   messages.push({ role: "user", content: `${channelCtx}${userMessage}` });
 
   let fullText = "";
+  let reader = null;
 
   try {
     const res = await resilientFetch(COMPLETIONS_URL, {
@@ -1378,23 +1377,23 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
       throw new Error(`Gateway ${res.status}: ${body}`);
     }
 
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      
+
       sseBuffer += decoder.decode(value, { stream: true });
       const lines = sseBuffer.split("\n");
       sseBuffer = lines.pop(); // Keep incomplete line
-      
+
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6).trim();
         if (data === "[DONE]") continue;
-        
+
         try {
           const parsed = JSON.parse(data);
           const content = parsed.choices?.[0]?.delta?.content;
@@ -1407,7 +1406,7 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
         }
       }
     }
-    
+
     // Store to haivemind after reply — fire and forget
     storeChannelMemory(channelId, userMessage, fullText).catch(() => {});
     return { text: fullText };
@@ -1415,5 +1414,8 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
   } catch (err) {
     logger.error("Text gateway streaming failed:", err.message);
     return { text: "Having trouble connecting to the gateway right now." };
+  } finally {
+    // C3: always cancel reader to release the socket, regardless of exit path
+    if (reader) { try { reader.cancel(); } catch {} }
   }
 }

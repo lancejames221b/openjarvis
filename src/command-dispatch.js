@@ -233,9 +233,14 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   // ── Voice spawn ───────────────────────────────────────────────────
   // "spawn monitor kafka", "start a thread check build errors",
   // "create a thread summarize the logs", "run audit in a thread"
+  //
+  // Triggers: explicit STT variants of "spawn" only. Do NOT match "spam" or
+  // "span" — both are real English that users say naturally (e.g. "spam
+  // emails to Bob", "span the table"). For harder mishearings the user can
+  // fall back to "start a thread for X" or "run X in a thread".
   if (isAdmin) {
     const spawnLeadMatch = cleanedTranscript.match(
-      /^(?:spa[wnm]+|spon|sp[ao]n|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(.+)$/i
+      /^(?:spawn|spawm|spoan|spon|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(.+)$/i
     );
     const spawnTrailMatch = cleanedTranscript.match(
       /^run\s+(.+?)\s+in\s+a(?:\s+new)?\s+thread$/i

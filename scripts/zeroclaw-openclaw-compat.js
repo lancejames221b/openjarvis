@@ -56,6 +56,7 @@ const metrics = {
   sessionsRotated: 0,
   hooksAgent: 0,
   rssKills: 0,
+  clientAborts: 0,
 };
 
 // ── Session persistence ───────────────────────────────────────────────────────
@@ -98,8 +99,13 @@ const channelSessionLocks = new Map();
 const activeChildren = new Set();
 
 // ── Base args for all cursor-agent chat/ask calls ─────────────────────────────
+// --force auto-approves tool-use queries (WebFetch, shell writes). In headless
+// mode cursor-agent emits `webFetchRequestQuery` events expecting interactive
+// approval; without --force these are auto-rejected as "User Rejected" and the
+// agent reports "web access blocked" even though the network works fine.
+// --approve-mcps auto-approves MCP server connections (haivemind, etc.).
 const BASE_ARGS = [
-  "--print", "--trust",
+  "--print", "--trust", "--force", "--approve-mcps",
   "--output-format", "stream-json", "--stream-partial-output",
 ];
 
@@ -319,7 +325,7 @@ async function callCursorAgent(prompt, modelOverride, chatId) {
 
 // Stream cursor-agent NDJSON deltas directly to an SSE response.
 // Returns the resolvedSessionId once the stream completes.
-async function streamCursorToSSE(prompt, model, chatId, res) {
+async function streamCursorToSSE(prompt, model, chatId, res, req) {
   const completionId = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const start = Date.now();
@@ -328,8 +334,30 @@ async function streamCursorToSSE(prompt, model, chatId, res) {
     const child = spawnCursorStream(prompt, model, chatId);
     let lineBuf = "";
     let resolvedSessionId = chatId;
+    let clientAborted = false;
+
+    // Client-disconnect handler — kill the cursor-agent child when the HTTP
+    // client aborts the stream. Without this, aborted requests orphan the
+    // child process until RSS watchdog or shutdown kills it.
+    // Use res.on('close') rather than req.on('close') — the body-parser
+    // middleware consumes the request stream, and `res.close` fires reliably
+    // when the TCP connection closes on both normal end and abort.
+    const onClose = () => {
+      if (clientAborted) return;
+      // If the response completed cleanly, res.writableEnded is true — skip.
+      if (res.writableEnded) return;
+      clientAborted = true;
+      log("stream_client_aborted", { model, durationMs: Date.now() - start });
+      metrics.clientAborts = (metrics.clientAborts || 0) + 1;
+      try { child.kill("SIGTERM"); } catch {}
+      // Give it 2s to exit cleanly, then SIGKILL.
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 2_000).unref();
+      reject(new Error("client disconnected"));
+    };
+    res.once("close", onClose);
 
     function sendDelta(text) {
+      if (clientAborted) return;
       const chunk = {
         id: completionId,
         object: "chat.completion.chunk",
@@ -361,6 +389,8 @@ async function streamCursorToSSE(prompt, model, chatId, res) {
     });
     child.stderr.on("data", () => {});
     child.on("close", (code) => {
+      res.removeListener("close", onClose);
+      if (clientAborted) return; // already rejected with "client disconnected"
       if (lineBuf.trim()) handleLine(lineBuf);
       const durationMs = Date.now() - start;
       if (code !== 0) {
@@ -375,7 +405,11 @@ async function streamCursorToSSE(prompt, model, chatId, res) {
       log("cursor_agent_done", { code, durationMs, model, streaming: true });
       resolve(resolvedSessionId);
     });
-    child.on("error", (err) => { metrics.errors++; reject(err); });
+    child.on("error", (err) => {
+      res.removeListener("close", onClose);
+      metrics.errors++;
+      reject(err);
+    });
   });
 }
 
@@ -486,8 +520,10 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
 
       let resolvedSessionId;
       try {
-        resolvedSessionId = await streamCursorToSSE(prompt, model, chatId, res);
+        resolvedSessionId = await streamCursorToSSE(prompt, model, chatId, res, req);
       } catch (streamError) {
+        // Don't try to write to a closed/aborted socket.
+        if (streamError.message === "client disconnected" || res.writableEnded || req.destroyed) return;
         log("stream_error", { channelKey, model, error: streamError.message });
         res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
         res.write("data: [DONE]\n\n");

@@ -175,6 +175,14 @@ const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // Master ac
 const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // Contextual Jarvis-style ack on sub-agent spawn - default ON
 const CLAWDBOT_BOT_ID = process.env.CLAWDBOT_BOT_ID || ''; // Set CLAWDBOT_BOT_ID in .env to filter webhook callback messages
 
+// ── Voice-message auto-reply ──────────────────────────────────────────
+// Transcribes Discord mic-button messages and dispatches to LLM.
+// VOICE_MESSAGE_AUTO_REPLY=true to enable; VOICE_MESSAGE_CHANNELS comma-separated
+// allowlist of channel IDs (empty = all channels).
+const VOICE_MESSAGE_AUTO_REPLY = process.env.VOICE_MESSAGE_AUTO_REPLY === 'true';
+const VOICE_MESSAGE_CHANNELS = (process.env.VOICE_MESSAGE_CHANNELS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
 // ── Self-Mute TTS Queue ───────────────────────────────────────────────
 // When owner self-mutes, queue TTS output instead of speaking.
 // On unmute: "I have N updates - shall I brief you?"
@@ -1017,12 +1025,21 @@ client.on('messageCreate', async (message) => {
     return handleExplicitFocus(message, content);
   }
 
+  // H4a-cred: /cred — delete message immediately, store in haivemind + 1Password
+  if (/^\/cred(\s|$)/i.test(content)) {
+    const { parseCredCommand, handleCredCommand } = await import('./slash/cred.js');
+    const parsed = parseCredCommand(content);
+    if (parsed.isCredCommand) return handleCredCommand(message, parsed);
+  }
+
   // H4b: auto-focus update — runs BEFORE @mention dispatch so gateway
   // gets correct channel context (this is the race condition fix)
   await handleAutoFocusUpdate(message, content);
 
   // H5: Discord voice message (flag 8192 + .ogg attachment) — check before text handler
   if ((message.flags?.bitfield & 8192) !== 0) {
+    if (!VOICE_MESSAGE_AUTO_REPLY) return; // flag off — transcribe nothing
+    if (VOICE_MESSAGE_CHANNELS.length > 0 && !VOICE_MESSAGE_CHANNELS.includes(message.channelId)) return; // channel not allowlisted
     return handleVoiceTranscript(message);
   }
 

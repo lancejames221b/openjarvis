@@ -402,4 +402,63 @@ describe('command-dispatch.js', () => {
       expect(result.transcript).toBeTruthy();
     });
   });
+
+  // ── Voice spawn (admin, STT-tolerant, no false positives on real English) ─
+  describe('voice_spawn trigger', () => {
+    it('"spawn audit kafka" → voice_spawn with task', async () => {
+      const result = await dispatch('spawn audit kafka', 'spawn audit kafka');
+      expect(result.type).toBe('voice_spawn');
+      expect(result.task).toBe('audit kafka');
+    });
+
+    it('"spawm monitor the queue" (STT variant) → voice_spawn', async () => {
+      const result = await dispatch('spawm monitor the queue', 'spawm monitor the queue');
+      expect(result.type).toBe('voice_spawn');
+      expect(result.task).toBe('monitor the queue');
+    });
+
+    it('"spon check build errors" (STT variant) → voice_spawn', async () => {
+      const result = await dispatch('spon check build errors', 'spon check build errors');
+      expect(result.type).toBe('voice_spawn');
+      expect(result.task).toBe('check build errors');
+    });
+
+    it('"start a thread for audit kafka" → voice_spawn', async () => {
+      const result = await dispatch('start a thread for audit kafka', 'start a thread for audit kafka');
+      expect(result.type).toBe('voice_spawn');
+      expect(result.task).toBe('audit kafka');
+    });
+
+    it('"create a new thread summarize the logs" → voice_spawn', async () => {
+      const result = await dispatch('create a new thread summarize the logs', 'create a new thread summarize the logs');
+      expect(result.type).toBe('voice_spawn');
+      expect(result.task).toBe('summarize the logs');
+    });
+
+    it('"run audit in a thread" (trailing syntax) → voice_spawn', async () => {
+      const result = await dispatch('run audit in a thread', 'run audit in a thread');
+      expect(result.type).toBe('voice_spawn');
+      expect(result.task).toBe('audit');
+    });
+
+    it('"spam emails to bob" (real English) → NOT voice_spawn', async () => {
+      const result = await dispatch('spam emails to bob', 'spam emails to bob');
+      expect(result.type).not.toBe('voice_spawn');
+    });
+
+    it('"span the table" (real English) → NOT voice_spawn', async () => {
+      const result = await dispatch('span the table', 'span the table');
+      expect(result.type).not.toBe('voice_spawn');
+    });
+
+    it('"spanm the entries" (garbage) → NOT voice_spawn', async () => {
+      const result = await dispatch('spanm the entries', 'spanm the entries');
+      expect(result.type).not.toBe('voice_spawn');
+    });
+
+    it('non-admin "spawn audit kafka" → falls through (no voice_spawn)', async () => {
+      const result = await dispatchCommand('spawn audit kafka', 'spawn audit kafka', NON_ADMIN_ID, ALLOWED_USERS, ENROLLMENT_STATE);
+      expect(result.type).not.toBe('voice_spawn');
+    });
+  });
 });
