@@ -1,0 +1,14 @@
+[
+  {
+    "aliases": ["myapp", "app"],
+    "host": "my-server",
+    "path": "/home/user/dev/myapp",
+    "description": "My application (remote)"
+  },
+  {
+    "aliases": ["notes", "local-notes"],
+    "host": null,
+    "path": "/Users/me/Notes",
+    "description": "Personal notes (local Mac)"
+  }
+]

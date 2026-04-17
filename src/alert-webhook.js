@@ -221,10 +221,10 @@ async function executeReminderTier(id, reminder) {
       }
       
       case 'gateway': {
-        // Tier 3: Send through Clawdbot gateway to reach whatever channel the owner is active on
+        // Tier 3: Send through Jarvis gateway to reach whatever channel the owner is active on
         try {
-          const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-          const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
+          const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+          const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
           
           const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
             method: 'POST',
@@ -1148,8 +1148,8 @@ app.post('/handoff', async (req, res) => {
   
   // Inject handoff context into the gateway session so AI has full context
   try {
-    const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-    const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+    const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
     const SESSION_USER = process.env.SESSION_USER || 'jarvis-voice-user';
     const threadInfo = threadId ? `\nThread ID: ${threadId} (in channel ${channelId})` : (channelId ? `\nChannel ID: ${channelId}` : '');
     const postBackInfo = threadId 
@@ -1588,16 +1588,16 @@ app.post('/test-voice', async (req, res) => {
 
   try {
     // Sanity-check the gateway directly before calling brain
-    const gwUrl = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-    const gwToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const gwUrl = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+    const gwToken = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
     const pingRes = await fetch(`${gwUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${gwToken}`,
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'Reply: pong' }], max_tokens: 5, model: 'openclaw' }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'Reply: pong' }], max_tokens: 5, model: process.env.DEFAULT_MODEL || 'claude' }),
       signal: AbortSignal.timeout(10_000),
     });
     const pingData = await pingRes.json();

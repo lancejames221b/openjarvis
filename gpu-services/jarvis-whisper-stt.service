@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/jarvis-voice
-EnvironmentFile=%h/dev/jarvis-voice/.env
+EnvironmentFile=%h/jarvis-voice/.env
 ExecStart=%h/jarvis-voice/venv/bin/python3 %h/jarvis-voice/gpu-services/whisper_stt_service.py --model ${WHISPER_MODEL}
 Restart=on-failure
 RestartSec=30

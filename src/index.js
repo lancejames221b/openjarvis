@@ -61,12 +61,12 @@ import {
   updateDiscordMessageContent,
 } from './discord-memory.js';
 
-const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Webhook server bind address - matches TAILSCALE_IP in alert-webhook.js (defaults to localhost for non-Tailscale users)
 const WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || 'localhost';
 const WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || 3335;
 const WEBHOOK_BASE_URL = `http://${WEBHOOK_HOST}:${WEBHOOK_PORT}`;
-const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
 
 // ── Gateway Health Check ─────────────────────────────────────────────
 
@@ -173,7 +173,7 @@ const VOICE_CALLBACK_CHANNEL_ID = process.env.VOICE_CALLBACK_CHANNEL_ID || TEXT_
 const IMMEDIATE_ACKS_ENABLED = process.env.IMMEDIATE_ACKS_ENABLED === 'true'; // Feature flag - default OFF (was ON, removed for natural flow)
 const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // Master ack flag - default OFF (no more "On it, sir." before every response)
 const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // Contextual Jarvis-style ack on sub-agent spawn - default ON
-const CLAWDBOT_BOT_ID = process.env.CLAWDBOT_BOT_ID || ''; // Set CLAWDBOT_BOT_ID in .env to filter webhook callback messages
+const JARVIS_BOT_ID = process.env.JARVIS_BOT_ID || process.env.CLAWDBOT_BOT_ID || ''; // Filter webhook callback messages to this bot's own ID
 
 // ── Voice-message auto-reply ──────────────────────────────────────────
 // Transcribes Discord mic-button messages and dispatches to LLM.
@@ -1009,7 +1009,7 @@ client.on('messageCreate', async (message) => {
   // H2: webhook callback — bot messages only, specific channel
   if (WEBHOOK_CALLBACK_MODE &&
       message.channelId === VOICE_CALLBACK_CHANNEL_ID &&
-      message.author.id === CLAWDBOT_BOT_ID &&
+      message.author.id === JARVIS_BOT_ID &&
       message.author.id !== client.user.id) {
     return handleCallbackMessage(message);
   }
@@ -2058,7 +2058,7 @@ async function handleAutoFocusUpdate(message, content) {
   let registry;
   try {
     const { readFileSync } = await import('fs');
-    registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
+    registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || `${process.env.HOME}/dev/contexts/channel-registry.json`, 'utf8'));
   } catch { registry = { channels: {} }; }
 
   const ch = message.channel;
@@ -3529,7 +3529,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (dispatchResult.type === 'voice_move') {
       const { resolveChannel, setFocusById } = await import('./focus-state.js');
       const { target } = dispatchResult;
-      const registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json', 'utf8'));
+      const registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || `${process.env.HOME}/dev/contexts/channel-registry.json`, 'utf8'));
       // Try to find a voice channel ID from registry.voiceChannels
       let targetVoiceId = null;
       const query = target.toLowerCase();

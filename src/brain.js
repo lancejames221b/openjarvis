@@ -137,7 +137,7 @@ export function listPersonalities() {
   }
 }
 
-const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Speak endpoint — uses TAILSCALE_IP/ALERT_WEBHOOK_HOST so it works outside Tailscale too
 const _webhookHost = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || 'localhost';
 const _webhookPort = process.env.ALERT_WEBHOOK_PORT || 3335;
@@ -145,11 +145,11 @@ const SPEAK_URL = `http://${_webhookHost}:${_webhookPort}/speak`;
 const STOP_URL = `http://${_webhookHost}:${_webhookPort}/stop`;
 const REPLAY_URL = `http://${_webhookHost}:${_webhookPort}/replay`;
 const SPEAK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || '';
-const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
-const HOOKS_TOKEN = process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
-const voiceModel = process.env.VOICE_MODEL || 'openclaw'; // module-level so all functions share it
-const _dispatchModel = process.env.DISPATCH_MODEL || process.env.VOICE_MODEL || 'cursor-agent/claude-3-5-sonnet-20241022';
+const voiceModel = process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude'; // module-level so all functions share it
+const _dispatchModel = process.env.DISPATCH_MODEL || process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude-sonnet-4-6';
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
 
@@ -172,7 +172,7 @@ function resolvePrompt(filename, vars = {}) {
 
 // ── Gateway Resilience: Timeout, Retry, Circuit Breaker ──────────────
 
-const ACK_MODEL = 'openclaw'; // Gateway only accepts 'openclaw' — per-request model routing not supported
+const ACK_MODEL = process.env.DEFAULT_MODEL || 'claude'; // logical model alias sent to the gateway
 const ACK_TIMEOUT_MS = 8_000; // 8s hard limit — ack should return in <2s
 const CONTEXTUAL_ACK_TIMEOUT_MS = 1_500; // 1.5s hard limit for contextual dispatch acks
 // Master ack feature flag. Set VOICE_ACK_ENABLED=false to suppress all "On it, sir." style responses.
@@ -603,7 +603,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
 
   // ── Non-streaming path (VOICE_STREAMING=false) ──────────────────────
   // Fallback: fetch full response at once, split into sentences for TTS.
-  // zeroclaw-openclaw-compat on :22100 does support SSE; prefer streaming path.
+  // jarvis-gateway on :22100 supports SSE; prefer streaming path.
   if (!VOICE_STREAMING) {
     try {
       logger.info(`🔄 Non-streaming request to gateway (model: ${voiceModel})`);
@@ -619,7 +619,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           max_tokens: 8192,
           user: getActiveSessionUser(),
           stream: false,
-          model: 'openclaw',
+          model: voiceModel,
           ...THINKING_PARAM,
         }),
       }, signal);
@@ -686,14 +686,14 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
         'X-OpenClaw-Scopes': 'operator.write',
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
         user: getActiveSessionUser(),
         stream: true,
-        model: 'openclaw',
+        model: voiceModel,
         ...THINKING_PARAM,
       }),
     }, signal);
@@ -960,13 +960,13 @@ export async function generateResponse(userMessage, history = [], signal, option
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
         'X-OpenClaw-Scopes': 'operator.write',
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
         user: getActiveSessionUser(),
-        model: 'openclaw',
+        model: voiceModel,
         ...THINKING_PARAM,
       }),
     }, signal);
@@ -1015,10 +1015,10 @@ export async function generateAck(userMessage) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
         'X-OpenClaw-Scopes': 'operator.write',
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
-        model: 'openclaw',
+        model: voiceModel,
         stream: false,
         max_tokens: 30,
         ...THINKING_PARAM,
@@ -1102,10 +1102,10 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
         'X-OpenClaw-Scopes': 'operator.write',
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
-        model: 'openclaw',
+        model: voiceModel,
         stream: false,
         max_tokens: 50,
         ...THINKING_PARAM,
@@ -1159,10 +1159,10 @@ export async function generateContextualInterim(userRequest) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
         'X-OpenClaw-Scopes': 'operator.write',
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
-        model: 'openclaw',
+        model: voiceModel,
         stream: false,
         max_tokens: 30,
         ...THINKING_PARAM,
@@ -1235,13 +1235,13 @@ export async function generateTextResponse(userMessage, options = {}) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
         'X-OpenClaw-Scopes': 'operator.write',
-        'x-openclaw-scopes': 'operator.write',
+        'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
         user: options.sessionUser || getActiveSessionUser(),
-        model: 'openclaw',
+        model: voiceModel,
         ...THINKING_PARAM,
       }),
     }, undefined, channelId);
@@ -1360,13 +1360,13 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
         "Content-Type": "application/json",
         "Authorization": `Bearer ${GATEWAY_TOKEN}`,
         "X-OpenClaw-Scopes": "operator.write",
-        "x-openclaw-scopes": "operator.write",
+        "x-jarvis-scopes": "operator.write",
       },
       body: JSON.stringify({
         messages,
         max_tokens: 8192,
         user: options.sessionUser || getActiveSessionUser(),
-        model: "openclaw",
+        model: voiceModel,
         stream: true,
         ...THINKING_PARAM,
       }),

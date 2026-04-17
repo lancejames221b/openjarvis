@@ -21,8 +21,8 @@ import logger from './logger.js';
 import { listChannels } from './focus-state.js';
 import { listPersonalities } from './brain.js';
 
-const GATEWAY_URL = process.env.CLAWDBOT_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
-const GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN;
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 
 // Model: Haiku for speed. ~500ms for a classification call.

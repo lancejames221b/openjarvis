@@ -1,14 +1,18 @@
-# OpenJarvis
+# Jarvis Voice
 
 > Finally. Be Tony Stark.
 
 [![Discord DAVE E2EE](https://img.shields.io/badge/Discord%20DAVE-E2EE%20Compliant-5865F2)](https://discord.com/blog/dave-end-to-end-encryption-for-audio-video)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Powered by OpenClaw](https://img.shields.io/badge/Powered%20by-OpenClaw-blue)](https://openclaw.ai)
+[![Powered by Claude](https://img.shields.io/badge/Powered%20by-Claude-orange)](https://claude.ai)
 
-Not a chatbot. Not a voice assistant that sets timers. A full AI system with access to your calendar, email, code, search, databases, and every tool you've configured — that you talk to, out loud, and it talks back. In the right voice.
+**A Discord voice bot backed by the official Claude Code CLI.** Speak in a Discord voice channel — Jarvis hears you, routes your request through `claude -p`, and talks back. The same Claude you use day-to-day, now answering by voice in under 4 seconds.
 
-OpenJarvis is the voice layer for [OpenClaw](https://openclaw.ai). Speak in a Discord voice channel. Your OpenClaw agent thinks, acts, and responds — the same agent handling your Slack, your texts, your projects — now answering by voice in under 2 seconds.
+**→ [QUICKSTART.md](QUICKSTART.md)** — clone, configure, running in 5 minutes  
+**→ [docs/MULTI_ACCOUNT.md](docs/MULTI_ACCOUNT.md)** — route channels to different Claude accounts  
+**→ [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — common fixes
+
+Not a chatbot. Not a voice assistant that sets timers. A full AI system with access to your calendar, email, code, search, databases, and every tool Claude can reach — that you talk to, out loud, and it talks back. In the right voice.
 
 Run it hands-free over AirPods or any Bluetooth headset. **Blue team ops by voice.** Ask about live threats, pivot on IOCs, query your SIEM, run playbooks — no keyboard required. Tony Stark ran his SOC by talking to Jarvis. Now you can too.
 
@@ -44,19 +48,24 @@ Three tiers. Start with REACTOR and upgrade when you're ready.
 | Full skills library | | | ✅ |
 | **Setup time** | ~15 min | ~45 min | ~2 hrs |
 
-**REACTOR** — *"Your OpenClaw agent, now with a voice."*  
+**REACTOR** — *"Claude, now with a voice."*  
 **FRIDAY** — *"Your day, briefed. Your home, controlled. All by voice."*  
 **JARVIS** — *"Not a chatbot. Not a voice assistant. An AI system that runs your life."*
 
 ---
 
-## Install with OpenClaw
+## Quick install
 
-The fastest way to get running. Say or type this in your OpenClaw session:
+```bash
+git clone https://github.com/your-org/jarvis-voice.git
+cd jarvis-voice
+npm install
+claude login        # authenticate the Claude CLI once
+cp .env.example .env && $EDITOR .env   # fill in 8 required vars
+systemctl --user enable --now jarvis-gateway jarvis-voice
+```
 
-```
-install Jarvis
-```
+See **[QUICKSTART.md](QUICKSTART.md)** for full instructions including Discord bot setup.
 
 OpenClaw will use Opus High reasoning to walk you through the complete setup interactively — Discord bot creation, Python services, voiceprint enrollment, and tier selection. One conversation, zero guessing.
 

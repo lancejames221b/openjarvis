@@ -222,7 +222,8 @@ describe('haiku-ambient classifyAmbient()', () => {
     });
 
     it('no gateway token → UNCERTAIN', async () => {
-      const savedToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+      const savedToken = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+      delete process.env.JARVIS_GATEWAY_TOKEN;
       delete process.env.CLAWDBOT_GATEWAY_TOKEN;
       const mockFn = vi.fn();
       vi.stubGlobal('fetch', mockFn);
@@ -230,7 +231,7 @@ describe('haiku-ambient classifyAmbient()', () => {
       const result = await classifyAmbient('what time is it');
       expect(result).toBe('UNCERTAIN');
       expect(mockFn).not.toHaveBeenCalled();
-      process.env.CLAWDBOT_GATEWAY_TOKEN = savedToken;
+      process.env.JARVIS_GATEWAY_TOKEN = savedToken;
     });
   });
 

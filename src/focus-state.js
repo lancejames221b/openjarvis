@@ -22,8 +22,8 @@ const execAsync = promisify(_exec);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = join(__dirname, '..', 'data', 'focus-state.json');
-const REGISTRY_PATH = process.env.CHANNEL_REGISTRY_PATH || '/home/generic/dev/contexts/channel-registry.json';
-const CONTEXTS_DIR = process.env.CHANNEL_CONTEXTS_DIR || '/home/generic/dev/contexts';
+const REGISTRY_PATH = process.env.CHANNEL_REGISTRY_PATH || `${process.env.HOME || '/tmp'}/dev/contexts/channel-registry.json`;
+const CONTEXTS_DIR = process.env.CHANNEL_CONTEXTS_DIR || `${process.env.HOME || '/tmp'}/dev/contexts`;
 
 // ── Focus state ──────────────────────────────────────────────────────
 
@@ -381,13 +381,13 @@ async function _prefetchDiscordMessages(channelId, limit = 30) {
  */
 async function _prefetchHaivemind(channelId) {
   try {
-    const mcporterPath = process.env.MCPORTER_PATH || '/home/generic/.npm-global/bin/mcporter';
+    const mcporterPath = process.env.MCPORTER_PATH || `${process.env.HOME}/.npm-global/bin/mcporter`;
     // Shell-safe: wrap key=value args in double quotes, escape inner content
     // CRITICAL: mcporter reads config relative to CWD — must run from ~/dev
     const query = `${channelId} context`.replace(/"/g, '\\"');
     const { stdout } = await execAsync(
       `${mcporterPath} call haivemind.search_memories "query=${query}" "limit=8"`,
-      { timeout: 10000, cwd: '/home/generic/dev', env: { ...process.env, PATH: `${process.env.PATH}:/home/generic/.npm-global/bin` } }
+      { timeout: 10000, cwd: `${process.env.HOME}/dev`, env: { ...process.env, PATH: `${process.env.PATH}:${process.env.HOME}/.npm-global/bin` } }
     );
     const raw = stdout.trim();
     const data = JSON.parse(raw);
