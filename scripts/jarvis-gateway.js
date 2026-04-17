@@ -126,6 +126,28 @@ function saveCreatedAt() {
   catch (e) { log("created_save_warn", { error: e.message }); }
 }
 
+// Prune sessions older than 30 days at startup to keep the store bounded.
+{
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  let pruned = 0;
+  for (const [key] of channelSessions) {
+    const age = channelCreatedAt.get(key);
+    if (age && now - age > THIRTY_DAYS_MS) {
+      channelSessions.delete(key);
+      channelCreatedAt.delete(key);
+      channelTurns.delete(key);
+      pruned++;
+    }
+  }
+  if (pruned > 0) {
+    log("sessions_pruned", { count: pruned });
+    saveSessions();
+    saveTurns();
+    saveCreatedAt();
+  }
+}
+
 // Per-channel in-flight Promise lock — prevents duplicate create-chat on concurrent requests
 const channelSessionLocks = new Map();
 
@@ -581,6 +603,12 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
       }
     }
 
+    // Serialize concurrent new-session requests for the same channel.
+    // If another request is mid-create for this channel, wait for it to finish so we
+    // don't spawn two separate claude -p sessions simultaneously.
+    const inflightLock = channelSessionLocks.get(channelKey);
+    if (inflightLock) await inflightLock;
+
     const chatId = await getOrCreateChatId(channelKey);
 
     // On a resumed session claude already has full history — only send the new user message.
@@ -588,6 +616,15 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     const prompt = chatId
       ? contentToText(lastUserMsg?.content || "")
       : collapseMessages(req.body?.messages || []);
+
+    // Hold a lock for the duration of a new-session spawn so concurrent requests wait.
+    let lockResolve = null;
+    if (!chatId) {
+      channelSessionLocks.set(channelKey, new Promise(r => { lockResolve = r; }));
+    }
+    const releaseLock = () => {
+      if (lockResolve) { lockResolve(); channelSessionLocks.delete(channelKey); lockResolve = null; }
+    };
 
     if (wantStream) {
       res.status(200);
@@ -599,6 +636,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
       try {
         resolvedSessionId = await streamClaudeToSSE(prompt, model, chatId, res, req, channelKey);
       } catch (streamError) {
+        releaseLock();
         // Don't try to write to a closed/aborted socket.
         if (streamError.message === "client disconnected" || res.writableEnded || req.destroyed) return;
         log("stream_error", { channelKey, model, error: streamError.message });
@@ -609,6 +647,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
       }
 
       setSession(channelKey, resolvedSessionId);
+      releaseLock();
 
       res.write(`data: ${JSON.stringify({
         id: `chatcmpl-${crypto.randomUUID()}`,
@@ -625,8 +664,10 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     // Non-streaming path
     const result = await callClaudeAgent(prompt, requestedModel, chatId, channelKey);
     setSession(channelKey, result.sessionId);
+    releaseLock();
     res.json(openAiCompletionResponse(requestedModel, result.text));
   } catch (error) {
+    releaseLock();
     metrics.errors++;
     log("completions_error", { error: String(error.message || error) });
     res.status(502).json({ error: String(error.message || error) });
