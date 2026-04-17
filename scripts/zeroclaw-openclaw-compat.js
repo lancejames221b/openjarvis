@@ -105,6 +105,13 @@ const BASE_ARGS = [
   "-p", "--verbose", "--dangerously-skip-permissions",
   "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config",
   "--output-format", "stream-json", "--include-partial-messages",
+  "--append-system-prompt", [
+    "MEMORY TOOL (mcporter CLI — use Bash):",
+    "  Store: mcporter call haivemind.store_memory '{\"content\":\"...\",\"category\":\"global\"}'",
+    "  Search: mcporter call haivemind.search_memories '{\"query\":\"...\",\"limit\":5}'",
+    "Never confirm a memory is saved unless the Bash command exited 0 and returned a memory_id.",
+    "Never confirm a memory was found unless the Bash command returned actual results.",
+  ].join("\n"),
 ];
 
 function log(event, data = {}) {
