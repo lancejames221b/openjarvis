@@ -25,6 +25,8 @@ import { isVisualModeEnabled } from './visual-mode.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const MAC_SSH_HOST = process.env.MAC_SSH_HOST || '';
+
 // ON_SCREEN mode — mirrors brain.js behaviour
 // no_ack: silent after open
 // ack_post: speak after opening
@@ -123,7 +125,7 @@ async function cursorOpenHandler(transcript) {
   logger.info({ project: project.aliases[0], cmd }, '⚡ shortcut: opening project in Cursor');
 
   try {
-    execSync(`ssh lj@100.88.41.102 '${cmd}'`, { timeout: 10000, stdio: 'pipe' });
+    execSync(`ssh ${MAC_SSH_HOST} '${cmd}'`, { timeout: 10000, stdio: 'pipe' });
   } catch (err) {
     logger.warn({ err: err.message, project: project.aliases[0] }, '⚡ shortcut: Cursor open via SSH failed');
     // Try via openOnMac as fallback for local paths
