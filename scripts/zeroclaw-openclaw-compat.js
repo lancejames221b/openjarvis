@@ -105,13 +105,6 @@ const BASE_ARGS = [
   "-p", "--verbose", "--dangerously-skip-permissions",
   "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config",
   "--output-format", "stream-json", "--include-partial-messages",
-  "--append-system-prompt", [
-    "MEMORY TOOL (mcporter CLI — use Bash):",
-    "  Store: mcporter call haivemind.store_memory '{\"content\":\"...\",\"category\":\"global\"}'",
-    "  Search: mcporter call haivemind.search_memories '{\"query\":\"...\",\"limit\":5}'",
-    "Never confirm a memory is saved unless the Bash command exited 0 and returned a memory_id.",
-    "Never confirm a memory was found unless the Bash command returned actual results.",
-  ].join("\n"),
 ];
 
 function log(event, data = {}) {
@@ -445,6 +438,26 @@ async function postDiscordMessage(channelId, content) {
   }
 }
 
+const HAIVEMIND_URL = process.env.HAIVEMIND_URL || `http://127.0.0.1:${process.env.HAIVEMIND_PORT || 8900}`;
+const REMEMBER_RE = /^(?:jarvis[,\s]+)?(?:remember|store|save|note)\s+(?:this[:\s]+)?(.+)/i;
+
+// Store a memory directly via haivemind HTTP — no LLM involvement.
+async function storeMemory(content, category = "global") {
+  const res = await fetch(`${HAIVEMIND_URL}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "store_memory", arguments: { content, category } },
+    }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok) throw new Error(`haivemind ${res.status}`);
+  const body = await res.json();
+  const text = body?.result?.content?.[0]?.text || "{}";
+  return JSON.parse(text);
+}
+
 async function postSpeakSummary(message, taskId) {
   if (!ALERT_WEBHOOK_TOKEN || !message) return;
   await fetch(SPEAK_URL, {
@@ -489,6 +502,33 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     const wantStream = Boolean(req.body?.stream);
 
     if (wantStream) metrics.requestsStreaming++;
+
+    // Intercept "remember X" patterns — store directly to haivemind, skip claude.
+    const lastUserMsg = (req.body?.messages || []).filter(m => m?.role === "user").pop();
+    const rememberMatch = lastUserMsg && REMEMBER_RE.exec(contentToText(lastUserMsg.content));
+    if (rememberMatch) {
+      const content = rememberMatch[1].trim();
+      try {
+        const stored = await storeMemory(content);
+        const memId = stored?.memory_id || stored?.id || "ok";
+        const reply = `Saved. (${memId.slice(0, 8)})`;
+        log("memory_stored", { channelKey, chars: content.length, memId });
+        if (wantStream) {
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
+          const chunk = { id: `chatcmpl-${crypto.randomUUID()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: requestedModel, choices: [{ index: 0, delta: { content: reply }, finish_reason: null }] };
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+        } else {
+          res.json(openAiCompletionResponse(requestedModel, reply));
+        }
+        return;
+      } catch (e) {
+        log("memory_store_failed", { channelKey, error: e.message });
+        // fall through to claude on failure
+      }
+    }
 
     const chatId = await getOrCreateChatId(channelKey);
 
