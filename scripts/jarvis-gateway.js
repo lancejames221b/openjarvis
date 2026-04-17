@@ -549,7 +549,6 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
   try {
     const requestedModel = String(req.body?.model || DEFAULT_CLAUDE_MODEL);
     const model = resolveModel(requestedModel) || DEFAULT_CLAUDE_MODEL;
-    const prompt = collapseMessages(req.body?.messages || []);
     const channelKey = String(req.body?.user || "").trim() || null;
     const wantStream = Boolean(req.body?.stream);
 
@@ -583,6 +582,12 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     }
 
     const chatId = await getOrCreateChatId(channelKey);
+
+    // On a resumed session claude already has full history — only send the new user message.
+    // On a new session (no chatId yet) send the full collapsed context including system prompt.
+    const prompt = chatId
+      ? contentToText(lastUserMsg?.content || "")
+      : collapseMessages(req.body?.messages || []);
 
     if (wantStream) {
       res.status(200);
