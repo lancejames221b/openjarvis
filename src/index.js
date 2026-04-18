@@ -41,6 +41,7 @@ import { initHud, hudTaskUpdate, hudQueueUpdate, hudRefresh } from './hud.js';
 import { isMobileModeEnabled } from './mobile-mode.js';
 import { isVisualModeEnabled, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { isVerboseModeEnabled } from './verbose-mode.js';
+import { verboseSessions } from './verbose-sessions.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand } from './slash-commands.js';
@@ -1938,9 +1939,12 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
         autoArchiveDuration: 60,
       });
       const ls = await createLiveStream(thread.id, discordToken);
+      const ac = new AbortController();
+      verboseSessions.set(_parentChannelId, { ac, ls });
       let fullText = '';
       try {
         await generateTextResponseStreaming(finalPrompt, (chunk) => {
+          if (ac.signal.aborted) return;
           fullText += chunk;
           ls.update(chunk);
         }, {
@@ -1948,9 +1952,14 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
           sessionUser: _sessionUser,
           discordChatHistory,
         });
+        if (ac.signal.aborted) {
+          verboseSessions.delete(_parentChannelId);
+          return;
+        }
         if (!fullText || fullText.length < 2) {
           ls.stop();
           await thread.delete().catch(() => {});
+          verboseSessions.delete(_parentChannelId);
           logger.info(`@mention: empty response (sub-agent likely spawned)`);
           return;
         }
@@ -1960,6 +1969,8 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
         ls.stop();
         logger.error(`@mention verbose stream error: ${streamErr.message}`);
         await message.reply("Having trouble processing that right now, sir.").catch(() => {});
+      } finally {
+        verboseSessions.delete(_parentChannelId);
       }
       return;
     } catch (threadErr) {
@@ -3310,6 +3321,22 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     if (await fsmHandleSleepCheck(cleanLower, 'voice-command', userId, _pendingUtterance, synthesizeSpeech, audioQueue)) return;
     // If fsmHandleSleepCheck returned false with autoSleepAfterTask set, fall through to task dispatch
     // ──────────────────────────────────────────────────────
+
+    // ── "Kill" voice command — abort all active voice tasks ──────────────
+    if (/^kill(\s+all)?$/.test(cleanLower)) {
+      if (activeTasks.size > 0) {
+        for (const [id, task] of activeTasks) {
+          task.controller.abort();
+        }
+        activeTasks.clear();
+        ttsPipeline.clear();
+        postActivity('🛑 Kill — all voice tasks aborted');
+        logger.info('🛑 Kill command: aborted all active voice tasks');
+      } else {
+        logger.info('🛑 Kill command: no active tasks');
+      }
+      return;
+    }
 
     // ── Enrollment Gating: no voiceprint enrolled (strict mode) ──
     // Only allow "enroll my voice" and sleep commands; block everything else.

@@ -8,6 +8,7 @@
  */
 
 import { createLiveStream } from '../live-stream.js';
+import { verboseSessions } from '../verbose-sessions.js';
 import logger from '../logger.js';
 
 const GATEWAY_URL      = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
@@ -114,16 +115,29 @@ export async function handleSpawnCommand(interaction) {
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  */
 export async function handleStopCommand(interaction) {
-  const threadId = interaction.channelId;
-  const session = _activeSessions.get(threadId);
-  if (!session) {
-    await interaction.reply({ content: 'No active spawn in this thread.', ephemeral: true });
+  const channelId = interaction.channelId;
+
+  // Check spawn session (thread-based agent)
+  const spawnSession = _activeSessions.get(channelId);
+  if (spawnSession) {
+    spawnSession.ac.abort();
+    spawnSession.ls.stop();
+    _activeSessions.delete(channelId);
+    await interaction.reply({ content: 'Agent stopped.', ephemeral: false });
     return;
   }
-  session.ac.abort();
-  session.ls.stop();
-  _activeSessions.delete(threadId);
-  await interaction.reply({ content: 'Agent stopped.', ephemeral: false });
+
+  // Check verbose text-channel stream
+  const verboseSession = verboseSessions.get(channelId);
+  if (verboseSession) {
+    verboseSession.ac.abort();
+    verboseSession.ls.stop();
+    verboseSessions.delete(channelId);
+    await interaction.reply({ content: 'Response stopped.', ephemeral: false });
+    return;
+  }
+
+  await interaction.reply({ content: 'No active agent or response in this channel.', ephemeral: true });
 }
 
 async function _runStreamingAgent(prompt, threadId, ls, ac) {
