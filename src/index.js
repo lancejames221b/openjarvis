@@ -1929,6 +1929,46 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     ? `agent:main:discord:channel:${_parentChannelId}:thread:${_threadId}`
     : `agent:main:discord:channel:${_parentChannelId}`;
 
+  // Verbose mode: stream live into a thread so activity is always visible
+  if (isVerboseModeEnabled() && !_isThread) {
+    try {
+      const { createLiveStream } = await import('./live-stream.js');
+      const discordToken = process.env.DISCORD_TOKEN || '';
+      const thread = await message.startThread({
+        name: content.substring(0, 80) || 'response',
+        autoArchiveDuration: 60,
+      });
+      const ls = await createLiveStream(thread.id, discordToken);
+      let fullText = '';
+      try {
+        await generateTextResponseStreaming(finalPrompt, (chunk) => {
+          fullText += chunk;
+          ls.update(chunk);
+        }, {
+          channelId: _parentChannelId,
+          sessionUser: _sessionUser,
+          discordChatHistory,
+        });
+        if (!fullText || fullText.length < 2) {
+          ls.stop();
+          await thread.delete().catch(() => {});
+          logger.info(`@mention: empty response (sub-agent likely spawned)`);
+          return;
+        }
+        await ls.finish(fullText);
+        logger.info(`@mention: verbose stream complete (${fullText.length} chars)`);
+      } catch (streamErr) {
+        ls.stop();
+        logger.error(`@mention verbose stream error: ${streamErr.message}`);
+        await message.reply("Having trouble processing that right now, sir.").catch(() => {});
+      }
+      return;
+    } catch (threadErr) {
+      logger.error(`@mention verbose thread error: ${threadErr.message}`);
+      // fall through to normal reply
+    }
+  }
+
   try {
     const result = await generateTextResponse(finalPrompt, {
       channelId: _parentChannelId,
