@@ -1042,8 +1042,10 @@ client.on('messageCreate', async (message) => {
 
   // H5: Discord voice message (flag 8192 + .ogg attachment) — check before text handler
   if ((message.flags?.bitfield & 8192) !== 0) {
-    if (!VOICE_MESSAGE_AUTO_REPLY) return; // flag off — transcribe nothing
-    if (VOICE_MESSAGE_CHANNELS.length > 0 && !VOICE_MESSAGE_CHANNELS.includes(message.channelId)) return; // channel not allowlisted
+    logger.info(`[voice-h5] VOICE_MESSAGE_AUTO_REPLY=${VOICE_MESSAGE_AUTO_REPLY} channels=${VOICE_MESSAGE_CHANNELS.length}`);
+    if (!VOICE_MESSAGE_AUTO_REPLY) { logger.warn('[voice-h5] blocked by AUTO_REPLY=false'); return; }
+    if (VOICE_MESSAGE_CHANNELS.length > 0 && !VOICE_MESSAGE_CHANNELS.includes(message.channelId)) { logger.warn('[voice-h5] blocked by channel allowlist'); return; }
+    logger.info('[voice-h5] calling handleVoiceTranscript');
     return handleVoiceTranscript(message);
   }
 
