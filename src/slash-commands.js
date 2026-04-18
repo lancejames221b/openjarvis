@@ -68,7 +68,7 @@ const MODEL_CMD = new SlashCommandBuilder()
 
 const VERBOSE_CMD = new SlashCommandBuilder()
   .setName('verbose')
-  .setDescription('Stream every voice response to a live Discord thread (TTS still plays)')
+  .setDescription('Stream text channel responses to a live thread to watch activity in real-time')
   .addSubcommand(sub => sub.setName('on').setDescription('Enable verbose mode'))
   .addSubcommand(sub => sub.setName('off').setDescription('Disable verbose mode'))
   .addSubcommand(sub => sub.setName('status').setDescription('Check current verbose mode state'));
@@ -189,13 +189,13 @@ export async function handleSlashCommand(interaction, allowedUsers) {
     const sub = interaction.options.getSubcommand();
     if (sub === 'on') {
       setVerboseMode(true);
-      await interaction.reply({ content: '📡 **Verbose mode ON** — every voice response streams to a live thread. TTS still plays.', ephemeral: false });
+      await interaction.reply({ content: '📡 **Verbose mode ON** — text channel responses stream live to a thread.', ephemeral: false });
     } else if (sub === 'off') {
       setVerboseMode(false);
-      await interaction.reply({ content: '🔇 **Verbose mode OFF** — voice only, no thread streaming.', ephemeral: false });
+      await interaction.reply({ content: '🔇 **Verbose mode OFF** — normal replies.', ephemeral: false });
     } else if (sub === 'status') {
       const on = isVerboseModeEnabled();
-      await interaction.reply({ content: on ? '📡 **Verbose mode is ON** — responses stream to threads.' : '🔇 **Verbose mode is OFF**', ephemeral: true });
+      await interaction.reply({ content: on ? '📡 **Verbose mode is ON** — text responses stream to threads.' : '🔇 **Verbose mode is OFF**', ephemeral: true });
     }
     return true;
   }
