@@ -27,6 +27,7 @@ function _persistModel(alias) {
 import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
+import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -48,6 +49,18 @@ const SPAWN_CMD = new SlashCommandBuilder()
 const STOP_CMD = new SlashCommandBuilder()
   .setName('stop')
   .setDescription('Stop the active agent in this thread');
+
+const DIR_CMD = new SlashCommandBuilder()
+  .setName('dir')
+  .setDescription('Show or change the working directory for shell commands (owner only)')
+  .addStringOption(opt =>
+    opt.setName('path').setDescription('Directory to change to (omit to show current)').setRequired(false));
+
+const SHELL_CMD = new SlashCommandBuilder()
+  .setName('shell')
+  .setDescription('Run a shell command in the current working directory (owner only)')
+  .addStringOption(opt =>
+    opt.setName('command').setDescription('Shell command to execute').setRequired(true));
 
 const CRED_CMD = new SlashCommandBuilder()
   .setName('cred')
@@ -111,9 +124,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /dir, /shell commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -207,6 +220,16 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       const on = isVerboseModeEnabled();
       await interaction.reply({ content: on ? '📡 **Verbose mode is ON** — text responses stream to threads.' : '🔇 **Verbose mode is OFF**', ephemeral: true });
     }
+    return true;
+  }
+
+  if (interaction.commandName === 'dir') {
+    await handleDirCommand(interaction, allowedUsers);
+    return true;
+  }
+
+  if (interaction.commandName === 'shell') {
+    await handleShellCommand(interaction, allowedUsers);
     return true;
   }
 
