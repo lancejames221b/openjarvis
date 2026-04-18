@@ -1006,8 +1006,6 @@ initDiscordMemory();
 
 client.on('messageCreate', async (message) => {
   // H1: always record to discord-memory
-  const _flags = message.flags?.bitfield ?? 0;
-  if (_flags & 8192) logger.info(`[voice-msg] received flags=${_flags} channel=${message.channelId} author=${message.author?.id}`);
   maybeRecordDiscordMessage(message);
 
   // H2: webhook callback — bot messages only, specific channel
@@ -1042,10 +1040,8 @@ client.on('messageCreate', async (message) => {
 
   // H5: Discord voice message (flag 8192 + .ogg attachment) — check before text handler
   if ((message.flags?.bitfield & 8192) !== 0) {
-    logger.info(`[voice-h5] VOICE_MESSAGE_AUTO_REPLY=${VOICE_MESSAGE_AUTO_REPLY} channels=${VOICE_MESSAGE_CHANNELS.length}`);
-    if (!VOICE_MESSAGE_AUTO_REPLY) { logger.warn('[voice-h5] blocked by AUTO_REPLY=false'); return; }
-    if (VOICE_MESSAGE_CHANNELS.length > 0 && !VOICE_MESSAGE_CHANNELS.includes(message.channelId)) { logger.warn('[voice-h5] blocked by channel allowlist'); return; }
-    logger.info('[voice-h5] calling handleVoiceTranscript');
+    if (!VOICE_MESSAGE_AUTO_REPLY) return;
+    if (VOICE_MESSAGE_CHANNELS.length > 0 && !VOICE_MESSAGE_CHANNELS.includes(message.channelId)) return;
     return handleVoiceTranscript(message);
   }
 
@@ -2196,11 +2192,10 @@ async function handleVoiceTranscript(message) {
   }
   _processedMsgIds.add(vmDedupKey);
 
-  logger.info(`[voice-transcript] attachments: ${message.attachments.size} — ${[...message.attachments.values()].map(a => `${a.name}|${a.contentType}|${a.url?.slice(0,60)}`).join(', ')}`);
   const oggAttachment = message.attachments.find(a =>
     a.contentType?.includes('audio/ogg') || a.url?.endsWith('.ogg')
   );
-  if (!oggAttachment) { logger.warn('[voice-transcript] no ogg attachment found, skipping'); return; }
+  if (!oggAttachment) return;
 
   try {
     // Download the voice message
