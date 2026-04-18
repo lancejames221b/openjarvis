@@ -1006,6 +1006,8 @@ initDiscordMemory();
 
 client.on('messageCreate', async (message) => {
   // H1: always record to discord-memory
+  const _flags = message.flags?.bitfield ?? 0;
+  if (_flags & 8192) logger.info(`[voice-msg] received flags=${_flags} channel=${message.channelId} author=${message.author?.id}`);
   maybeRecordDiscordMessage(message);
 
   // H2: webhook callback — bot messages only, specific channel
