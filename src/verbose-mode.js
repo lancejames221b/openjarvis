@@ -20,9 +20,9 @@ export function isVerboseModeEnabled() {
   try {
     const env = readFileSync(ENV_FILE, 'utf-8');
     const match = env.match(/^VOICE_VERBOSE_MODE=(true|false)$/m);
-    return match ? match[1] === 'true' : false;
+    return match ? match[1] === 'true' : true;
   } catch {
-    return false;
+    return true;
   }
 }
 
