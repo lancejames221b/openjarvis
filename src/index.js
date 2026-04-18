@@ -45,6 +45,7 @@ import { verboseSessions } from './verbose-sessions.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand } from './slash-commands.js';
+import { canAccessChannel, isOwner as isChannelOwner } from './channel-access.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { touchFocus } from './focus-state.js';
@@ -1018,7 +1019,7 @@ client.on('messageCreate', async (message) => {
 
   // All remaining handlers: skip bots and non-allowed users
   if (message.author.bot) return;
-  if (ALLOWED_USERS.length > 0 && !ALLOWED_USERS.includes(message.author.id)) return;
+  if (!canAccessChannel(message.author.id, message.channelId)) return;
 
   const content = (message.content || '').trim();
 

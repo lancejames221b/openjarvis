@@ -28,6 +28,7 @@ import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
+import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -96,6 +97,22 @@ const VERBOSE_CMD = new SlashCommandBuilder()
   .addSubcommand(sub => sub.setName('off').setDescription('Disable verbose mode'))
   .addSubcommand(sub => sub.setName('status').setDescription('Check current verbose mode state'));
 
+const ACCESS_CMD = new SlashCommandBuilder()
+  .setName('access')
+  .setDescription('Manage channel-scoped access grants (owner only)')
+  .addSubcommand(sub =>
+    sub.setName('grant')
+      .setDescription('Grant a user access to this channel')
+      .addUserOption(opt =>
+        opt.setName('user').setDescription('User to grant access to').setRequired(true)))
+  .addSubcommand(sub =>
+    sub.setName('revoke')
+      .setDescription('Revoke a user\'s access from this channel')
+      .addUserOption(opt =>
+        opt.setName('user').setDescription('User to revoke access from').setRequired(true)))
+  .addSubcommand(sub =>
+    sub.setName('list').setDescription('List all channel access grants'));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -124,9 +141,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /dir, /shell commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /dir, /shell, /access commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -139,7 +156,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
   if (!interaction.isChatInputCommand()) return false;
 
   if (interaction.commandName === 'spawn') {
-    if (!allowedUsers.includes(interaction.user.id)) {
+    if (!isChannelOwner(interaction.user.id)) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
@@ -148,7 +165,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
   }
 
   if (interaction.commandName === 'stop') {
-    if (!allowedUsers.includes(interaction.user.id)) {
+    if (!isChannelOwner(interaction.user.id)) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
@@ -157,7 +174,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
   }
 
   if (interaction.commandName === 'cred') {
-    if (!allowedUsers.includes(interaction.user.id)) {
+    if (!isChannelOwner(interaction.user.id)) {
       await interaction.reply({ content: '🚫 Not authorized.', ephemeral: true });
       return true;
     }
@@ -180,7 +197,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
   }
 
   if (interaction.commandName === 'model') {
-    if (!allowedUsers.includes(interaction.user.id)) {
+    if (!isChannelOwner(interaction.user.id)) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
@@ -205,7 +222,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
   }
 
   if (interaction.commandName === 'verbose') {
-    if (!allowedUsers.includes(interaction.user.id)) {
+    if (!isChannelOwner(interaction.user.id)) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
@@ -233,10 +250,46 @@ export async function handleSlashCommand(interaction, allowedUsers) {
     return true;
   }
 
+  if (interaction.commandName === 'access') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === 'grant') {
+      const target = interaction.options.getUser('user');
+      const added = grantAccess(target.id, interaction.channelId);
+      await interaction.reply({
+        content: added
+          ? `Granted <@${target.id}> access to <#${interaction.channelId}>.`
+          : `<@${target.id}> already has access to <#${interaction.channelId}>.`,
+        ephemeral: true,
+      });
+    } else if (sub === 'revoke') {
+      const target = interaction.options.getUser('user');
+      const removed = revokeAccess(target.id, interaction.channelId);
+      await interaction.reply({
+        content: removed
+          ? `Revoked <@${target.id}> access from <#${interaction.channelId}>.`
+          : `<@${target.id}> had no access to <#${interaction.channelId}>.`,
+        ephemeral: true,
+      });
+    } else if (sub === 'list') {
+      const grants = listAccess();
+      if (grants.length === 0) {
+        await interaction.reply({ content: 'No channel access grants configured.', ephemeral: true });
+      } else {
+        const lines = grants.map(g => `<#${g.channelId}>: ${g.userIds.map(u => `<@${u}>`).join(', ')}`).join('\n');
+        await interaction.reply({ content: `**Channel access grants:**\n${lines}`, ephemeral: true });
+      }
+    }
+    return true;
+  }
+
   if (interaction.commandName !== 'visual') return false;
 
   // Auth check — only allowed users
-  if (!allowedUsers.includes(interaction.user.id)) {
+  if (!isChannelOwner(interaction.user.id)) {
     await interaction.reply({ content: '🚫 Not authorized.', ephemeral: true });
     return true;
   }
