@@ -2194,10 +2194,11 @@ async function handleVoiceTranscript(message) {
   }
   _processedMsgIds.add(vmDedupKey);
 
+  logger.info(`[voice-transcript] attachments: ${message.attachments.size} — ${[...message.attachments.values()].map(a => `${a.name}|${a.contentType}|${a.url?.slice(0,60)}`).join(', ')}`);
   const oggAttachment = message.attachments.find(a =>
     a.contentType?.includes('audio/ogg') || a.url?.endsWith('.ogg')
   );
-  if (!oggAttachment) return;
+  if (!oggAttachment) { logger.warn('[voice-transcript] no ogg attachment found, skipping'); return; }
 
   try {
     // Download the voice message
