@@ -239,6 +239,14 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   // emails to Bob", "span the table"). For harder mishearings the user can
   // fall back to "start a thread for X" or "run X in a thread".
   if (isAdmin) {
+    // Model-explicit: "spawn with opus: check kafka", "spawn haiku analyze logs"
+    const spawnModelMatch = cleanedTranscript.match(
+      /^(?:spawn|spawm|spoan|spon|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(?:with\s+)?(opus|haiku|sonnet|claude)[\s:]+(.+)$/i
+    );
+    if (spawnModelMatch) {
+      return { type: 'voice_spawn', model: spawnModelMatch[1].toLowerCase(), task: spawnModelMatch[2].trim() };
+    }
+
     const spawnLeadMatch = cleanedTranscript.match(
       /^(?:spawn|spawm|spoan|spon|(?:start|create|open)\s+(?:a\s+)?(?:new\s+)?thread(?:\s+for)?)\s+(.+)$/i
     );

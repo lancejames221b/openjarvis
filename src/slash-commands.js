@@ -33,7 +33,17 @@ const SPAWN_CMD = new SlashCommandBuilder()
   .setName('spawn')
   .setDescription('Spawn a dedicated cursor-agent session in a new thread')
   .addStringOption(opt =>
-    opt.setName('prompt').setDescription('Task or prompt for the agent').setRequired(true));
+    opt.setName('prompt').setDescription('Task or prompt for the agent').setRequired(true))
+  .addStringOption(opt =>
+    opt.setName('model')
+      .setDescription('Model override (default: auto-selected by prompt keywords)')
+      .setRequired(false)
+      .addChoices(
+        { name: 'claude (default)', value: 'claude' },
+        { name: 'sonnet', value: 'sonnet' },
+        { name: 'opus (deep/heavy tasks)', value: 'opus' },
+        { name: 'haiku (fast/light)', value: 'haiku' },
+      ));
 
 const STOP_CMD = new SlashCommandBuilder()
   .setName('stop')

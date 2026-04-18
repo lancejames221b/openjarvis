@@ -38,6 +38,7 @@ export async function handleSpawnCommand(interaction) {
     await interaction.reply({ content: 'Prompt is required.', ephemeral: true });
     return;
   }
+  const explicitModel = interaction.options.getString('model') || null;
 
   // Defer immediately — thread creation + agent startup can take a few seconds
   await interaction.deferReply();
@@ -105,7 +106,7 @@ export async function handleSpawnCommand(interaction) {
   _activeSessions.set(threadId, { ac, ls });
 
   // Fire off streaming call — don't await, runs in background
-  _runStreamingAgent(prompt, threadId, ls, ac).finally(() => {
+  _runStreamingAgent(prompt, threadId, ls, ac, explicitModel).finally(() => {
     _activeSessions.delete(threadId);
   });
 }
@@ -140,9 +141,9 @@ export async function handleStopCommand(interaction) {
   await interaction.reply({ content: 'No active agent or response in this channel.', ephemeral: true });
 }
 
-async function _runStreamingAgent(prompt, threadId, ls, ac) {
+async function _runStreamingAgent(prompt, threadId, ls, ac, explicitModel = null) {
   const channelKey = `spawn:${threadId}`;
-  const model = _selectModel(prompt);
+  const model = explicitModel || _selectModel(prompt);
   let finalText = '';
   logger.info(`[spawn] model=${model} thread=${threadId}`);
 
@@ -213,7 +214,7 @@ async function _runStreamingAgent(prompt, threadId, ls, ac) {
  * @param {string} botToken       - Discord bot token
  * @returns {Promise<string>}     - threadId of the created thread
  */
-export async function runVoiceSpawn(task, textChannelId, botToken) {
+export async function runVoiceSpawn(task, textChannelId, botToken, model = null) {
   const taskSlug = task.slice(0, 48).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'agent session';
 
   // Create thread
@@ -243,7 +244,7 @@ export async function runVoiceSpawn(task, textChannelId, botToken) {
   const ls = await createLiveStream(threadId, botToken);
   const ac = new AbortController();
   _activeSessions.set(threadId, { ac, ls });
-  _runStreamingAgent(task, threadId, ls, ac).finally(() => _activeSessions.delete(threadId));
+  _runStreamingAgent(task, threadId, ls, ac, model).finally(() => _activeSessions.delete(threadId));
 
   return threadId;
 }

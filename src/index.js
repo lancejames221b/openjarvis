@@ -179,9 +179,9 @@ const JARVIS_BOT_ID = process.env.JARVIS_BOT_ID || process.env.CLAWDBOT_BOT_ID |
 
 // ── Voice-message auto-reply ──────────────────────────────────────────
 // Transcribes Discord mic-button messages and dispatches to LLM.
-// VOICE_MESSAGE_AUTO_REPLY=true to enable; VOICE_MESSAGE_CHANNELS comma-separated
-// allowlist of channel IDs (empty = all channels).
-const VOICE_MESSAGE_AUTO_REPLY = process.env.VOICE_MESSAGE_AUTO_REPLY === 'true';
+// VOICE_MESSAGE_AUTO_REPLY=false to disable; VOICE_MESSAGE_CHANNELS comma-separated
+// allowlist of channel IDs (empty = all channels). Enabled by default.
+const VOICE_MESSAGE_AUTO_REPLY = process.env.VOICE_MESSAGE_AUTO_REPLY !== 'false';
 const VOICE_MESSAGE_CHANNELS = (process.env.VOICE_MESSAGE_CHANNELS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
@@ -1887,6 +1887,43 @@ async function checkIsReplyToUs(message) {
   return false;
 }
 
+const _TEXT_EXTS = new Set([
+  'txt','md','js','mjs','cjs','ts','tsx','jsx','json','jsonc','yaml','yml',
+  'sh','bash','zsh','py','rb','go','rs','java','c','cpp','h','hpp','cs','php',
+  'html','css','scss','sql','toml','ini','cfg','conf','env','log','csv',
+]);
+const _IMAGE_TYPES = new Set(['image/png','image/jpeg','image/gif','image/webp','image/jpg']);
+const _MAX_FILE_BYTES = 50_000;
+
+async function _buildAttachmentContext(attachments) {
+  if (!attachments || attachments.size === 0) return '';
+  const fetch = (await import('node-fetch')).default;
+  let ctx = '';
+  for (const a of attachments.values()) {
+    if (a.contentType?.includes('audio/ogg') || a.url?.endsWith('.ogg')) continue; // voice msg handled separately
+    const ext = a.name?.split('.').pop()?.toLowerCase() || '';
+    if (_IMAGE_TYPES.has(a.contentType?.split(';')[0]?.trim()) || ['png','jpg','jpeg','gif','webp'].includes(ext)) {
+      ctx += `\n\n[Image attachment: ${a.url}]`;
+    } else if (_TEXT_EXTS.has(ext)) {
+      try {
+        const res = await fetch(a.url, { signal: AbortSignal.timeout(8_000) });
+        if (res.ok) {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength <= _MAX_FILE_BYTES) {
+            const text = Buffer.from(buf).toString('utf8');
+            ctx += `\n\n[File: ${a.name}]\n\`\`\`\n${text}\n\`\`\``;
+          } else {
+            ctx += `\n\n[File too large to inline: ${a.name} — ${a.url}]`;
+          }
+        }
+      } catch { ctx += `\n\n[Attached file: ${a.name} — ${a.url}]`; }
+    } else {
+      ctx += `\n\n[Attached file: ${a.name} — ${a.url}]`;
+    }
+  }
+  return ctx;
+}
+
 async function handleMentionReply(message, rawContent, isReplyToUs) {
   // Strip mention from content for the LLM prompt
   const content = rawContent
@@ -1913,7 +1950,8 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     } catch (e) {}
   }
 
-  const finalPrompt = `${recentContext}${repliedContentContext}${content}`;
+  const attachmentCtx = await _buildAttachmentContext(message.attachments);
+  const finalPrompt = `${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
 
   logger.info(`@mention/reply from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
 
@@ -2209,7 +2247,8 @@ async function handleVoiceTranscript(message) {
           const _vmSessionUser = _vmThreadId
             ? `agent:main:discord:channel:${_vmParentId}:thread:${_vmThreadId}`
             : `agent:main:discord:channel:${_vmParentId}`;
-          const prompt = channelContext + text;
+          const vmAttachCtx = await _buildAttachmentContext(message.attachments);
+          const prompt = channelContext + text + vmAttachCtx;
           const result = await generateTextResponse(prompt, {
             channelId: _vmParentId,
             sessionUser: _vmSessionUser,
@@ -3735,7 +3774,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const discordToken = process.env.DISCORD_TOKEN || '';
       try {
         const { runVoiceSpawn } = await import('./slash/spawn.js');
-        await runVoiceSpawn(dispatchResult.task, targetChannel, discordToken);
+        await runVoiceSpawn(dispatchResult.task, targetChannel, discordToken, dispatchResult.model || null);
       } catch (err) {
         logger.error(`[voice_spawn] failed: ${err.message}`);
         const errAck = await synthesizeSpeech('Could not spawn the agent. Check the logs.');
