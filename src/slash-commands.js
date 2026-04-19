@@ -29,6 +29,7 @@ import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
+import { getBox, setBox, listBoxes, getCwd, BOX_NAMES } from './slash/box-state.js';
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import logger from './logger.js';
 
@@ -122,6 +123,20 @@ const SKILL_CMD = new SlashCommandBuilder()
   .addStringOption(opt =>
     opt.setName('args').setDescription('Arguments or context for the skill').setRequired(false));
 
+const BOX_CMD = new SlashCommandBuilder()
+  .setName('box')
+  .setDescription('Switch the active shell/dir target box (owner only)')
+  .addSubcommand(sub => sub.setName('status').setDescription('Show active box and working directory'))
+  .addSubcommand(sub => sub.setName('list').setDescription('List all configured boxes'))
+  .addSubcommand(sub =>
+    sub.setName('set')
+      .setDescription('Switch to a box (from BOXES env var)')
+      .addStringOption(opt =>
+        opt.setName('name')
+          .setDescription('Box name (autocomplete from BOXES env var)')
+          .setRequired(true)
+          .setAutocomplete(true)));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -150,9 +165,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /dir, /shell, /access, /skill commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -170,6 +185,15 @@ export async function handleAutocomplete(interaction) {
       .filter(s => s.startsWith(focused) || s.includes(focused))
       .slice(0, 25)
       .map(s => ({ name: s, value: s }));
+    await interaction.respond(choices);
+    return true;
+  }
+  if (interaction.commandName === 'box' && interaction.options.getSubcommand(false) === 'set') {
+    const focused = interaction.options.getFocused().toLowerCase();
+    const choices = BOX_NAMES
+      .filter(n => n.startsWith(focused) || n.includes(focused))
+      .slice(0, 25)
+      .map(n => ({ name: n, value: n }));
     await interaction.respond(choices);
     return true;
   }
@@ -269,6 +293,30 @@ export async function handleSlashCommand(interaction, allowedUsers) {
     } else if (sub === 'status') {
       const on = isVerboseModeEnabled();
       await interaction.reply({ content: on ? '📡 **Verbose mode is ON** — text responses stream to threads.' : '🔇 **Verbose mode is OFF**', ephemeral: true });
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'box') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === 'status') {
+      const box = getBox();
+      await interaction.reply({ content: `Active box: **${box.name}** — ${box.label} | cwd: \`${getCwd()}\``, ephemeral: true });
+    } else if (sub === 'list') {
+      const lines = listBoxes().map(b => `${b.active ? '▶' : '·'} **${b.name}** — ${b.label}${b.ssh ? ` (ssh: \`${b.ssh}\`)` : ''}`).join('\n');
+      await interaction.reply({ content: `**Boxes:**\n${lines}`, ephemeral: true });
+    } else if (sub === 'set') {
+      const name = interaction.options.getString('name');
+      if (!setBox(name)) {
+        await interaction.reply({ content: `Unknown box \`${name}\`. Options: ${BOX_NAMES.join(', ')}`, ephemeral: true });
+      } else {
+        const box = getBox();
+        await interaction.reply({ content: `Switched to **${box.name}** — ${box.label}`, ephemeral: false });
+      }
     }
     return true;
   }
