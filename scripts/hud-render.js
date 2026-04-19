@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const STATE_FILE = join(ROOT, 'data', 'hud-state.json');
-const WEBHOOK = process.env.JARVIS_WEBHOOK_URL || 'http://127.0.0.1:3335';
+const WEBHOOK = process.env.JARVIS_WEBHOOK_URL || 'http://TAILSCALE_HOST:3335';
 
 // ── ANSI helpers ──────────────────────────────────────────────────────
 const R = '\x1b[0m';
@@ -98,11 +98,12 @@ async function render() {
   const updatedAt = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
   const stateAge = updatedAt ? elapsed(now - updatedAt) : '?';
 
-  const botState = health?.state || context?.botState || '?';
-  const uptime   = health?.uptime ? elapsed(health.uptime * 1000) : '?';
+  const botState = health?.fsm?.state || health?.state || context?.botState || '?';
+  const uptime   = health?.uptimeHuman || (health?.uptime ? elapsed(health.uptime * 1000) : '?');
   const focus    = health?.focus || context?.focus || '—';
   const output   = health?.visualMode ? `Visual → ${health.visualChannel || '?'}` : 'Voice';
   const boxName  = health?.activeBox || '—';
+  const tasks    = health?.tasks?.ledger || {};
 
   const last = state.lastCompletedTask;
   const lastAgo  = last?.completedAt ? elapsed(now - last.completedAt) : null;
@@ -127,11 +128,16 @@ async function render() {
   const uptimeStr = `${C.white}${uptime}${R}`;
   const focusStr  = `${C.cyan}#${focus}${R}`;
   const outputStr = `${C.magenta}${output}${R}`;
+  const sessionStr = tasks.total
+    ? `${C.green}${tasks.completed || 0}✓${R}  ${C.red}${tasks.failed || 0}✗${R}  ${C.grey}/ ${tasks.total}${R}`
+    : `${C.grey}—${R}`;
+
   lines.push(
     `  ${box('STATE', stateStr)}    ` +
     `${box('UPTIME', uptimeStr)}    ` +
     `${box('FOCUS', focusStr)}    ` +
-    `${box('OUTPUT', outputStr)}`
+    `${box('OUTPUT', outputStr)}    ` +
+    `${box('SESSION', sessionStr, C.grey)}`
   );
   lines.push('');
 
