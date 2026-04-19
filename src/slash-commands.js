@@ -9,8 +9,12 @@ import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTa
 import { isVerboseModeEnabled, setVerboseMode } from './verbose-mode.js';
 import { getVoiceModel, setVoiceModel } from './brain.js';
 import { readFileSync, writeFileSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const _execAsync = promisify(exec);
 
 const __slashDirname = dirname(fileURLToPath(import.meta.url));
 const _ENV_FILE = `${__slashDirname}/../.env`;
@@ -29,7 +33,7 @@ import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
-import { getBox, setBox, listBoxes, getCwd, BOX_NAMES } from './slash/box-state.js';
+import { getBox, setBox, listBoxes, getCwd, persistBoxState, BOX_NAMES } from './slash/box-state.js';
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import logger from './logger.js';
 
@@ -137,6 +141,13 @@ const BOX_CMD = new SlashCommandBuilder()
           .setRequired(true)
           .setAutocomplete(true)));
 
+const TMUX_CMD = new SlashCommandBuilder()
+  .setName('tmux')
+  .setDescription('Manage the Jarvis tmux HUD terminal session (owner only)')
+  .addSubcommand(sub => sub.setName('on').setDescription('Start the jarvis-hud tmux session on this server'))
+  .addSubcommand(sub => sub.setName('off').setDescription('Kill the jarvis-hud tmux session'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Check if the jarvis-hud tmux session is running'));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -165,9 +176,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -314,6 +325,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       if (!setBox(name)) {
         await interaction.reply({ content: `Unknown box \`${name}\`. Options: ${BOX_NAMES.join(', ')}`, ephemeral: true });
       } else {
+        persistBoxState();
         const box = getBox();
         await interaction.reply({ content: `Switched to **${box.name}** — ${box.label}`, ephemeral: false });
       }
@@ -362,6 +374,47 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       } else {
         const lines = grants.map(g => `<#${g.channelId}>: ${g.userIds.map(u => `<@${u}>`).join(', ')}`).join('\n');
         await interaction.reply({ content: `**Channel access grants:**\n${lines}`, ephemeral: true });
+      }
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'tmux') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const sub = interaction.options.getSubcommand();
+    const __d = dirname(fileURLToPath(import.meta.url));
+    const hudScript = join(__d, '..', 'scripts', 'hud-tmux.sh');
+
+    if (sub === 'status') {
+      try {
+        await _execAsync('tmux has-session -t jarvis-hud');
+        await interaction.reply({ content: '`jarvis-hud` tmux session is **running**.\nAttach: `ssh generic -t tmux attach -t jarvis-hud`', ephemeral: true });
+      } catch {
+        await interaction.reply({ content: '`jarvis-hud` tmux session is **not running**.', ephemeral: true });
+      }
+    } else if (sub === 'on') {
+      await interaction.deferReply({ ephemeral: false });
+      try {
+        // Kill stale session if any, then launch detached
+        await _execAsync('tmux kill-session -t jarvis-hud 2>/dev/null || true');
+        await _execAsync(`bash ${hudScript} &`, { timeout: 5000 }).catch(() => {});
+        // Give it a moment to start
+        await new Promise(r => setTimeout(r, 1500));
+        await _execAsync('tmux has-session -t jarvis-hud');
+        const box = getBox();
+        await interaction.editReply(`**jarvis-hud** tmux session started on **${box.name}** box.\nAttach: \`ssh generic -t tmux attach -t jarvis-hud\``);
+      } catch (err) {
+        await interaction.editReply(`Failed to start tmux session: ${err.message}`);
+      }
+    } else if (sub === 'off') {
+      try {
+        await _execAsync('tmux kill-session -t jarvis-hud');
+        await interaction.reply({ content: '`jarvis-hud` tmux session **killed**.', ephemeral: false });
+      } catch {
+        await interaction.reply({ content: '`jarvis-hud` was not running.', ephemeral: true });
       }
     }
     return true;

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const STATE_FILE = join(ROOT, 'data', 'hud-state.json');
+const BOX_FILE   = join(ROOT, 'data', 'box-state.json');
 const WEBHOOK = process.env.JARVIS_WEBHOOK_URL || 'http://TAILSCALE_HOST:3335';
 
 // ── ANSI helpers ──────────────────────────────────────────────────────
@@ -65,11 +66,16 @@ function elapsed(ms) {
 
 function loadState() {
   try {
-    if (existsSync(STATE_FILE)) {
-      return JSON.parse(readFileSync(STATE_FILE, 'utf8'));
-    }
+    if (existsSync(STATE_FILE)) return JSON.parse(readFileSync(STATE_FILE, 'utf8'));
   } catch {}
   return {};
+}
+
+function loadBoxState() {
+  try {
+    if (existsSync(BOX_FILE)) return JSON.parse(readFileSync(BOX_FILE, 'utf8'));
+  } catch {}
+  return null;
 }
 
 async function fetchHealth() {
@@ -92,6 +98,7 @@ async function fetchContext() {
 
 async function render() {
   const state = loadState();
+  const boxState = loadBoxState();
   const [health, context] = await Promise.all([fetchHealth(), fetchContext()]);
 
   const now = Date.now();
@@ -102,7 +109,9 @@ async function render() {
   const uptime   = health?.uptimeHuman || (health?.uptime ? elapsed(health.uptime * 1000) : '?');
   const focus    = health?.focus || context?.focus || '—';
   const output   = health?.visualMode ? `Visual → ${health.visualChannel || '?'}` : 'Voice';
-  const boxName  = health?.activeBox || '—';
+  const boxName  = boxState?.activeBox || health?.activeBox || '—';
+  const boxCwd   = boxState?.cwd || '~';
+  const boxSsh   = boxState?.ssh || null;
   const tasks    = health?.tasks?.ledger || {};
 
   const last = state.lastCompletedTask;
@@ -143,7 +152,9 @@ async function render() {
 
   // Active box / shell context
   if (boxName && boxName !== '—') {
-    lines.push(`  ${box('BOX', `${C.yellow}${boxName}${R}`, C.grey)}`);
+    const sshLabel = boxSsh ? `  ${C.grey}(${boxSsh})${R}` : `  ${C.grey}(local)${R}`;
+    const cwdLabel = `  ${DIM}${boxCwd}${R}`;
+    lines.push(`  ${box('BOX', `${C.yellow}${B}${boxName}${R}${sshLabel}${cwdLabel}`, C.grey)}`);
   }
 
   lines.push(line());

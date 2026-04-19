@@ -16,6 +16,14 @@
  * This means the box system works independently of ~/.ssh/config User entries.
  */
 
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const _DATA_DIR = join(__dirname, '..', '..', 'data');
+const _STATE_FILE = join(_DATA_DIR, 'box-state.json');
+
 const _DEFAULT_BOXES = 'generic:local,mac:mac,gamez:gamez';
 
 function _parseBoxes() {
@@ -75,6 +83,22 @@ export function getCwd() {
 /** Set working directory for active box. */
 export function setCwd(path) {
   _cwdByBox[_activeBox] = path;
+  _persist();
 }
+
+/** Write current box + cwd to data/box-state.json so external tools (hud-render, tmux) can read it. */
+function _persist() {
+  try {
+    if (!existsSync(_DATA_DIR)) mkdirSync(_DATA_DIR, { recursive: true });
+    writeFileSync(_STATE_FILE, JSON.stringify({
+      activeBox: _activeBox,
+      cwd: _cwdByBox[_activeBox] || '~',
+      ssh: BOXES[_activeBox]?.ssh || null,
+      updatedAt: new Date().toISOString(),
+    }, null, 2));
+  } catch { /* non-fatal */ }
+}
+
+export function persistBoxState() { _persist(); }
 
 export { BOX_NAMES };
