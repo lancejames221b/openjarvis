@@ -1211,12 +1211,14 @@ export async function generateTextResponse(userMessage, options = {}) {
     TEXT_CHANNEL_ID: channelId,
   });
 
-  // Temporal channel context — recent memories for this channel, non-blocking
+  // Temporal channel context — skip if caller already pre-fetched and injected into userMessage
   let channelCtx = '';
-  try {
-    const ctx = await getChannelContext(channelId);
-    if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
-  } catch (_) {}
+  if (!options.skipChannelContext) {
+    try {
+      const ctx = await getChannelContext(channelId);
+      if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
+    } catch (_) {}
+  }
 
   const prior = Array.isArray(options.discordChatHistory) ? options.discordChatHistory : [];
   const messages = [{ role: 'system', content: textTag }];
@@ -1335,10 +1337,12 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
   });
 
   let channelCtx = "";
-  try {
-    const ctx = await getChannelContext(channelId);
-    if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
-  } catch (_) {}
+  if (!options.skipChannelContext) {
+    try {
+      const ctx = await getChannelContext(channelId);
+      if (ctx) channelCtx = `[recent channel context]\n${ctx}\n\n`;
+    } catch (_) {}
+  }
 
   const priorStream = Array.isArray(options.discordChatHistory) ? options.discordChatHistory : [];
   const messages = [{ role: "system", content: textTag }];

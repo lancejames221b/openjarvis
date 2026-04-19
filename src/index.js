@@ -44,7 +44,7 @@ import { isVerboseModeEnabled } from './verbose-mode.js';
 import { verboseSessions } from './verbose-sessions.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
-import { registerSlashCommands, handleSlashCommand } from './slash-commands.js';
+import { registerSlashCommands, handleSlashCommand, handleAutocomplete } from './slash-commands.js';
 import { canAccessChannel, isOwner as isChannelOwner } from './channel-access.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
@@ -1347,9 +1347,13 @@ client.once('ready', async () => {
   }
 });
 
-// ── Slash command handler (/visual) ──────────────────────────────────
+// ── Slash command handler (/visual, /skill, etc.) ─────────────────────
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.isAutocomplete()) {
+      await handleAutocomplete(interaction);
+      return;
+    }
     await handleSlashCommand(interaction, ALLOWED_USERS);
   } catch (err) {
     logger.error(`[slash] Interaction error: ${err.message}`);
@@ -2002,6 +2006,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
           channelId: _parentChannelId,
           sessionUser: _sessionUser,
           discordChatHistory,
+          skipChannelContext: true,
         });
         if (ac.signal.aborted) {
           verboseSessions.delete(_parentChannelId);
@@ -2035,6 +2040,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       channelId: _parentChannelId,
       sessionUser: _sessionUser,
       discordChatHistory,
+      skipChannelContext: true,
     });
 
     if (!result.text || result.text.length < 2) {

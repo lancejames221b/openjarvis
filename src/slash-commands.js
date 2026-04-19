@@ -28,6 +28,7 @@ import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
+import { handleSkillCommand, listSkills } from './slash/skill.js';
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import logger from './logger.js';
 
@@ -113,6 +114,14 @@ const ACCESS_CMD = new SlashCommandBuilder()
   .addSubcommand(sub =>
     sub.setName('list').setDescription('List all channel access grants'));
 
+const SKILL_CMD = new SlashCommandBuilder()
+  .setName('skill')
+  .setDescription('Invoke a Claude Code skill as an agent task in a thread (owner only)')
+  .addStringOption(opt =>
+    opt.setName('name').setDescription('Skill name (e.g. load, review, investigate)').setRequired(true).setAutocomplete(true))
+  .addStringOption(opt =>
+    opt.setName('args').setDescription('Arguments or context for the skill').setRequired(false));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -141,9 +150,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /dir, /shell, /access commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /dir, /shell, /access, /skill commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -152,8 +161,32 @@ export async function registerSlashCommands(client) {
 /**
  * Handle incoming slash command interactions
  */
+/** Handle autocomplete interactions (e.g. /skill name field). */
+export async function handleAutocomplete(interaction) {
+  if (!interaction.isAutocomplete()) return false;
+  if (interaction.commandName === 'skill') {
+    const focused = interaction.options.getFocused().toLowerCase();
+    const choices = listSkills()
+      .filter(s => s.startsWith(focused) || s.includes(focused))
+      .slice(0, 25)
+      .map(s => ({ name: s, value: s }));
+    await interaction.respond(choices);
+    return true;
+  }
+  return false;
+}
+
 export async function handleSlashCommand(interaction, allowedUsers) {
   if (!interaction.isChatInputCommand()) return false;
+
+  if (interaction.commandName === 'skill') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    await handleSkillCommand(interaction);
+    return true;
+  }
 
   if (interaction.commandName === 'spawn') {
     if (!isChannelOwner(interaction.user.id)) {
