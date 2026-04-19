@@ -19,15 +19,9 @@
  *   TRELLO_CURRENT_LIST_ID=your-current-list-id
  */
 
-import { exec as _exec } from 'child_process';
-import { promisify } from 'util';
 import logger from './logger.js';
 import { getFocus, isFocusFresh } from './focus-state.js';
-
-const execAsync = promisify(_exec);
-
-const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || process.env.CLAWDBOT_HOOKS_TOKEN || '';
+import { getTodayEvents } from './calendar-cache.js';
 
 // Master toggle
 const BRIEFING_ENABLED = process.env.JOIN_BRIEFING_ENABLED !== 'false';
@@ -239,56 +233,13 @@ async function _fetchTrelloList(listId) {
 // ── Calendar ──────────────────────────────────────────────────────────
 
 async function _fetchCalendar() {
-  if (!HOOKS_TOKEN) {
-    logger.warn('[briefing] No CLAWDBOT_HOOKS_TOKEN — skipping calendar');
-    return null;
-  }
-
   const now = new Date();
-  const hoursAhead = BRIEFING_HOURS_AHEAD;
-
-  const prompt = `Check my calendar for the next ${hoursAhead} hours (from now: ${now.toLocaleString('en-US', { timeZone: 'America/New_York' })}). Return ONLY a brief spoken summary of upcoming events — no markdown, no formatting. If no events, say "Calendar is clear." Keep it under 3 sentences. Use 12-hour time format.`;
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    const res = await fetch(`${GATEWAY_URL}/hooks/agent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${HOOKS_TOKEN}`,
-        'x-openclaw-scopes': 'operator.write',
-      },
-      body: JSON.stringify({
-        message: prompt,
-        model: 'unit/claude-haiku-4-5',
-        options: { maxTokens: 200 },
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    if (!res.ok) {
-      logger.warn(`[briefing] Gateway returned ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const text = data?.response?.trim() || data?.message?.trim();
-    if (text && text.length > 5 && !text.toLowerCase().includes('calendar is clear')) {
-      return text;
-    }
-    return null;
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      logger.warn('[briefing] Calendar request timed out');
-    } else {
-      throw err;
-    }
-    return null;
-  }
+  const cutoff = new Date(now.getTime() + BRIEFING_HOURS_AHEAD * 3_600_000);
+  const events = getTodayEvents().filter(e => e.start >= now && e.start <= cutoff);
+  if (!events.length) return null;
+  return 'Coming up: ' + events
+    .map(e => `${e.title} at ${e.start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })}`)
+    .join(', then ');
 }
 
 function _truncate(str, max) {

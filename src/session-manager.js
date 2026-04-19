@@ -24,6 +24,7 @@ import { readFile, appendFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
+import { mcpCall } from './mcp-access.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -313,11 +314,7 @@ async function _haivemindStore(content, category = 'voice-session') {
     if (HAIVEMIND_URL) {
       await _hmHttpCall('store_memory', { content, category });
     } else {
-      const escaped = content.replace(/'/g, "'\\''");
-      await execAsync(
-        `${MCPORTER_PATH} call haivemind.store_memory content='${escaped}' category='${category}'`,
-        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: process.env.HOME || '/tmp' }
-      );
+      await mcpCall('haivemind', 'store_memory', { content, category });
     }
     _hmBreaker.recordSuccess();
   } catch (e) {
@@ -333,11 +330,7 @@ async function _haivemindSearch(query, { limit = 5, semantic = true } = {}) {
     if (HAIVEMIND_URL) {
       result = await _hmHttpCall('search_memories', { query, limit, semantic });
     } else {
-      const { stdout } = await execAsync(
-        `${MCPORTER_PATH} call haivemind.search_memories query="${query}" limit=${limit} semantic=${semantic}`,
-        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: process.env.HOME || '/tmp' }
-      );
-      result = stdout.trim();
+      result = await mcpCall('haivemind', 'search_memories', { query, limit, semantic });
     }
     _hmBreaker.recordSuccess();
     return result;
@@ -354,11 +347,7 @@ async function _haivemindGetRecent(category, { hours = 2, limit = 5 } = {}) {
     if (HAIVEMIND_URL) {
       result = await _hmHttpCall('get_recent_memories', { category, hours, limit });
     } else {
-      const { stdout } = await execAsync(
-        `${MCPORTER_PATH} call haivemind.get_recent_memories category="${category}" hours=${hours} limit=${limit}`,
-        { timeout: HAIVEMIND_TIMEOUT_MS, cwd: process.env.HOME || '/tmp' }
-      );
-      result = stdout.trim();
+      result = await mcpCall('haivemind', 'get_recent_memories', { category, hours, limit });
     }
     _hmBreaker.recordSuccess();
     return result;

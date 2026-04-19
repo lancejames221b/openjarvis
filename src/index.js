@@ -45,7 +45,8 @@ import { verboseSessions } from './verbose-sessions.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand, handleAutocomplete } from './slash-commands.js';
-import { canAccessChannel, isOwner as isChannelOwner } from './channel-access.js';
+import { canAccessChannel, isOwner as isChannelOwner, OWNER_USER_ID } from './channel-access.js';
+import { setMcpAuthNotify } from './mcp-access.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { touchFocus } from './focus-state.js';
@@ -1066,6 +1067,21 @@ client.once('ready', async () => {
 
   // Register slash commands (/visual)
   registerSlashCommands(client).catch(e => logger.warn(`[slash] Registration error: ${e.message}`));
+
+  // Wire MCP auth notify — DM the owner when any mcporter call needs OAuth re-auth
+  setMcpAuthNotify(async (server, tool, url) => {
+    const msg = `**MCP authorization required**\n\`${server}.${tool}\` needs re-auth:\n${url}`;
+    try {
+      if (OWNER_USER_ID) {
+        const owner = await client.users.fetch(OWNER_USER_ID).catch(() => null);
+        if (owner) { await owner.send(msg); return; }
+      }
+      const ch = await client.channels.fetch(TEXT_CHANNEL_ID).catch(() => null);
+      if (ch?.isTextBased?.()) await ch.send(msg);
+    } catch (e) {
+      logger.warn(`[mcp] auth notify failed: ${e.message}`);
+    }
+  });
 
   // Seed wake words + Chatterbox voice from the startup persona (VOICE_PERSONA env var, default: jarvis)
   const startupPersona = getActivePersona();
