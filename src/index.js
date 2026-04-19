@@ -30,7 +30,7 @@ import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFra
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
-import { storeTaskToHaivemind, getHaivemindContext } from './session-manager.js';
+import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext } from './session-manager.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
@@ -1952,7 +1952,19 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   }
 
   const attachmentCtx = await _buildAttachmentContext(message.attachments);
-  const finalPrompt = `${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
+
+  // Proactively search haivemind for relevant context so Claude arrives with memory loaded
+  // rather than needing the user to say "recall X" first.
+  const [hmMemory, chMemory] = await Promise.all([
+    searchHaivemind(content.substring(0, 100)),
+    getChannelContext(message.channelId),
+  ]);
+  const memoryBlock = [hmMemory, chMemory].filter(Boolean).join('\n---\n');
+  const memoryPrefix = memoryBlock
+    ? `[Relevant memory from prior sessions]\n${memoryBlock}\n\n`
+    : '';
+
+  const finalPrompt = `${memoryPrefix}${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
 
   logger.info(`@mention/reply from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
 

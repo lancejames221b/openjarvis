@@ -39,10 +39,11 @@ const MCPORTER_PATH = process.env.MCPORTER_PATH || 'mcporter';
 // Optional direct HTTP URL — bypasses mcporter subprocess when set
 const HAIVEMIND_URL = process.env.HAIVEMIND_URL || '';
 // Hard timeout on all haivemind calls — prevents ECONNREFUSED from stalling dispatch
-const HAIVEMIND_TIMEOUT_MS = 3_000;
+const HAIVEMIND_TIMEOUT_MS = parseInt(process.env.HAIVEMIND_TIMEOUT_MS ?? '8000');
 
 // ── haivemind circuit breaker ─────────────────────────────────────────────────
-// 3 failures in 60 s → open for 5 min. Fails fast so gateway stalls don't cascade.
+// 3 failures in 60 s → open for 90 s. Short backoff so recovery after a crash/restart
+// is detected quickly rather than staying blind for 5 minutes.
 const _hmBreaker = {
   failures: [],
   openUntil: 0,
@@ -51,7 +52,7 @@ const _hmBreaker = {
     if (Date.now() < this.openUntil) return true;
     this.openUntil = 0;
     this.failures = [];
-    logger.info('[haivemind] circuit breaker closed');
+    logger.info('[haivemind] circuit breaker closed — retrying');
     return false;
   },
   recordFailure() {
@@ -59,8 +60,8 @@ const _hmBreaker = {
     this.failures = this.failures.filter(t => now - t < 60_000);
     this.failures.push(now);
     if (this.failures.length >= 3 && !this.openUntil) {
-      this.openUntil = now + 300_000; // open for 5 min
-      logger.warn('[haivemind] circuit breaker opened — 3 failures in 60 s, backing off 5 min');
+      this.openUntil = now + 90_000; // open for 90 s (was 5 min)
+      logger.warn('[haivemind] circuit breaker opened — 3 failures in 60 s, backing off 90 s');
     }
   },
   recordSuccess() {
@@ -277,19 +278,40 @@ async function _appendMemoryFile(ts, taskId, userSnip, resultSnip) {
 }
 
 // ── Transport helpers ─────────────────────────────────────────────────────────
-// When HAIVEMIND_URL is set, use direct HTTP fetch to avoid mcporter subprocess overhead.
-// Otherwise fall back to mcporter CLI.
+// When HAIVEMIND_URL is set, use direct MCP-over-HTTP (SSE response) to haivemind's
+// /mcp endpoint. No auth needed for localhost. Otherwise fall back to mcporter CLI.
+
+/**
+ * Call a haivemind MCP tool via HTTP. Returns the text content from the tool result.
+ * haivemind's remote_mcp_server responds with SSE: "event: message\ndata: {JSON}\n\n"
+ */
+async function _hmHttpCall(toolName, args) {
+  const res = await fetch(`${HAIVEMIND_URL}/mcp`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'tools/call',
+      params: { name: toolName, arguments: args },
+    }),
+    signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
+  });
+  const text = await res.text();
+  const dataLine = text.split('\n').find(l => l.startsWith('data:'));
+  if (!dataLine) return null;
+  const envelope = JSON.parse(dataLine.slice(5).trim());
+  return envelope?.result?.content?.[0]?.text ?? null;
+}
 
 async function _haivemindStore(content, category = 'voice-session') {
   if (_hmBreaker.isOpen()) return;
   try {
     if (HAIVEMIND_URL) {
-      await fetch(`${HAIVEMIND_URL}/store_memory`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, category }),
-        signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
-      });
+      await _hmHttpCall('store_memory', { content, category });
     } else {
       const escaped = content.replace(/'/g, "'\\''");
       await execAsync(
@@ -309,13 +331,7 @@ async function _haivemindSearch(query, { limit = 5, semantic = true } = {}) {
   try {
     let result;
     if (HAIVEMIND_URL) {
-      const res = await fetch(`${HAIVEMIND_URL}/search_memories`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, limit, semantic }),
-        signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
-      });
-      result = await res.text();
+      result = await _hmHttpCall('search_memories', { query, limit, semantic });
     } else {
       const { stdout } = await execAsync(
         `${MCPORTER_PATH} call haivemind.search_memories query="${query}" limit=${limit} semantic=${semantic}`,
@@ -336,13 +352,7 @@ async function _haivemindGetRecent(category, { hours = 2, limit = 5 } = {}) {
   try {
     let result;
     if (HAIVEMIND_URL) {
-      const res = await fetch(`${HAIVEMIND_URL}/get_recent_memories`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category, hours, limit }),
-        signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
-      });
-      result = await res.text();
+      result = await _hmHttpCall('get_recent_memories', { category, hours, limit });
     } else {
       const { stdout } = await execAsync(
         `${MCPORTER_PATH} call haivemind.get_recent_memories category="${category}" hours=${hours} limit=${limit}`,
@@ -391,4 +401,27 @@ export async function storeChannelMemory(channelId, userMessage, response) {
   const respSnip = (response   || '').substring(0, 200);
   const content  = `[${ts}] user: "${userSnip}" | response: "${respSnip}"`;
   await _haivemindStore(content, `channel:${channelId}`);
+}
+
+/**
+ * Semantic search across all haivemind memories for a query.
+ * Used to proactively inject relevant context before Claude processes a message.
+ * Returns a compact string of matching memory content, or null.
+ */
+export async function searchHaivemind(query, { limit = 4 } = {}) {
+  if (!HAIVEMIND_ENABLED || !query) return null;
+  try {
+    const raw = await _haivemindSearch(query.substring(0, 100), { limit, semantic: true });
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const memories = data?.memories || data?.result?.memories || [];
+    if (!memories.length) return null;
+    return memories
+      .map(m => (m.content || '').substring(0, 300))
+      .join('\n---\n')
+      .substring(0, 1200);
+  } catch (e) {
+    logger.warn({ err: e.message }, '[haivemind] searchHaivemind failed (non-fatal)');
+    return null;
+  }
 }
