@@ -4,17 +4,17 @@
  * Boxes are defined via the BOXES env var (comma-separated name:ssh-alias pairs).
  * Use "local" as the alias for the box the bot runs on.
  *
- *   BOXES=generic:local,mac:mac,games:games
- *   BOXES=generic:local,mac:mac,games:games,ewitness:ewitness-client
+ *   BOXES=generic:local,mac:mac,gamez:gamez
+ *   BOXES=generic:local,mac:mac,gamez:gamez,ewitness:ewitness-client
  *
  * Default cwd per box is the bot's HOME. Override with BOX_<NAME>_HOME:
  *   BOX_MAC_HOME=/Users/you
- *   BOX_GAMES_HOME=/home/youruser
+ *   BOX_GAMEZ_HOME=/home/youruser
  *
  * If BOXES is not set, defaults to a single "local" box (generic).
  */
 
-const _DEFAULT_BOXES = 'generic:local,mac:mac,games:games';
+const _DEFAULT_BOXES = 'generic:local,mac:mac,gamez:gamez';
 
 function _parseBoxes() {
   const raw = process.env.BOXES || _DEFAULT_BOXES;
