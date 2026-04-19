@@ -48,6 +48,9 @@ const BOX_NAMES = Object.keys(BOXES);
 
 let _activeBox = BOX_NAMES[0] || 'generic';
 
+// Write initial state on load so hud-render can read it immediately
+setTimeout(() => _persist(), 0);
+
 const _cwdByBox = Object.fromEntries(
   BOX_NAMES.map(n => [n, BOXES[n].defaultCwd])
 );
