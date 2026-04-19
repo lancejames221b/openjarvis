@@ -1,17 +1,19 @@
 /**
  * box-state.js — Configurable box/tunnel registry for /shell and /dir.
  *
- * Boxes are defined via the BOXES env var (comma-separated name:ssh-alias pairs).
- * Use "local" as the alias for the box the bot runs on.
+ * Boxes are defined via the BOXES env var: comma-separated name:ssh-alias:user triples.
+ * Use "local" as the alias for the box the bot runs on. User is optional — if omitted
+ * SSH falls back to whatever ~/.ssh/config defines for that alias.
  *
- *   BOXES=generic:local,mac:mac,gamez:gamez
- *   BOXES=generic:local,mac:mac,gamez:gamez,ewitness:ewitness-client
+ *   BOXES=generic:local:generic,mac:mac:lj,gamez:gamez:yari
+ *   BOXES=generic:local:generic,mac:mac:lj,gamez:gamez:yari,ewitness:ewitness-client:lance
  *
- * Default cwd per box is the bot's HOME. Override with BOX_<NAME>_HOME:
- *   BOX_MAC_HOME=/Users/you
+ * Default cwd per box is the bot's HOME (local) or ~ (remote). Override with BOX_<NAME>_HOME:
+ *   BOX_MAC_HOME=/Users/youruser
  *   BOX_GAMEZ_HOME=/home/youruser
  *
- * If BOXES is not set, defaults to a single "local" box (generic).
+ * The SSH target is constructed as user@alias when user is provided, else just alias.
+ * This means the box system works independently of ~/.ssh/config User entries.
  */
 
 const _DEFAULT_BOXES = 'generic:local,mac:mac,gamez:gamez';
@@ -20,12 +22,15 @@ function _parseBoxes() {
   const raw = process.env.BOXES || _DEFAULT_BOXES;
   const boxes = {};
   for (const entry of raw.split(',')) {
-    const [name, ssh] = entry.trim().split(':');
+    const parts = entry.trim().split(':');
+    const [name, ssh, user] = parts;
     if (!name || !ssh) continue;
     const isLocal = ssh === 'local';
     const envKey = `BOX_${name.toUpperCase()}_HOME`;
     const defaultCwd = process.env[envKey] || (isLocal ? (process.env.HOME || process.cwd()) : '~');
-    boxes[name] = { label: name, ssh: isLocal ? null : ssh, isLocal, defaultCwd };
+    // Build SSH target: user@alias if user provided, else alias only
+    const sshTarget = isLocal ? null : (user ? `${user}@${ssh}` : ssh);
+    boxes[name] = { label: name, ssh: sshTarget, isLocal, defaultCwd };
   }
   return boxes;
 }
