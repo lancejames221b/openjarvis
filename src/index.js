@@ -45,6 +45,8 @@ import { verboseSessions } from './verbose-sessions.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand, handleAutocomplete } from './slash-commands.js';
+import { handleSessionMessage, isSessionChannel } from './slash/session.js';
+import { handleSessionSetup } from './session-setup.js';
 import { canAccessChannel, isOwner as isChannelOwner, OWNER_USER_ID } from './channel-access.js';
 import { setMcpAuthNotify } from './mcp-access.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
@@ -1017,6 +1019,14 @@ client.on('messageCreate', async (message) => {
       message.author.id !== client.user.id) {
     return handleCallbackMessage(message);
   }
+
+  // Session channel: forward owner messages as tmux keystrokes before any other handling
+  if (!message.author.bot && isSessionChannel(message.channelId)) {
+    if (handleSessionMessage(message)) return;
+  }
+
+  // NL session hand-off: "create channel X on box", "resume X on box", etc.
+  if (!message.author.bot && await handleSessionSetup(message)) return;
 
   // All remaining handlers: skip bots and non-allowed users
   if (message.author.bot) return;
@@ -2251,7 +2261,13 @@ async function handleVoiceTranscript(message) {
     if (transcript && transcript.trim().length > 0) {
       await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
       logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${transcript.trim().substring(0, 60)}"`);
-      
+
+      // If in a session channel, forward transcript as tmux keystrokes instead of LLM
+      if (isSessionChannel(message.channelId) && isChannelOwner(message.author.id)) {
+        handleSessionMessage({ ...message, content: transcript.trim() });
+        return;
+      }
+
       // Dispatch to LLM with haivemind channel context + Discord task tracking
       try {
         const text = transcript.trim();
@@ -3797,6 +3813,16 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         const ack = await synthesizeSpeech(dispatchResult.speech);
         if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
       }
+      if (dispatchResult.discordText) {
+        const _postCh = TEXT_CHANNEL_ID || VOICE_REPORT_CHANNEL_ID;
+        if (_postCh) {
+          fetch(`https://discord.com/api/v10/channels/${_postCh}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN || ''}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: dispatchResult.discordText }),
+          }).catch(() => {});
+        }
+      }
       return;
     }
 
@@ -4706,12 +4732,17 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 process.on('uncaughtException', (err) => {
+  // Suppress double-destroy errors from the voice connection oscillation bug — non-fatal
+  if (err?.message?.includes('already been destroyed') || err?.message?.includes('ERR_SOCKET_DGRAM_NOT_RUNNING')) {
+    logger.warn(`[voice] suppressed double-destroy: ${err.message}`);
+    return;
+  }
   logger.error('❌ Uncaught Exception:');
   logger.error(err.stack || err);
   logger.error('⚠️  Attempting graceful shutdown...');
   try {
     cancelAllTasks();
-    if (currentConnection) currentConnection.destroy();
+    if (currentConnection) { try { currentConnection.destroy(); } catch { /* already destroyed */ } }
     client.destroy();
   } catch (cleanupErr) {
     logger.error('❌ Cleanup error during uncaughtException handler:', cleanupErr);
