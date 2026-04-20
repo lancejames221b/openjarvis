@@ -94,6 +94,11 @@ export async function createLiveStream(channelId, botToken) {
     buf += delta;
   }
 
+  function replace(text) {
+    if (done) return;
+    buf = text;
+  }
+
   async function finish(finalText) {
     done = true;
     clearInterval(ticker);
@@ -123,7 +128,7 @@ export async function createLiveStream(channelId, botToken) {
     clearInterval(ticker);
   }
 
-  return { update, finish, stop };
+  return { update, replace, finish, stop };
 }
 
 // Remove consecutively repeated sentences (model stutter artifact).

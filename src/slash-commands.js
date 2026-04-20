@@ -35,6 +35,7 @@ import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
 import { getBox, setBox, listBoxes, getCwd, persistBoxState, BOX_NAMES } from './slash/box-state.js';
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
+import { handleSessionCommand } from './slash/session.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -42,6 +43,8 @@ const SPAWN_CMD = new SlashCommandBuilder()
   .setDescription('Spawn a dedicated cursor-agent session in a new thread')
   .addStringOption(opt =>
     opt.setName('prompt').setDescription('Task or prompt for the agent').setRequired(true))
+  .addAttachmentOption(opt =>
+    opt.setName('file').setDescription('File or image to include with the prompt').setRequired(false))
   .addStringOption(opt =>
     opt.setName('model')
       .setDescription('Model override (default: auto-selected by prompt keywords)')
@@ -148,6 +151,38 @@ const TMUX_CMD = new SlashCommandBuilder()
   .addSubcommand(sub => sub.setName('off').setDescription('Kill the jarvis-hud tmux session'))
   .addSubcommand(sub => sub.setName('status').setDescription('Check if the jarvis-hud tmux session is running'));
 
+const SESSION_CMD = new SlashCommandBuilder()
+  .setName('session')
+  .setDescription('Spawn a live tmux shell session in this channel (owner only, requires SESSION_SHELL_ENABLED=true)')
+  .addSubcommand(sub => sub.setName('start')
+    .setDescription('Start a new shell session')
+    .addStringOption(o => o.setName('command')
+      .setDescription('Command to run (default: claude --dangerously-skip-permissions)')
+      .setRequired(false))
+    .addStringOption(o => o.setName('box')
+      .setDescription('Box to run on (default: active box)')
+      .setRequired(false)
+      .addChoices(...BOX_NAMES.map(n => ({ name: n, value: n })))))
+  .addSubcommand(sub => sub.setName('stop')
+    .setDescription('Kill the session in this channel'))
+  .addSubcommand(sub => sub.setName('list')
+    .setDescription('List all active sessions'))
+  .addSubcommand(sub => sub.setName('send')
+    .setDescription('Send keys to the session (or just type in the channel)')
+    .addStringOption(o => o.setName('text').setDescription('Text or !special key (e.g. !ctrl-c)').setRequired(true)))
+  .addSubcommand(sub => sub.setName('attach')
+    .setDescription('Reattach to a detached jv-* tmux session (screen -r style)')
+    .addStringOption(o => o.setName('name').setDescription('Session name from /session list').setRequired(true))
+    .addStringOption(o => o.setName('box').setDescription('Box the session is on').setRequired(false)
+      .addChoices(...BOX_NAMES.map(n => ({ name: n, value: n })))))
+  .addSubcommand(sub => sub.setName('resume')
+    .setDescription('Scrape a prior thread transcript and resume Claude with that context')
+    .addChannelOption(o => o.setName('thread').setDescription('Thread to resume from').setRequired(true))
+    .addStringOption(o => o.setName('command')
+      .setDescription('Command to run (default: claude --dangerously-skip-permissions)').setRequired(false))
+    .addStringOption(o => o.setName('box').setDescription('Box to run on').setRequired(false)
+      .addChoices(...BOX_NAMES.map(n => ({ name: n, value: n })))));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -176,9 +211,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -417,6 +452,11 @@ export async function handleSlashCommand(interaction, allowedUsers) {
         await interaction.reply({ content: '`jarvis-hud` was not running.', ephemeral: true });
       }
     }
+    return true;
+  }
+
+  if (interaction.commandName === 'session') {
+    await handleSessionCommand(interaction);
     return true;
   }
 

@@ -15,7 +15,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
-import { getBox, getCwd, setCwd } from './box-state.js';
+import { getBox, getCwd, setCwd, listBoxes } from './box-state.js';
+import { isSessionChannel } from './session.js';
 import logger from '../logger.js';
 
 const execAsync = promisify(exec);
@@ -77,8 +78,19 @@ export async function handleDirCommand(interaction, allowedUsers) {
   const path = interaction.options.getString('path');
 
   if (!path) {
+    const target = box.isLocal ? 'local' : box.ssh;
+    const sessionActive = isSessionChannel(interaction.channelId);
+    const boxes = listBoxes();
+    const boxLine = boxes.map(b =>
+      `${b.active ? '▶' : '  '} **${b.name}** (${b.isLocal ? 'local' : b.ssh})`
+    ).join('\n');
     await interaction.reply({
-      content: `**${box.label}** — \`${getCwd()}\``,
+      content: [
+        `**Box:** \`${box.name}\` — ${target}`,
+        `**Cwd:** \`${getCwd()}\``,
+        sessionActive ? `**Session:** active in this thread` : null,
+        `\n**All boxes:**\n${boxLine}`,
+      ].filter(Boolean).join('\n'),
       ephemeral: false,
     });
     return;

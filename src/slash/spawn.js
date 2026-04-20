@@ -28,6 +28,30 @@ function _selectModel(prompt) {
 // Active spawns keyed by threadId → AbortController, so /stop can cancel
 const _activeSessions = new Map();
 
+const _TEXT_EXTS = new Set(['txt','md','js','ts','py','sh','json','yaml','yml','toml','env','log','csv','html','css','xml','sql','rs','go','java','c','cpp','h']);
+const _MAX_ATTACH_BYTES = 200_000;
+
+async function _attachmentSuffix(attachment) {
+  const ext = attachment.name?.split('.').pop()?.toLowerCase() || '';
+  const ct = attachment.contentType?.split(';')[0]?.trim() || '';
+  if (['image/png','image/jpeg','image/gif','image/webp'].includes(ct) || ['png','jpg','jpeg','gif','webp'].includes(ext)) {
+    return `\n\n[Attached image: ${attachment.url}]`;
+  }
+  if (_TEXT_EXTS.has(ext) || ct.startsWith('text/')) {
+    try {
+      const res = await fetch(attachment.url, { signal: AbortSignal.timeout(8_000) });
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength <= _MAX_ATTACH_BYTES) {
+          const text = Buffer.from(buf).toString('utf8');
+          return `\n\n[File: ${attachment.name}]\n\`\`\`\n${text}\n\`\`\``;
+        }
+      }
+    } catch { /* fall through to URL */ }
+  }
+  return `\n\n[Attached file: ${attachment.name} — ${attachment.url}]`;
+}
+
 /**
  * Handle a /spawn interaction.
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
@@ -39,12 +63,14 @@ export async function handleSpawnCommand(interaction) {
     return;
   }
   const explicitModel = interaction.options.getString('model') || null;
+  const attachment = interaction.options.getAttachment('file') || null;
+  const fullPrompt = attachment ? prompt + await _attachmentSuffix(attachment) : prompt;
 
   // Defer immediately — thread creation + agent startup can take a few seconds
   await interaction.deferReply();
 
   const parentId = interaction.channelId;
-  const taskSlug = prompt.slice(0, 48).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'agent session';
+  const taskSlug = fullPrompt.slice(0, 48).replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'agent session';
 
   // Resolve where to stream: create a thread if the channel supports it,
   // otherwise stream directly into the current channel/thread.
@@ -106,7 +132,7 @@ export async function handleSpawnCommand(interaction) {
   _activeSessions.set(threadId, { ac, ls });
 
   // Fire off streaming call — don't await, runs in background
-  _runStreamingAgent(prompt, threadId, ls, ac, explicitModel).finally(() => {
+  _runStreamingAgent(fullPrompt, threadId, ls, ac, explicitModel).finally(() => {
     _activeSessions.delete(threadId);
   });
 }

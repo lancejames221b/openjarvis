@@ -22,6 +22,7 @@ import { getNextMeeting, getCacheAgeMinutes } from './calendar-cache.js';
 import { openOnMac } from './mac-open.js';
 import { resolveProject, listProjects } from './cursor-projects.js';
 import { isVisualModeEnabled } from './visual-mode.js';
+import { mcpCall } from './mcp-access.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -146,6 +147,67 @@ async function cursorOpenHandler(transcript) {
   };
 }
 
+/**
+ * Create a new Notion meeting page and open it in Chrome on gamez + Mac.
+ * Triggered by: "create a notion meeting", "notion meeting", "I just joined a meeting", etc.
+ */
+async function notionMeetingHandler(transcript) {
+  // Extract optional title from transcript
+  const titleMatch = transcript.match(
+    /(?:notion\s+)?meeting\s+(?:for|about|with|called|titled)\s+(.+)/i
+  ) || transcript.match(
+    /(?:create|new|start|open)\s+(?:a\s+)?(?:notion\s+)?meeting\s+(.+)/i
+  );
+  const customTitle = titleMatch?.[1]?.trim().replace(/[^\w\s\-/]/g, '').trim() || null;
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const title = customTitle ? `${customTitle} — ${dateStr}` : `Meeting — ${dateStr}`;
+
+  const pages = JSON.stringify([{
+    properties: { title },
+    icon: '📋',
+    content: '## Attendees\n\n## Agenda\n\n## Notes\n\n## Action Items\n- [ ] ',
+  }]);
+
+  let url = null;
+  try {
+    const result = await mcpCall('notion', 'notion-create-pages', { pages });
+    if (result) {
+      const parsed = JSON.parse(result);
+      url = parsed?.[0]?.url || parsed?.url || null;
+    }
+  } catch (err) {
+    logger.warn(`[shortcut] notion-meeting: create failed: ${err.message}`);
+    return { handled: false };
+  }
+
+  if (!url) {
+    logger.warn('[shortcut] notion-meeting: no URL in response');
+    return { handled: false };
+  }
+
+  logger.info(`[shortcut] notion-meeting: created "${title}" → ${url}`);
+
+  // Open on gamez (local Chrome) via SSH if box is configured, else on Mac
+  const GAMEZ_SSH = process.env.GAMEZ_SSH_HOST || 'gamez';
+  try {
+    execSync(
+      `ssh -o ConnectTimeout=5 -o BatchMode=yes ${GAMEZ_SSH} "DISPLAY=:0 google-chrome ${JSON.stringify(url)} &"`,
+      { timeout: 8_000, stdio: 'pipe' }
+    );
+  } catch {
+    // Fallback: try Mac
+    await openOnMac(url).catch(() => {});
+  }
+
+  return {
+    handled: true,
+    speech: `Opening ${title.split(' — ')[0]} in Notion.`,
+    discordText: `📋 **${title}**\n${url}`,
+  };
+}
+
 // ── Shortcut Registry ─────────────────────────────────────────────────
 
 const BUILTIN_SHORTCUTS = [
@@ -162,6 +224,19 @@ const BUILTIN_SHORTCUTS = [
       /open.*calendar.*next/i,
     ],
     handler: calendarOpenNextHandler,
+  },
+  {
+    id: 'notion_meeting',
+    intents: ['ACTION', 'CALENDAR_ACTION', null],
+    patterns: [
+      /(?:create|new|start|open)\s+(?:a\s+)?notion\s+meeting/i,
+      /notion\s+meeting/i,
+      /(?:i\s+(?:just\s+)?)?joined\s+(?:a\s+)?meeting/i,
+      /(?:joining|starting)\s+(?:a\s+)?meeting/i,
+      /new\s+meeting\s+(?:note|page|notes?)/i,
+      /meeting\s+notes?\s+(?:page|for\s+now|now)/i,
+    ],
+    handler: notionMeetingHandler,
   },
   {
     id: 'cursor_open_project',

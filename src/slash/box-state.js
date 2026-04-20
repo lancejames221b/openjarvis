@@ -60,6 +60,12 @@ export function getBox() {
   return { name: _activeBox, ...BOXES[_activeBox] };
 }
 
+/** Get descriptor for a named box without changing active box. Returns null if not found. */
+export function getBoxByName(name) {
+  if (!BOXES[name]) return null;
+  return { name, ...BOXES[name] };
+}
+
 /** Switch active box. Returns true if valid name, false otherwise. */
 export function setBox(name) {
   if (!BOXES[name]) return false;
