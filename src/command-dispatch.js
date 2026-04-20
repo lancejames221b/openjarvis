@@ -16,6 +16,8 @@ import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels,
 import { detectChannelCommand } from './channel-router.js';
 import { fuzzyMatch } from './fuzzy-dispatch.js';
 import { classifyIntent as haikuClassify } from './haiku-intent.js';
+import { findProjectMapByName } from './slash/project-map.js';
+import { startSessionDirect } from './slash/session.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -301,7 +303,7 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   // ── Shortcut fast-path (bypasses LLM for known commands) ────────────
   const shortcutResult = await tryShortcut(cleanedTranscript, null);
   if (shortcutResult.handled) {
-    return { type: 'shortcut', speech: shortcutResult.speech, silent: shortcutResult.silent };
+    return { type: 'shortcut', speech: shortcutResult.speech, silent: shortcutResult.silent, discordText: shortcutResult.discordText ?? null };
   }
 
   // ── Tier 1.5: Fuzzy keyword matching ────────────────────────────────
@@ -379,6 +381,18 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
             const p = switchPersona(requested);
             return { type: 'persona_switch', persona: p.name, voice: p.voice, wakeWords: p.wakeWords };
           }
+        }
+
+        if (haikuResult.intent === 'session_start' && haikuResult.params?.name) {
+          const entry = findProjectMapByName(haikuResult.params.name);
+          if (entry) {
+            const boxName = haikuResult.params.box || entry.box;
+            // Fire async — voice gets the ack immediately, session starts in background
+            startSessionDirect({ channelId: entry.channelId, boxName, cwd: entry.cwd, label: entry.name })
+              .catch(err => logger.warn(`[dispatch] async session-start failed: ${err.message}`));
+            return { type: 'shortcut', speech: `Starting ${entry.name} session.`, silent: false, discordText: null };
+          }
+          // Project name not found in map — fall through to brain
         }
       }
     } catch (err) {

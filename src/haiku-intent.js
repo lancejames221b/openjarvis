@@ -20,6 +20,7 @@
 import logger from './logger.js';
 import { listChannels } from './focus-state.js';
 import { listPersonalities } from './brain.js';
+import { listProjectMaps } from './slash/project-map.js';
 
 const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
 const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
@@ -40,7 +41,12 @@ function buildVocabulary() {
   const personas = listPersonalities();
   const personaVocab = personas.join(', ');
 
-  return { channelVocab, personaVocab };
+  const projects = listProjectMaps();
+  const projectVocab = projects.length
+    ? projects.map(p => `  - ${p.name} (box: ${p.box}, cwd: ${p.cwd})`).join('\n')
+    : '  (none yet)';
+
+  return { channelVocab, personaVocab, projectVocab };
 }
 
 const SYSTEM_PROMPT = `You are a voice command intent classifier for a Discord voice assistant called Jarvis.
@@ -68,12 +74,19 @@ INTENTS:
    Triggers: "be X", "switch to X voice/persona/mode", "use X", "activate X"
    Params: { persona: "<persona name>" }
 
-6. not_command — this is NOT a structured command. It's a question, request, conversation, or task.
+6. session_start — user wants to start or resume a coding/tmux session in a known project channel
+   Triggers: "go to X", "jump into X", "start working on X", "resume X", "open X on <box>",
+             "get into X", "pull up X", "dev X", "work on X", "fire up X", "hop into X"
+   Only match if the project name (X) appears in AVAILABLE PROJECTS.
+   Params: { name: "<project name from list>", box: "<box name if mentioned, else null>" }
+
+7. not_command — this is NOT a structured command. It's a question, request, conversation, or task.
    Use this for anything that doesn't clearly match the above intents.
 
 IMPORTANT:
 - When in doubt, return not_command. False positives are worse than false negatives.
-- Match channel names fuzzily (e.g. "deploy" matches "deployments", "voice dev" matches "jarvis-voice-dev")
+- For session_start: ONLY match if the project name is in the AVAILABLE PROJECTS list. Do not invent projects.
+- Match channel/project names fuzzily (e.g. "deploy" matches "deployments", "openjarvis" matches "open jarvis")
 - The user is speaking via STT — expect minor transcription errors, filler words, articles ("the", "a")
 
 Respond with ONLY a JSON object, no markdown, no explanation:
@@ -97,9 +110,9 @@ export async function classifyIntent(transcript) {
     return { intent: 'not_command', params: {}, confidence: 1.0 };
   }
 
-  const { channelVocab, personaVocab } = buildVocabulary();
+  const { channelVocab, personaVocab, projectVocab } = buildVocabulary();
 
-  const userMessage = `AVAILABLE CHANNELS:\n${channelVocab}\n\nAVAILABLE PERSONAS: ${personaVocab}\n\nTRANSCRIPT: "${transcript}"`;
+  const userMessage = `AVAILABLE CHANNELS:\n${channelVocab}\n\nAVAILABLE PERSONAS: ${personaVocab}\n\nAVAILABLE PROJECTS:\n${projectVocab}\n\nTRANSCRIPT: "${transcript}"`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CLASSIFIER_TIMEOUT_MS);
