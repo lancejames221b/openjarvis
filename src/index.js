@@ -2693,9 +2693,10 @@ async function joinChannel(voiceChannelId, options = {}) {
     // Ready, destroy and let the outer retry loop rebuild the connection from scratch.
     if (newState.status === VoiceConnectionStatus.Connecting) {
       _connectingCount++;
-      if (_connectingCount > 10) {
+      if (_connectingCount > 10 && connection.state.status !== VoiceConnectionStatus.Destroyed) {
         logger.warn(`⚠️ Voice connection oscillating (${_connectingCount} connecting cycles) — destroying for retry`);
         try { connection.destroy(); } catch {}
+        _connectingCount = -999; // prevent re-trigger; handleDisconnect owns recovery from here
       }
     } else if (newState.status === VoiceConnectionStatus.Ready) {
       _connectingCount = 0; // Reset on success
@@ -2729,7 +2730,12 @@ async function joinChannel(voiceChannelId, options = {}) {
       // Re-attach disconnect handler after successful reconnect
       connection.once(VoiceConnectionStatus.Disconnected, handleDisconnect);
     } catch {
-      try { connection.destroy(); } catch {} // Guard against double-destroy race condition
+      // Only destroy if the connection isn't already in Destroyed state — the oscillation
+      // guard above may have already destroyed it, and a second destroy on the same UDP
+      // socket triggers ERR_SOCKET_DGRAM_NOT_RUNNING.
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
+        try { connection.destroy(); } catch {}
+      }
       const delay = reconnectState.nextDelay();
       logger.info(`⚠️  Disconnected (attempt #${reconnectState.attempts}), rejoining in ${delay / 1000}s...`);
 

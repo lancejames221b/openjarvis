@@ -31,6 +31,14 @@ export function getProjectMap(channelId) {
   return _load()[channelId] || null;
 }
 
+export function deleteProjectMap(channelId) {
+  const map = _load();
+  if (!map[channelId]) return false;
+  delete map[channelId];
+  _save(map);
+  return true;
+}
+
 export function findProjectMapByName(name) {
   const map = _load();
   const q = name.toLowerCase();

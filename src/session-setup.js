@@ -18,9 +18,9 @@
  * SECURITY: Owner-only (isOwner check). Requires SESSION_SHELL_ENABLED=true.
  */
 
-import { getBoxByName, setBox, getCwd, setCwd } from './slash/box-state.js';
+import { getBox, getBoxByName, getCwd } from './slash/box-state.js';
 import { isOwner } from './channel-access.js';
-import { setProjectMap, findProjectMapByName } from './slash/project-map.js';
+import { setProjectMap, deleteProjectMap, findProjectMapByName } from './slash/project-map.js';
 import { startSessionDirect } from './slash/session.js';
 import logger from './logger.js';
 
@@ -87,6 +87,11 @@ export async function handleSessionSetup(message) {
   // ── CREATE + MAP + START ─────────────────────────────────────────────────
   let m = text.match(CREATE_RE);
   if (m) {
+    if (!GUILD_ID) {
+      await _reply(message, '`DISCORD_GUILD_ID` is not configured — cannot create channels.');
+      return true;
+    }
+
     const [, name, boxName] = m;
     const box = getBoxByName(boxName);
     if (!box) {
@@ -97,12 +102,12 @@ export async function handleSessionSetup(message) {
     const pathHint = text.match(PATH_RE)?.[1] || null;
     const cwd = _resolvePath(box, pathHint) || getCwd();
 
+    let channelId = null;
+    let mapWritten = false;
     try {
-      const channelId = await _createDiscordChannel(name, GUILD_ID);
+      channelId = await _createDiscordChannel(name, GUILD_ID);
       setProjectMap(channelId, name, box.name, cwd);
-
-      setBox(box.name);
-      setCwd(cwd);
+      mapWritten = true;
 
       const status = await startSessionDirect({
         channelId,
@@ -111,10 +116,16 @@ export async function handleSessionSetup(message) {
         label: name,
       });
 
+      // startSessionDirect returns an error string on failure rather than throwing
+      if (/^(Failed|Max |`|Session already)/.test(status)) {
+        throw new Error(status);
+      }
+
       await _reply(message, `Created <#${channelId}> → \`${box.name}:${cwd}\`\n${status}`);
       logger.info(`[session-setup] created #${name} → ${box.name}:${cwd}`);
     } catch (err) {
       logger.error(`[session-setup] create+start failed: ${err.message}`);
+      if (mapWritten && channelId) deleteProjectMap(channelId);
       await _reply(message, `Failed: \`${err.message}\``);
     }
     return true;
@@ -151,11 +162,12 @@ export async function handleSessionSetup(message) {
     }
 
     const boxName = boxNameHint || entry.box;
-    const box = getBoxByName(boxName) || getBoxByName(entry.box);
+    const box = getBoxByName(boxName) || getBoxByName(entry.box) || getBox();
+    if (!box) {
+      await _reply(message, `Box \`${entry.box}\` no longer exists in the box registry.`);
+      return true;
+    }
     const cwd = entry.cwd;
-
-    setBox(box.name);
-    setCwd(cwd);
 
     try {
       const status = await startSessionDirect({
