@@ -80,7 +80,11 @@ INTENTS:
    Only match if the project name (X) appears in AVAILABLE PROJECTS.
    Params: { name: "<project name from list>", box: "<box name if mentioned, else null>" }
 
-7. not_command — this is NOT a structured command. It's a question, request, conversation, or task.
+7. chat_project — user wants a lightweight text chat response with project context (no tmux session)
+   Triggers: "chat", "quick chat", "just chat", "chat openjarvis", "hey chat", "chat about X"
+   Params: { name: "<project name if mentioned, else null>" }
+
+8. not_command — this is NOT a structured command. It's a question, request, conversation, or task.
    Use this for anything that doesn't clearly match the above intents.
 
 IMPORTANT:

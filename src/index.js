@@ -1025,8 +1025,15 @@ client.on('messageCreate', async (message) => {
     if (handleSessionMessage(message)) return;
   }
 
-  // NL session hand-off: "create channel X on box", "resume X on box", etc.
-  if (!message.author.bot && await handleSessionSetup(message)) return;
+  // NL session hand-off: "create channel X on box", "resume X on box", "chat X", etc.
+  if (!message.author.bot) {
+    const setupResult = await handleSessionSetup(message);
+    if (setupResult === true) return;
+    if (setupResult && typeof setupResult === 'object' && !setupResult.handled) {
+      // Chat mode: fall through with workspace context injected
+      message._workspaceContext = setupResult.workspaceContext;
+    }
+  }
 
   // All remaining handlers: skip bots and non-allowed users
   if (message.author.bot) return;
@@ -1994,9 +2001,11 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     ? `[Relevant memory from prior sessions]\n${memoryBlock}\n\n`
     : '';
 
-  const finalPrompt = `${memoryPrefix}${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
+  const _workspacePrefix = message._workspaceContext ? `${message._workspaceContext}\n\n` : '';
+  const finalPrompt = `${_workspacePrefix}${memoryPrefix}${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
 
   logger.info(`@mention/reply from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
+  if (message._workspaceContext) logger.info(`[session-setup] workspace context injected: ${message._workspaceContext}`);
 
   // Show typing indicator while we process
   try { await message.channel.sendTyping(); } catch (_) {}
@@ -3851,7 +3860,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     }
 
     // dispatchResult.type === 'brain' - fall through to background brain call
-    const transcript = dispatchResult.transcript || cleanedTranscript;
+    const _vcWorkspace = dispatchResult.workspaceContext ? `${dispatchResult.workspaceContext}\n\n` : '';
+    const transcript = `${_vcWorkspace}${dispatchResult.transcript || cleanedTranscript}`;
 
     // ── Background brain call (async - non-blocking) ──
 

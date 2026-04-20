@@ -17,7 +17,8 @@ import { detectChannelCommand } from './channel-router.js';
 import { fuzzyMatch } from './fuzzy-dispatch.js';
 import { classifyIntent as haikuClassify } from './haiku-intent.js';
 import { findProjectMapByName } from './slash/project-map.js';
-import { startSessionDirect } from './slash/session.js';
+import { startSessionDirect, buildResumeCommand } from './slash/session.js';
+import { getBox, getCwd } from './slash/box-state.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -383,7 +384,16 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
           }
         }
 
-        if (haikuResult.intent === 'session_start' && haikuResult.params?.name) {
+        if (haikuResult.intent === 'session_start') {
+          // Bare "continue" via voice — resume latest session in active cwd
+          if (!haikuResult.params?.name || /^continue$/i.test(cleanedTranscript)) {
+            const box = getBox();
+            const cwd = getCwd();
+            const command = buildResumeCommand(null);
+            startSessionDirect({ channelId, command, boxName: box?.name, cwd, label: 'continue' })
+              .catch(err => logger.warn(`[dispatch] async continue failed: ${err.message}`));
+            return { type: 'shortcut', speech: 'Continuing session.', silent: false, discordText: null };
+          }
           const entry = findProjectMapByName(haikuResult.params.name);
           if (entry) {
             const boxName = haikuResult.params.box || entry.box;
@@ -393,6 +403,18 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
             return { type: 'shortcut', speech: `Starting ${entry.name} session.`, silent: false, discordText: null };
           }
           // Project name not found in map — fall through to brain
+        }
+
+        if (haikuResult.intent === 'chat_project') {
+          const name = haikuResult.params?.name || null;
+          let cwd = null;
+          if (name) {
+            const entry = findProjectMapByName(name);
+            if (entry?.cwd) cwd = entry.cwd;
+          }
+          if (!cwd) cwd = getCwd() || null;
+          const workspaceContext = cwd ? `[WORKSPACE: ${cwd}]` : null;
+          return { type: 'brain', transcript: cleanedTranscript, workspaceContext };
         }
       }
     } catch (err) {

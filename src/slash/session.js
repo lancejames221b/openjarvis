@@ -464,6 +464,20 @@ export function handleSessionMessage(message) {
 export function isSessionChannel(channelId) { return _active.has(channelId); }
 
 /**
+ * Build the correct claude command for a resume-by-ID or --continue invocation.
+ * Respects CLAUDE_MCP_CONFIG env var.
+ *
+ * @param {string|null} sessionId  — UUID to --resume, or null for --continue
+ */
+export function buildResumeCommand(sessionId = null) {
+  const base = _MCP_CONFIG ? `claude --mcp-config ${_MCP_CONFIG}` : 'claude';
+  if (sessionId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return `${base} --resume ${sessionId} --dangerously-skip-permissions`;
+  }
+  return `${base} --continue --dangerously-skip-permissions`;
+}
+
+/**
  * Start a session programmatically without a Discord slash interaction.
  * Used by session-setup.js for NL-triggered "create channel + start session" flows.
  *

@@ -35,7 +35,8 @@ import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
 import { getBox, setBox, listBoxes, getCwd, persistBoxState, BOX_NAMES } from './slash/box-state.js';
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
-import { handleSessionCommand } from './slash/session.js';
+import { handleSessionCommand, startSessionDirect, buildResumeCommand } from './slash/session.js';
+import { findProjectMapByName } from './slash/project-map.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -183,6 +184,17 @@ const SESSION_CMD = new SlashCommandBuilder()
     .addStringOption(o => o.setName('box').setDescription('Box to run on').setRequired(false)
       .addChoices(...BOX_NAMES.map(n => ({ name: n, value: n })))));
 
+const RESUME_CMD = new SlashCommandBuilder()
+  .setName('resume')
+  .setDescription('Resume a Claude Code session (owner only, requires SESSION_SHELL_ENABLED=true)')
+  .addStringOption(o => o.setName('name')
+    .setDescription('Project name from project-map (e.g. openjarvis)').setRequired(false))
+  .addStringOption(o => o.setName('id')
+    .setDescription('Claude Code session UUID to resume exactly').setRequired(false))
+  .addStringOption(o => o.setName('box')
+    .setDescription('Box to run on (default: active box)').setRequired(false)
+    .addChoices(...BOX_NAMES.map(n => ({ name: n, value: n }))));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -211,9 +223,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -457,6 +469,47 @@ export async function handleSlashCommand(interaction, allowedUsers) {
 
   if (interaction.commandName === 'session') {
     await handleSessionCommand(interaction);
+    return true;
+  }
+
+  if (interaction.commandName === 'resume') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    await interaction.deferReply({ ephemeral: false });
+    const nameOpt = interaction.options.getString('name');
+    const idOpt   = interaction.options.getString('id');
+    const boxOpt  = interaction.options.getString('box');
+
+    let channelId = interaction.channelId;
+    let boxName   = boxOpt || null;
+    let cwd       = null;
+    let label     = 'resume';
+
+    if (nameOpt) {
+      const entry = findProjectMapByName(nameOpt);
+      if (!entry) {
+        await interaction.editReply(`Unknown project: \`${nameOpt}\`. Use \`/session start\` to set one up.`);
+        return true;
+      }
+      channelId = entry.channelId;
+      boxName   = boxOpt || entry.box;
+      cwd       = entry.cwd;
+      label     = entry.name;
+    } else {
+      const box = boxOpt ? null : getBox();
+      boxName   = boxOpt || box?.name;
+      cwd       = getCwd();
+    }
+
+    const command = buildResumeCommand(idOpt || null);
+    try {
+      const status = await startSessionDirect({ channelId, command, boxName, cwd, label });
+      await interaction.editReply(status);
+    } catch (err) {
+      await interaction.editReply(`Failed: \`${err.message}\``);
+    }
     return true;
   }
 
