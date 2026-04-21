@@ -13,18 +13,38 @@ const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_G
 // Use the actual binary path and pass flags explicitly.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
 // Logical model aliases — map short names to Anthropic model IDs.
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const MODEL_ALIASES = {
-  claude:  process.env.DISPATCH_MODEL      || "claude-sonnet-4-6",
-  sonnet:  process.env.DISPATCH_MODEL      || "claude-sonnet-4-6",
-  opus:    process.env.DISPATCH_MODEL_DEEP || "claude-opus-4-7",
-  haiku:   "claude-haiku-4-5-20251001",
+  claude:      process.env.DISPATCH_MODEL      || "claude-sonnet-4-6",
+  sonnet:      process.env.DISPATCH_MODEL      || "claude-sonnet-4-6",
+  opus:        process.env.DISPATCH_MODEL_DEEP || "claude-opus-4-7",
+  haiku:       "claude-haiku-4-5-20251001",
+  "opus-plan": process.env.DISPATCH_MODEL_DEEP || "claude-opus-4-7",
 };
+// Strip a trailing -<effort> suffix to get the base alias, then add effort suffixes.
+EFFORT_LEVELS.forEach(l => {
+  MODEL_ALIASES[`claude-${l}`]  = MODEL_ALIASES["claude"];
+  MODEL_ALIASES[`sonnet-${l}`]  = MODEL_ALIASES["sonnet"];
+  MODEL_ALIASES[`opus-${l}`]    = MODEL_ALIASES["opus"];
+});
 const CLAUDE_MODEL_RE = /^claude-/;
+// Return the effort level encoded in an alias (e.g. "claude-high" → "high", "opus-plan" → "max")
+function effortForAlias(raw) {
+  if (!raw) return null;
+  const m = String(raw).trim();
+  if (m === "opus-plan") return "max";
+  const suffix = EFFORT_LEVELS.find(l => m.endsWith(`-${l}`));
+  return suffix || null;
+}
 function resolveModel(raw) {
   if (!raw) return "";
   const m = String(raw).trim();
   if (Object.prototype.hasOwnProperty.call(MODEL_ALIASES, m)) return MODEL_ALIASES[m];
-  if (CLAUDE_MODEL_RE.test(m)) return m;
+  if (CLAUDE_MODEL_RE.test(m)) {
+    // Strip a known effort suffix so "claude-sonnet-4-6-high" doesn't reach the CLI.
+    const stripped = m.replace(new RegExp(`-(${EFFORT_LEVELS.join("|")})$`), "");
+    return stripped;
+  }
   return "";
 }
 const DEFAULT_CLAUDE_MODEL = resolveModel(process.env.DISPATCH_MODEL) || "claude-sonnet-4-6";
@@ -210,8 +230,9 @@ function collapseMessages(messages = []) {
 
 // Spawn claude -p with stream-json output; optionally resume a prior session.
 // Prompt is written to stdin to avoid ARG_MAX limits on large conversation histories.
-function spawnClaudeStream(prompt, model, chatId, channelKey) {
+function spawnClaudeStream(prompt, model, chatId, channelKey, effort) {
   const args = [...BASE_ARGS, "--model", model];
+  if (effort) args.push("--effort", effort);
   if (chatId) args.push("--resume", chatId);
   // Strip proxy/token overrides so claude uses its own stored OAuth credentials
   // from ~/.claude/ rather than any stale env vars set by the parent service.
@@ -313,10 +334,11 @@ setInterval(() => {
 // Buffer the full response from claude -p (non-streaming path).
 // Parses NDJSON lines; extracts text from result event and session_id from system:init.
 async function callClaudeAgent(prompt, modelOverride, chatId, channelKey) {
+  const effort = effortForAlias(modelOverride);
   const model = resolveModel(modelOverride) || DEFAULT_CLAUDE_MODEL;
   const start = Date.now();
   return new Promise((resolve, reject) => {
-    const child = spawnClaudeStream(prompt, model, chatId, channelKey);
+    const child = spawnClaudeStream(prompt, model, chatId, channelKey, effort);
     let buf = "";
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += d; });
@@ -354,13 +376,13 @@ async function callClaudeAgent(prompt, modelOverride, chatId, channelKey) {
 
 // Stream claude -p NDJSON deltas directly to an SSE response.
 // Returns the resolvedSessionId once the stream completes.
-async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey) {
+async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, effort) {
   const completionId = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const start = Date.now();
 
   return new Promise((resolve, reject) => {
-    const child = spawnClaudeStream(prompt, model, chatId, channelKey);
+    const child = spawnClaudeStream(prompt, model, chatId, channelKey, effort);
     let lineBuf = "";
     let resolvedSessionId = chatId;
     let clientAborted = false;
@@ -568,9 +590,11 @@ app.post("/admin/reload-accounts", requireAuth, (_req, res) => {
 
 app.post("/v1/chat/completions", requireAuth, async (req, res) => {
   metrics.requests++;
+  let releaseLock = () => {}; // hoisted so catch block can always call it safely
   try {
     const requestedModel = String(req.body?.model || DEFAULT_CLAUDE_MODEL);
     const model = resolveModel(requestedModel) || DEFAULT_CLAUDE_MODEL;
+    const effort = effortForAlias(requestedModel);
     const channelKey = String(req.body?.user || "").trim() || null;
     const wantStream = Boolean(req.body?.stream);
 
@@ -622,7 +646,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     if (!chatId) {
       channelSessionLocks.set(channelKey, new Promise(r => { lockResolve = r; }));
     }
-    const releaseLock = () => {
+    releaseLock = () => {
       if (lockResolve) { lockResolve(); channelSessionLocks.delete(channelKey); lockResolve = null; }
     };
 
@@ -634,7 +658,7 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
 
       let resolvedSessionId;
       try {
-        resolvedSessionId = await streamClaudeToSSE(prompt, model, chatId, res, req, channelKey);
+        resolvedSessionId = await streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, effort);
       } catch (streamError) {
         releaseLock();
         // Don't try to write to a closed/aborted socket.
