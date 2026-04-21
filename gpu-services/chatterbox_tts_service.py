@@ -538,6 +538,62 @@ async def list_voices():
     }
 
 
+@app.post("/voices/upload")
+async def upload_voice(request: Request):
+    """
+    Upload an audio file as a new voice reference.
+    Multipart form: audio (file), name (str), make_default (bool, optional).
+    Saves to ~/dev/voice-clones/{name}/{name}_reference_15s.wav and hot-reloads VOICE_REFS.
+    """
+    import subprocess, tempfile, shutil
+    from fastapi import UploadFile, Form
+    form = await request.form()
+    name = str(form.get("name", "")).strip().lower()
+    make_default_val = str(form.get("make_default", "false")).lower()
+    make_default = make_default_val in ("true", "1", "yes")
+    audio = form.get("audio")
+
+    if not name or not audio:
+        raise HTTPException(status_code=400, detail="name and audio required")
+    if not re.match(r'^[a-z0-9_-]+$', name):
+        raise HTTPException(status_code=400, detail="name must be lowercase alphanumeric/underscore/dash only")
+
+    audio_bytes = await audio.read()
+    orig_filename = getattr(audio, "filename", "audio.wav") or "audio.wav"
+    suffix = Path(orig_filename).suffix or ".wav"
+
+    clone_dir = Path.home() / "dev" / "voice-clones" / name
+    clone_dir.mkdir(parents=True, exist_ok=True)
+    ref_path = clone_dir / f"{name}_reference_15s.wav"
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y", "-i", tmp_path,
+            "-t", "15", "-ar", "22050", "-ac", "1", "-acodec", "pcm_s16le",
+            str(ref_path),
+        ], capture_output=True, timeout=120)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500,
+                detail=f"ffmpeg failed: {result.stderr.decode()[:300]}")
+    finally:
+        os.unlink(tmp_path)
+
+    VOICE_REFS[name] = ref_path
+    if name not in VOICE_DEFAULTS:
+        VOICE_DEFAULTS[name] = {"exaggeration": 0.35, "cfg_weight": 1.5, "temperature": 0.5}
+
+    global DEFAULT_VOICE
+    if make_default:
+        DEFAULT_VOICE = name
+
+    logger.info(f"[upload] saved voice '{name}' → {ref_path} (default={make_default})")
+    return {"ok": True, "name": name, "path": str(ref_path), "active": make_default}
+
+
 @app.post("/voice/defaults")
 async def update_voice_defaults(request: Request):
     """

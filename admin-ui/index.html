@@ -1403,12 +1403,36 @@
           <!-- CENTER: Record / Upload / Preview -->
           <div class="station-col station-col-studio">
             <div class="station-col-title">Studio</div>
-            <label class="dropzone" id="dropzone" for="ref-upload">
+
+            <!-- YouTube clone -->
+            <div class="yt-clone-block" id="yt-clone-block">
+              <div class="station-col-title" style="margin-top:0">From YouTube</div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input class="ii" id="yt-url" placeholder="https://youtube.com/watch?v=…" style="flex:1" />
+                <input class="ii" id="yt-name" placeholder="voice name" style="flex:0 0 110px" />
+                <label style="display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--bone-dim);white-space:nowrap;cursor:pointer">
+                  <input type="checkbox" id="yt-default" style="accent-color:var(--signal)"/> default
+                </label>
+                <button class="btn btn-xs" id="yt-clone-btn">Clone ↗</button>
+              </div>
+              <div id="yt-status" style="font-family:var(--mono);font-size:10px;color:var(--bone-dim);margin-top:6px;min-height:14px"></div>
+            </div>
+
+            <!-- File drop / upload -->
+            <label class="dropzone" id="dropzone" for="ref-upload" style="margin-top:16px">
               <input type="file" id="ref-upload" accept="audio/wav,audio/mpeg,audio/flac" hidden />
               <span class="dropzone-icon">&#8617;</span>
               <span class="dropzone-title">Drop reference audio</span>
               <span class="dropzone-hint">10–15s clean speech · wav / mp3 / flac</span>
             </label>
+            <!-- Voice name + save form (revealed after file selection) -->
+            <div class="inline-add" id="upload-save-form" style="margin-top:8px">
+              <input class="ii" id="upload-name" placeholder="voice name" />
+              <label style="display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--bone-dim);white-space:nowrap;cursor:pointer">
+                <input type="checkbox" id="upload-default" style="accent-color:var(--signal)"/> default
+              </label>
+              <button class="btn btn-xs primary" id="upload-save-btn">Save Clone</button>
+            </div>
 
             <div class="preview">
               <textarea id="preview-text" placeholder="Type a line to hear the selected voice speak it back…">Good evening. The household is calm. I am standing by.</textarea>
@@ -1985,13 +2009,95 @@
         });
     }
 
+    let _pendingUploadFile = null;
+
     async function handleRef(file) {
+      _pendingUploadFile = file;
       const dz = document.getElementById("dropzone");
       dz.querySelector(".dropzone-title").textContent = file.name;
-      dz.querySelector(".dropzone-hint").textContent = `${(
-        file.size / 1024
-      ).toFixed(0)} KB · ready for enrollment`;
-      // Future: POST to /api/chatterbox/enroll with voice name + file
+      dz.querySelector(".dropzone-hint").textContent = `${(file.size / 1024).toFixed(0)} KB · ready to save`;
+      const form = document.getElementById('upload-save-form');
+      form.classList.add('open');
+      const base = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+      document.getElementById('upload-name').value = base;
+    }
+
+    function wireDropzoneUpload() {
+      const saveBtn = document.getElementById('upload-save-btn');
+      if (!saveBtn) return;
+      saveBtn.addEventListener('click', async () => {
+        if (!_pendingUploadFile) return toast('no file selected', false);
+        const name = document.getElementById('upload-name').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const make_default = document.getElementById('upload-default').checked;
+        if (!name) return toast('voice name required', false);
+        const origText = saveBtn.textContent;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          const fd = new FormData();
+          fd.append('audio', _pendingUploadFile);
+          fd.append('name', name);
+          fd.append('make_default', make_default ? 'true' : 'false');
+          const r = await fetch(`${API}/chatterbox/upload`, { method: 'POST', body: fd });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok) {
+            toast(`voice saved: ${d.name}`);
+            document.getElementById('upload-save-form').classList.remove('open');
+            document.getElementById('dropzone').querySelector('.dropzone-title').textContent = 'Drop reference audio';
+            document.getElementById('dropzone').querySelector('.dropzone-hint').textContent = '10–15s clean speech · wav / mp3 / flac';
+            _pendingUploadFile = null;
+            const data = await safeJSON(`${API}/state`);
+            if (data?.voices) renderVoices(data.voices);
+          } else {
+            toast(d.error || 'upload failed', false);
+          }
+        } catch (e) {
+          toast(e.message, false);
+        }
+        saveBtn.disabled = false;
+        saveBtn.textContent = origText;
+      });
+    }
+
+    function wireYouTubeClone() {
+      const btn = document.getElementById('yt-clone-btn');
+      const status = document.getElementById('yt-status');
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        const url = document.getElementById('yt-url').value.trim();
+        const name = document.getElementById('yt-name').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const make_default = document.getElementById('yt-default').checked;
+        if (!url || !name) return toast('URL and voice name required', false);
+        status.textContent = 'Downloading…';
+        status.style.color = 'var(--bone-dim)';
+        btn.disabled = true;
+        try {
+          const r = await fetch(`${API}/admin/chatterbox/clone-from-youtube`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, name, make_default }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok) {
+            status.textContent = `✓ saved → ${d.name}`;
+            status.style.color = 'var(--live)';
+            document.getElementById('yt-url').value = '';
+            document.getElementById('yt-name').value = '';
+            document.getElementById('yt-default').checked = false;
+            toast(`voice cloned: ${d.name}`);
+            const data = await safeJSON(`${API}/state`);
+            if (data?.voices) renderVoices(data.voices);
+          } else {
+            status.textContent = `✗ ${d.error || 'clone failed'}`;
+            status.style.color = 'var(--dead)';
+            toast(d.error || 'clone failed', false);
+          }
+        } catch (e) {
+          status.textContent = `✗ ${e.message}`;
+          status.style.color = 'var(--dead)';
+        }
+        btn.disabled = false;
+      });
     }
 
     async function wirePreview() {
@@ -2149,6 +2255,8 @@
 
       wireSliders();
       wireDropzone();
+      wireDropzoneUpload();
+      wireYouTubeClone();
       wirePreview();
       wireEffortPills();
       wireShortcutAdd();

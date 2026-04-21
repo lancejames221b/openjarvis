@@ -10,10 +10,14 @@
  */
 
 import http from 'http';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, createReadStream } from 'fs';
+import { unlink, mkdir, readdir } from 'fs/promises';
+import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
+import { exec as execCb } from 'child_process';
+import { promisify } from 'util';
+const exec = promisify(execCb);
 import logger from './logger.js';
 import {
   getActivePersona,
@@ -312,6 +316,73 @@ export function startAdminApi() {
           clipsNeeded: enrollmentState.clipsNeeded,
           currentPrompt: enrollmentState.currentPrompt?.(),
         });
+      }
+
+      // ── Chatterbox: clone from YouTube ────────────────────────────────
+      if (path === '/admin/chatterbox/clone-from-youtube' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const { url, name, make_default = false } = body;
+        if (!url || !name) return sendJSON(res, 400, { error: 'url and name required' });
+        if (!/^[a-z0-9_-]+$/.test(name)) return sendJSON(res, 400, { error: 'name must be lowercase alphanumeric/underscore/dash' });
+
+        const ytdlp = process.env.YTDLP_PATH || 'yt-dlp';
+        const tmpId = `jarvis-yt-${name}-${Date.now()}`;
+        const tmpBase = join(tmpdir(), tmpId);
+        const tmpTemplate = `${tmpBase}.%(ext)s`;
+
+        logger.info(`[admin-api] yt clone: ${name} ← ${url}`);
+        try {
+          await exec(`"${ytdlp}" -x --audio-format wav --audio-quality 0 --no-playlist -o "${tmpTemplate}" "${url}"`, { timeout: 180_000 });
+        } catch (e) {
+          return sendJSON(res, 500, { error: `yt-dlp failed: ${e.message.slice(0, 200)}` });
+        }
+
+        // Find the file yt-dlp created (tmpBase.{wav|webm|...})
+        const tmpFiles = (await readdir(tmpdir())).filter(f => f.startsWith(tmpId));
+        if (!tmpFiles.length) return sendJSON(res, 500, { error: 'downloaded file not found' });
+        const downloaded = join(tmpdir(), tmpFiles[0]);
+
+        // Convert/trim to 15s 22kHz mono WAV
+        const cloneDir = join(homedir(), 'dev', 'voice-clones', name);
+        mkdirSync(cloneDir, { recursive: true });
+        const refPath = join(cloneDir, `${name}_reference_15s.wav`);
+        try {
+          await exec(`ffmpeg -y -i "${downloaded}" -t 15 -ar 22050 -ac 1 -acodec pcm_s16le "${refPath}"`, { timeout: 60_000 });
+        } catch (e) {
+          await unlink(downloaded).catch(() => {});
+          return sendJSON(res, 500, { error: `ffmpeg failed: ${e.message.slice(0, 200)}` });
+        }
+        await unlink(downloaded).catch(() => {});
+
+        // Upload to chatterbox service for hot-reload
+        const chatterboxUrl = process.env.CHATTERBOX_URL || 'http://localhost:3340';
+        try {
+          const fileStream = createReadStream(refPath);
+          const boundary = `boundary${Date.now()}`;
+          const nameField = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n${name}\r\n`);
+          const makeDefaultField = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="make_default"\r\n\r\n${make_default}\r\n`);
+          const fileHeader = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="${name}_reference_15s.wav"\r\nContent-Type: audio/wav\r\n\r\n`);
+          const fileEnd = Buffer.from(`\r\n--${boundary}--\r\n`);
+          const fileData = readFileSync(refPath);
+          const multipart = Buffer.concat([nameField, makeDefaultField, fileHeader, fileData, fileEnd]);
+
+          const cbRes = await fetch(`${chatterboxUrl}/voices/upload`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+              'Content-Length': String(multipart.length),
+            },
+            body: multipart,
+            signal: AbortSignal.timeout(30_000),
+          });
+          const cbData = await cbRes.json().catch(() => ({}));
+          logger.info(`[admin-api] chatterbox upload response: ${JSON.stringify(cbData)}`);
+        } catch (e) {
+          logger.warn(`[admin-api] chatterbox upload failed (voice saved to disk): ${e.message}`);
+        }
+
+        logger.info(`[admin-api] yt clone complete: ${name} → ${refPath}`);
+        return sendJSON(res, 200, { ok: true, name, path: refPath, make_default });
       }
 
       // ── Fallback ───────────────────────────────────────────────────────

@@ -281,6 +281,31 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (path === '/api/chatterbox/upload' && req.method === 'POST') {
+    try {
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', async () => {
+        const buf = Buffer.concat(chunks);
+        const r = await fetch(`${SERVICES.chatterbox}/voices/upload`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': req.headers['content-type'] || 'multipart/form-data',
+            'Content-Length': String(buf.length),
+          },
+          body: buf,
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await r.json().catch(() => ({}));
+        sendJSON(res, r.status, data);
+      });
+      req.on('error', e => sendJSON(res, 502, { error: e.message }));
+    } catch (e) {
+      sendJSON(res, 502, { error: e.message });
+    }
+    return;
+  }
+
   // Static files
   let file = path === '/' ? '/index.html' : path;
   const abs = join(__dirname, file);
