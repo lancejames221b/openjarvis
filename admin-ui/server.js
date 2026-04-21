@@ -26,7 +26,7 @@ const SERVICES = {
   piper: process.env.PIPER_URL || 'http://localhost:59125',
   whisper: process.env.WHISPER_URL || 'http://localhost:8765',
   gateway: process.env.JARVIS_GATEWAY_URL || 'http://localhost:31338',
-  bot: process.env.JARVIS_ADMIN_URL || 'http://localhost:3101',
+  bot: process.env.JARVIS_ADMIN_URL || 'http://TAILSCALE_HOST:3101',
 };
 const ADMIN_TOKEN = process.env.JARVIS_ADMIN_TOKEN || '';
 
@@ -240,6 +240,25 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/speaker/health') {
     const data = await fetchJSON(`${SERVICES['speaker-verify']}/health`);
     return sendJSON(res, data ? 200 : 502, data || { error: 'offline' });
+  }
+
+  if (path === '/api/chatterbox/defaults' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', async () => {
+      try {
+        const r = await fetch(`${SERVICES.chatterbox}/voice/defaults`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        });
+        const data = await r.json().catch(() => ({}));
+        sendJSON(res, r.status, data);
+      } catch (e) {
+        sendJSON(res, 502, { error: e.message });
+      }
+    });
+    return;
   }
 
   if (path === '/api/chatterbox/tts' && req.method === 'POST') {

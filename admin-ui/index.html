@@ -1151,6 +1151,87 @@
     .panel:hover {
       border-color: var(--rule-strong);
     }
+
+    /* ─── Toast ─── */
+    .toast {
+      position: fixed;
+      bottom: 28px;
+      right: 28px;
+      padding: 10px 18px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      background: var(--panel-lift);
+      border: 1px solid var(--live);
+      color: var(--live);
+      z-index: 200;
+      animation: rise 200ms ease forwards, fade 200ms ease 2600ms forwards;
+      pointer-events: none;
+    }
+    .toast.err {
+      border-color: var(--dead);
+      color: var(--dead);
+    }
+    @keyframes fade { to { opacity: 0; } }
+
+    /* ─── Phase 1 write controls ─── */
+    .shortcut-row { position: relative; }
+    .row-del-wrap {
+      position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+      display: none; align-items: center;
+    }
+    .shortcut-row:hover .row-del-wrap { display: flex; }
+    .del-btn {
+      background: transparent; border: 0; color: var(--bone-dim);
+      width: 22px; height: 22px; display: flex; align-items: center;
+      justify-content: center; cursor: pointer; font-size: 18px;
+      line-height: 1; padding: 0; transition: color 150ms ease;
+    }
+    .del-btn:hover { color: var(--dead); }
+    .inline-add {
+      display: none; padding: 10px 0; border-bottom: 1px solid var(--rule-hot);
+      gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 4px;
+    }
+    .inline-add.open { display: flex; }
+    .ii {
+      flex: 1; min-width: 90px; background: var(--panel-lift);
+      border: 1px solid var(--rule-strong); color: var(--bone);
+      padding: 5px 8px; font-family: var(--mono); font-size: 11px;
+      letter-spacing: 0.04em; border-radius: 1px;
+    }
+    .ii:focus { outline: none; border-color: var(--signal-edge); }
+    .is {
+      background: var(--panel-lift); border: 1px solid var(--rule-strong);
+      color: var(--bone-soft); padding: 5px 8px; font-family: var(--mono);
+      font-size: 11px; border-radius: 1px; cursor: pointer; appearance: none;
+    }
+    .btn-xs { padding: 5px 10px; font-size: 10px; letter-spacing: 0.10em; }
+    .panel-add-btn {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+      color: var(--bone-dim); cursor: pointer; padding: 2px 0;
+      background: transparent; border: 0; text-transform: uppercase;
+      transition: color 150ms ease;
+    }
+    .panel-add-btn:hover { color: var(--signal); }
+    .route-row { grid-template-columns: 1fr auto 1fr auto; }
+    .route-del-btn {
+      background: transparent; border: 0; color: var(--bone-dim);
+      cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1;
+      transition: color 150ms ease; opacity: 0;
+    }
+    .route-row:hover .route-del-btn { opacity: 1; }
+    .route-del-btn:hover { color: var(--dead); }
+    .route-account-sel {
+      background: var(--panel-lift); border: 1px solid var(--rule-strong);
+      color: var(--bone); padding: 4px 8px; font-family: var(--mono);
+      font-size: 11px; border-radius: 1px; appearance: none;
+      cursor: pointer; text-align: right;
+    }
+    .route-add-row {
+      display: flex; gap: 8px; align-items: center;
+      padding: 12px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -1386,9 +1467,18 @@
             </div>
             <div class="panel-title">Wires.</div>
           </div>
-          <div class="panel-meta"><span id="route-count">0 MAPS</span></div>
+          <div class="panel-meta">
+            <button class="panel-add-btn" id="rt-add-btn">+ Add</button>
+            <span id="route-count">0 MAPS</span>
+          </div>
         </div>
         <div class="route-list" id="routes"></div>
+        <div class="route-add-row" id="rt-add-row" style="display:none">
+          <input class="ii" id="rt-channel" placeholder="channel ID or name" style="flex:2" />
+          <select class="is" id="rt-account"></select>
+          <button class="btn btn-xs" id="rt-save-btn">Map</button>
+          <button class="btn btn-xs" id="rt-cancel-btn">✕</button>
+        </div>
       </section>
 
       <!-- ═══════════════════════════════════════════════════════════
@@ -1403,7 +1493,20 @@
             </div>
             <div class="panel-title">Muscle.</div>
           </div>
-          <div class="panel-meta"><span id="shortcut-count">0</span></div>
+          <div class="panel-meta">
+            <button class="panel-add-btn" id="sc-add-btn">+ Add</button>
+            <span id="shortcut-count">0</span>
+          </div>
+        </div>
+        <div class="inline-add" id="sc-add-form">
+          <input class="ii" id="sc-phrase" placeholder="trigger phrase" />
+          <select class="is" id="sc-type">
+            <option value="url_open">url_open</option>
+            <option value="team_calendar">team_calendar</option>
+          </select>
+          <input class="ii" id="sc-value" placeholder="URL or email" />
+          <button class="btn btn-xs" id="sc-save-btn">Save</button>
+          <button class="btn btn-xs" id="sc-cancel-btn">✕</button>
         </div>
         <div class="shortcut-list" id="shortcuts"></div>
       </section>
@@ -1457,6 +1560,26 @@
     // MOCK DATA (wire to real endpoints via fetch() later)
     // ═══════════════════════════════════════════════════════════════════
     const API = window.JARVIS_API || "/api";
+
+    async function adminPost(path, body) {
+      try {
+        const r = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return r.ok ? await r.json() : null;
+      } catch { return null; }
+    }
+
+    function toast(msg, ok = true) {
+      const el = document.createElement('div');
+      el.className = `toast${ok ? '' : ' err'}`;
+      el.textContent = msg;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2800);
+    }
+
     const fallback = {
       speaker: {
         enrolled_users: ["OWNER_USER_ID"],
@@ -1538,9 +1661,11 @@
     }
 
     async function loadAll() {
-      const [speaker, data] = await Promise.all([
+      const [speaker, data, adminShortcuts, adminRouting] = await Promise.all([
         safeJSON(`${API}/speaker/health`),
         safeJSON(`${API}/state`),
+        safeJSON(`${API}/admin/shortcuts`),
+        safeJSON(`${API}/admin/routing`),
       ]);
       const pick = (arr, fb) => (Array.isArray(arr) && arr.length ? arr : fb);
       return {
@@ -1553,6 +1678,8 @@
         shortcuts: pick(data?.shortcuts, fallback.shortcuts),
         services: pick(data?.services, fallback.services),
         activity: pick(data?.activity, fallback.activity),
+        adminShortcuts: adminShortcuts?.shortcuts || null,
+        profiles: adminRouting?.profiles || null,
       };
     }
 
@@ -1633,10 +1760,12 @@
       const active = list.find((p) => p.active);
       if (active) document.getElementById("r-persona").textContent = active.name.toLowerCase();
       el.querySelectorAll(".persona-row").forEach((row) => {
-        row.addEventListener("click", () => {
+        row.addEventListener("click", async () => {
           el.querySelectorAll(".persona-row").forEach((r) => r.classList.remove("active"));
           row.classList.add("active");
           document.getElementById("r-persona").textContent = row.dataset.name.toLowerCase();
+          const res = await adminPost(`${API}/admin/persona`, { name: row.dataset.name });
+          toast(res?.ok ? `switched \u2192 ${row.dataset.name.toLowerCase()}` : 'persona switch failed', res?.ok);
         });
       });
     }
@@ -1665,36 +1794,92 @@
       });
     }
 
-    function renderRoutes(list) {
-      const el = document.getElementById("routes");
-      el.innerHTML = list
-        .map(
-          (r) => `
-          <div class="route-row">
-            <div>
-              <span class="route-channel">${r.channel}</span>
-              <span class="route-channel-id">${r.id}</span>
-            </div>
-            <span class="route-arrow">→</span>
-            <span class="route-account">${r.account}</span>
-          </div>`
-        )
-        .join("");
-      document.getElementById("route-count").textContent = `${list.length} MAPS`;
+    function _wireRouteRow(row, channel, profiles) {
+      row.querySelector('.route-account-sel')?.addEventListener('change', async function() {
+        const res = await adminPost(`${API}/admin/routing`, { channel, account: this.value });
+        toast(res?.ok ? `${channel} → ${this.value}` : 'routing update failed', res?.ok);
+      });
+      row.querySelector('.route-del-btn')?.addEventListener('click', async () => {
+        const el = document.getElementById('routes');
+        const r = await fetch(`${API}/admin/routing/${encodeURIComponent(channel)}`, { method: 'DELETE' });
+        if (r.ok) {
+          row.remove();
+          document.getElementById('route-count').textContent =
+            `${el.querySelectorAll('.route-row').length} MAPS`;
+          toast(`unmapped ${channel}`);
+        } else {
+          toast('delete failed', false);
+        }
+      });
     }
 
-    function renderShortcuts(list) {
-      const el = document.getElementById("shortcuts");
-      el.innerHTML = list
-        .map(
-          (s) => `
-          <div class="shortcut-row">
-            <div class="shortcut-phrase">“${s.phrase}”</div>
-            <div class="shortcut-action">${s.action}</div>
-          </div>`
-        )
-        .join("");
-      document.getElementById("shortcut-count").textContent = `${list.length} WIRED`;
+    function renderRoutes(list, profiles) {
+      const el = document.getElementById("routes");
+      const profileNames = profiles ? Object.keys(profiles) : [];
+      el.innerHTML = list.map(r => {
+        const acct = profileNames.length
+          ? `<select class="route-account-sel">${profileNames.map(p =>
+              `<option value="${p}"${p === r.account ? ' selected' : ''}>${p}</option>`
+            ).join('')}</select>`
+          : `<span class="route-account">${r.account}</span>`;
+        const del = profileNames.length
+          ? `<button class="route-del-btn" title="unmap">×</button>`
+          : `<span></span>`;
+        return `<div class="route-row">
+          <div>
+            <span class="route-channel">${r.channel}</span>
+            <span class="route-channel-id">${r.id}</span>
+          </div>
+          <span class="route-arrow">→</span>
+          ${acct}
+          ${del}
+        </div>`;
+      }).join('');
+      document.getElementById("route-count").textContent = `${list.length} MAPS`;
+      el.querySelectorAll('.route-row').forEach((row, i) => {
+        _wireRouteRow(row, list[i]?.id || list[i]?.channel, profiles);
+      });
+    }
+
+    function renderShortcuts(list, adminList) {
+      const el = document.getElementById(“shortcuts”);
+      // Use full admin schema when available (has id for delete)
+      const items = adminList || list.map(s => ({
+        id: null,
+        trigger: s.phrase,
+        actionType: null,
+        actionData: {},
+        _action: s.action,
+      }));
+      el.innerHTML = items.map(s => {
+        const phrase = s.trigger || s.phrase || '';
+        const action = s.actionType
+          ? `${s.actionType}: ${s.actionData?.url || s.actionData?.email || JSON.stringify(s.actionData || {})}`
+          : (s._action || s.action || '—');
+        return `<div class=”shortcut-row” data-id=”${s.id || ''}”>
+          <div class=”shortcut-phrase”>”${phrase}”</div>
+          <div class=”shortcut-action”>${action}</div>
+          ${s.id ? '<div class=”row-del-wrap”><button class=”del-btn” title=”delete”>×</button></div>' : ''}
+        </div>`;
+      }).join('');
+      document.getElementById(“shortcut-count”).textContent = `${items.length} WIRED`;
+      el.querySelectorAll('.del-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const row = btn.closest('.shortcut-row');
+          const id = row.dataset.id;
+          if (!id) return;
+          const r = await fetch(`${API}/admin/shortcuts/${id}`, { method: 'DELETE' });
+          if (r.ok) {
+            row.remove();
+            document.getElementById('shortcut-count').textContent =
+              `${el.querySelectorAll('.shortcut-row').length} WIRED`;
+            toast('shortcut deleted');
+          } else {
+            toast('delete failed', false);
+          }
+        });
+      });
     }
 
     function renderServices(list) {
@@ -1746,6 +1931,7 @@
         ["s-cfg", "v-cfg"],
         ["s-temp", "v-temp"],
       ];
+      let saveTimer = null;
       pairs.forEach(([s, v]) => {
         const slider = document.getElementById(s);
         const display = document.getElementById(v);
@@ -1753,6 +1939,23 @@
           display.textContent = parseFloat(slider.value).toFixed(2);
           const activeVoice = document.querySelector(".voice-card.active")?.dataset.voice || "jarvis";
           updatePreviewMeta(activeVoice);
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(async () => {
+            const voice = document.querySelector(".voice-card.active")?.dataset.voice || "jarvis";
+            try {
+              const r = await fetch(`${API}/chatterbox/defaults`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  voice,
+                  exaggeration: parseFloat(document.getElementById("s-exag").value),
+                  cfg_weight: parseFloat(document.getElementById("s-cfg").value),
+                  temperature: parseFloat(document.getElementById("s-temp").value),
+                }),
+              });
+              if (r.ok) toast(`${voice} tuning saved`);
+            } catch {}
+          }, 300);
         });
       });
     }
@@ -1822,6 +2025,100 @@
       });
     }
 
+    function wireShortcutAdd() {
+      const addBtn = document.getElementById('sc-add-btn');
+      const form = document.getElementById('sc-add-form');
+      const saveBtn = document.getElementById('sc-save-btn');
+      const cancelBtn = document.getElementById('sc-cancel-btn');
+      if (!addBtn) return;
+      addBtn.addEventListener('click', () => form.classList.toggle('open'));
+      cancelBtn.addEventListener('click', () => form.classList.remove('open'));
+      saveBtn.addEventListener('click', async () => {
+        const trigger = document.getElementById('sc-phrase').value.trim();
+        const actionType = document.getElementById('sc-type').value;
+        const val = document.getElementById('sc-value').value.trim();
+        if (!trigger || !val) return toast('trigger and value required', false);
+        const actionData = actionType === 'url_open' ? { url: val } : { email: val };
+        const res = await adminPost(`${API}/admin/shortcuts`, { trigger, actionType, actionData });
+        if (res?.id || res?.ok) {
+          toast(`shortcut added: "${trigger}"`);
+          form.classList.remove('open');
+          document.getElementById('sc-phrase').value = '';
+          document.getElementById('sc-value').value = '';
+          const updated = await safeJSON(`${API}/admin/shortcuts`);
+          if (updated?.shortcuts) renderShortcuts([], updated.shortcuts);
+        } else {
+          toast(res?.reason || 'add failed', false);
+        }
+      });
+    }
+
+    function wireRoutingAdd(profiles) {
+      const addBtn = document.getElementById('rt-add-btn');
+      const addRow = document.getElementById('rt-add-row');
+      const selEl = document.getElementById('rt-account');
+      const saveBtn = document.getElementById('rt-save-btn');
+      const cancelBtn = document.getElementById('rt-cancel-btn');
+      if (!addBtn || !profiles) {
+        // No profiles available — hide add button
+        if (addBtn) addBtn.style.display = 'none';
+        return;
+      }
+      // Populate profile select
+      selEl.innerHTML = '';
+      Object.keys(profiles).forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p; opt.textContent = p;
+        selEl.appendChild(opt);
+      });
+      addBtn.addEventListener('click', () => {
+        addRow.style.display = addRow.style.display === 'none' ? 'flex' : 'none';
+      });
+      cancelBtn.addEventListener('click', () => { addRow.style.display = 'none'; });
+      saveBtn.addEventListener('click', async () => {
+        const channel = document.getElementById('rt-channel').value.trim();
+        const account = selEl.value;
+        if (!channel) return toast('channel ID required', false);
+        const res = await adminPost(`${API}/admin/routing`, { channel, account });
+        if (res?.ok) {
+          toast(`${channel} → ${account}`);
+          addRow.style.display = 'none';
+          document.getElementById('rt-channel').value = '';
+          // Add new row to DOM without full re-render
+          const el = document.getElementById('routes');
+          const profileNames = Object.keys(profiles);
+          const row = document.createElement('div');
+          row.className = 'route-row';
+          row.innerHTML = `
+            <div><span class="route-channel">${channel}</span>
+            <span class="route-channel-id">${channel}</span></div>
+            <span class="route-arrow">→</span>
+            <select class="route-account-sel">${profileNames.map(p =>
+              `<option value="${p}"${p === account ? ' selected' : ''}>${p}</option>`
+            ).join('')}</select>
+            <button class="route-del-btn" title="unmap">×</button>`;
+          el.appendChild(row);
+          _wireRouteRow(row, channel, profiles);
+          document.getElementById('route-count').textContent =
+            `${el.querySelectorAll('.route-row').length} MAPS`;
+        } else {
+          toast(res?.error || 'mapping failed', false);
+        }
+      });
+    }
+
+    function wireEffortPills() {
+      document.querySelectorAll('.effort-pill').forEach(pill => {
+        pill.addEventListener('click', async () => {
+          const eff = pill.dataset.eff;
+          document.querySelectorAll('.effort-pill').forEach(p => p.classList.remove('active'));
+          pill.classList.add('active');
+          const res = await adminPost(`${API}/admin/models`, { effort: eff });
+          toast(res?.ok ? `effort \u2192 ${eff}` : 'model update failed', res?.ok);
+        });
+      });
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // RUNTIME
     // ═══════════════════════════════════════════════════════════════════
@@ -1845,14 +2142,29 @@
       renderModels(d.models);
       renderPersonas(d.personas);
       renderVoices(d.voices);
-      renderRoutes(d.routes);
-      renderShortcuts(d.shortcuts);
+      renderRoutes(d.routes, d.profiles);
+      renderShortcuts(d.shortcuts, d.adminShortcuts);
       renderServices(d.services);
       renderActivity(d.activity);
 
       wireSliders();
       wireDropzone();
       wirePreview();
+      wireEffortPills();
+      wireShortcutAdd();
+      wireRoutingAdd(d.profiles);
+
+      setInterval(async () => {
+        const d = await loadAll();
+        renderUsers(d.users);
+        renderMetrics(d.speaker, d.users);
+        renderModels(d.models);
+        renderPersonas(d.personas);
+        renderVoices(d.voices);
+        renderRoutes(d.routes, d.profiles);
+        renderShortcuts(d.shortcuts, d.adminShortcuts);
+        renderServices(d.services);
+      }, 30_000);
     })();
   </script>
 </body>

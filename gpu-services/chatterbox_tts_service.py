@@ -538,6 +538,33 @@ async def list_voices():
     }
 
 
+@app.post("/voice/defaults")
+async def update_voice_defaults(request: Request):
+    """
+    Update in-memory tuning defaults for a voice and persist to state file.
+    JSON body: { voice, exaggeration?, cfg_weight?, temperature? }
+    """
+    data = await request.json()
+    voice = str(data.get("voice", DEFAULT_VOICE)).lower()
+    if voice not in VOICE_DEFAULTS:
+        raise HTTPException(status_code=400, detail=f"Unknown voice: {voice}")
+    updates = {}
+    for key in ("exaggeration", "cfg_weight", "temperature"):
+        if key in data:
+            updates[key] = float(data[key])
+    if updates:
+        VOICE_DEFAULTS[voice].update(updates)
+        state_path = Path(os.getenv(
+            "CHATTERBOX_STATE_FILE",
+            str(Path.home() / ".local/state/chatterbox/defaults.json"),
+        ))
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(state_path, "w") as f:
+            json.dump(VOICE_DEFAULTS, f, indent=2)
+        logger.info(f"[defaults] {voice} updated: {updates}")
+    return {"ok": True, "voice": voice, "defaults": VOICE_DEFAULTS[voice]}
+
+
 @app.get("/health")
 async def health():
     voices_ok = {name: path.exists() for name, path in VOICE_REFS.items()}
