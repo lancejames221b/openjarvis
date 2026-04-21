@@ -812,6 +812,9 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           buffer = buffer.replace(/\[\[\/tts:text\]\]/g, '');
           buffer = buffer.replace(/\[\[tts:text\]\]/g, '');
           buffer = buffer.replace(/\[\[reply_to[^\]]*\]\]/g, '');
+          // Strip gateway tool-call progress markers — visual-only, not for voice
+          buffer = buffer.replace(/\n?🔧 \*[^*\n]+\*\n?/g, '');
+          buffer = buffer.replace(/✓\n?/g, '');
           
           // Filter out NO_REPLY / _NO_REPLY / HEARTBEAT_OK signals
           if (/^\s*_?NO_?REPLY\s*$/i.test(buffer) || /^\s*HEARTBEAT_?OK\s*$/i.test(buffer)) {
@@ -854,6 +857,8 @@ export async function generateResponseStreaming(userMessage, history = [], signa
     // Removes NO_REPLY, _NO_REPLY, HEARTBEAT_OK, and partial fragments
     fullText = fullText.replace(/(?:^|\s)_?NO_?REPLY(?:\s|[.!?]|$)/gi, ' ')
                        .replace(/(?:^|\s)HEARTBEAT_?OK(?:\s|[.!?]|$)/gi, ' ')
+                       .replace(/\n?🔧 \*[^*\n]+\*\n?/g, '')
+                       .replace(/✓\n?/g, '')
                        .trim();
 
     // Check for NO_REPLY / HEARTBEAT_OK -- agent had nothing to say

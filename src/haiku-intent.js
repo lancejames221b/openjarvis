@@ -28,7 +28,7 @@ const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 
 // Model: Haiku for speed. ~500ms for a classification call.
 const CLASSIFIER_MODEL = process.env.HAIKU_INTENT_MODEL || 'jamesgroup/claude-haiku-4-5';
-const CLASSIFIER_TIMEOUT_MS = parseInt(process.env.HAIKU_INTENT_TIMEOUT_MS || '3000');
+const CLASSIFIER_TIMEOUT_MS = parseInt(process.env.HAIKU_INTENT_TIMEOUT_MS || '1500');
 
 // Build channel vocabulary from registry (refreshed on each call — registry can change)
 function buildVocabulary() {

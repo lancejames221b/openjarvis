@@ -15,6 +15,10 @@ import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
 import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from './focus-state.js';
 import { detectChannelCommand } from './channel-router.js';
 import { fuzzyMatch } from './fuzzy-dispatch.js';
+import { classifyIntent as haikuClassify } from './haiku-intent.js';
+import { findProjectMapByName } from './slash/project-map.js';
+import { startSessionDirect, buildResumeCommand } from './slash/session.js';
+import { getBox, getCwd } from './slash/box-state.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -328,6 +332,92 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
     }
   }
 
-  // ── Brain call (Tier 2 — full agent) ─────────────────────────────
+  // ── Tier 2: Haiku intent classifier ───────────────────────────────
+  // Fast LLM classification (~500ms-1s) catches structured commands that
+  // BOTH regex AND fuzzy matching missed. Only runs for admin users.
+  // Returns null on timeout/error → falls through to brain.
+  if (isAdmin) {
+    try {
+      const haikuResult = await haikuClassify(cleanedTranscript);
+      if (haikuResult && haikuResult.intent !== 'not_command' && haikuResult.confidence >= 0.7) {
+        logger.info(`[dispatch] Haiku classified: ${haikuResult.intent} (conf=${haikuResult.confidence})`);
+
+        if (haikuResult.intent === 'focus_set' && haikuResult.params?.channel) {
+          const threadHint = haikuResult.params.thread || null;
+          if (threadHint) {
+            const result = await setFocusWithThread(haikuResult.params.channel, threadHint);
+            if (result) {
+              return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose, threadName: result.threadName };
+            }
+          }
+          const result = setFocusByName(haikuResult.params.channel);
+          if (result) {
+            return { type: 'focus_set', channelName: result.channelName, channelId: result.channelId, purpose: result.purpose };
+          }
+          const cleanTarget = haikuResult.params.channel.replace(/\s+channel$/i, '').trim();
+          return { type: 'focus_not_found', query: cleanTarget };
+        }
+
+        if (haikuResult.intent === 'focus_clear') {
+          clearFocus();
+          return { type: 'focus_clear' };
+        }
+
+        if (haikuResult.intent === 'focus_query') {
+          const focus = getFocus();
+          return { type: 'focus_query', focus };
+        }
+
+        if (haikuResult.intent === 'channel_list') {
+          const channels = listChannels();
+          return { type: 'channel_list', channels };
+        }
+
+        if (haikuResult.intent === 'persona' && haikuResult.params?.persona) {
+          const requested = haikuResult.params.persona.toLowerCase();
+          const available = listPersonalities();
+          if (available.includes(requested)) {
+            const p = switchPersona(requested);
+            return { type: 'persona_switch', persona: p.name, voice: p.voice, wakeWords: p.wakeWords };
+          }
+        }
+
+        if (haikuResult.intent === 'session_start') {
+          if (!haikuResult.params?.name || /^continue$/i.test(cleanedTranscript)) {
+            const box = getBox();
+            const cwd = getCwd();
+            const command = buildResumeCommand(null);
+            startSessionDirect({ channelId, command, boxName: box?.name, cwd, label: 'continue' })
+              .catch(err => logger.warn(`[dispatch] async continue failed: ${err.message}`));
+            return { type: 'shortcut', speech: 'Continuing session.', silent: false, discordText: null };
+          }
+          const entry = findProjectMapByName(haikuResult.params.name);
+          if (entry) {
+            const boxName = haikuResult.params.box || entry.box;
+            startSessionDirect({ channelId: entry.channelId, boxName, cwd: entry.cwd, label: entry.name })
+              .catch(err => logger.warn(`[dispatch] async session-start failed: ${err.message}`));
+            return { type: 'shortcut', speech: `Starting ${entry.name} session.`, silent: false, discordText: null };
+          }
+        }
+
+        if (haikuResult.intent === 'chat_project') {
+          const name = haikuResult.params?.name || null;
+          let cwd = null;
+          if (name) {
+            const entry = findProjectMapByName(name);
+            if (entry?.cwd) cwd = entry.cwd;
+          }
+          if (!cwd) cwd = getCwd() || null;
+          const workspaceContext = cwd ? `[WORKSPACE: ${cwd}]` : null;
+          return { type: 'brain', transcript: cleanedTranscript, workspaceContext };
+        }
+      }
+    } catch (err) {
+      logger.warn(`[dispatch] Haiku intent error: ${err.message}`);
+      // Fall through to brain on any error
+    }
+  }
+
+  // ── Brain call (Tier 3 — full agent) ─────────────────────────────
   return { type: 'brain', transcript: cleanedTranscript };
 }
