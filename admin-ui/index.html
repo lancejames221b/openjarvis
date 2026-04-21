@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600;700&family=Orbitron:wght@500;700;800;900&display=swap"
     rel="stylesheet"
   />
   <style>
@@ -35,6 +35,7 @@
       --amber: #f6b33f;
 
       --display: "Instrument Serif", "Cormorant", serif;
+      --hud: "Orbitron", "Geist", sans-serif;
       --ui: "Geist", "Helvetica Neue", Arial, sans-serif;
       --mono: "JetBrains Mono", ui-monospace, monospace;
 
@@ -152,37 +153,52 @@
       color: var(--bone-soft);
     }
     .title {
-      font-family: var(--display);
-      font-style: italic;
-      font-weight: 400;
-      font-size: clamp(88px, 11vw, 180px);
-      line-height: 0.88;
-      letter-spacing: -0.03em;
+      font-family: var(--hud);
+      font-style: normal;
+      font-weight: 900;
+      font-size: clamp(52px, 7.2vw, 120px);
+      line-height: 0.95;
+      letter-spacing: 0.02em;
       color: var(--bone);
       padding: 32px 0 22px;
       display: flex;
       align-items: baseline;
-      gap: 0.06em;
+      gap: 0.04em;
       position: relative;
+      text-transform: uppercase;
+    }
+    .title > span:first-child {
+      background: linear-gradient(
+        180deg,
+        var(--bone) 0%,
+        var(--bone) 55%,
+        rgba(237, 228, 208, 0.75) 100%
+      );
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 40px rgba(255, 91, 31, 0.08);
     }
     .title::after {
-      content: ".";
-      font-family: var(--display);
-      font-style: italic;
-      color: var(--signal);
-      margin-left: -0.04em;
+      content: "";
+      width: 0.18em;
+      height: 0.18em;
+      background: var(--signal);
+      display: inline-block;
       align-self: flex-end;
-      line-height: 0.85;
+      margin: 0 0 0.1em 0.08em;
+      box-shadow: 0 0 12px rgba(255, 91, 31, 0.6);
     }
     .title-sup {
       font-family: var(--mono);
       font-style: normal;
-      font-size: 13px;
-      letter-spacing: 0.2em;
-      color: var(--bone-dim);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      color: var(--signal);
       align-self: flex-start;
-      padding-top: 0.6em;
-      font-weight: 400;
+      padding-top: 0.4em;
+      padding-left: 0.2em;
+      font-weight: 500;
     }
 
     .runtime-strip {
