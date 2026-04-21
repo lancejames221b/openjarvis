@@ -2070,11 +2070,18 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       if (_isThread) {
         threadId = message.channelId;
       } else {
-        const thread = await message.startThread({
-          name: content.substring(0, 80) || 'response',
-          autoArchiveDuration: 60,
-        });
-        threadId = thread.id;
+        const _existingChatThread = _voiceVerboseThreads.get(_parentChannelId);
+        if (_existingChatThread && _existingChatThread.expiresAt > Date.now()) {
+          threadId = _existingChatThread.threadId;
+          logger.info(`[@mention] reusing verbose thread ${threadId}`);
+        } else {
+          const thread = await message.startThread({
+            name: content.substring(0, 80) || 'response',
+            autoArchiveDuration: 60,
+          });
+          threadId = thread.id;
+        }
+        _voiceVerboseThreads.set(_parentChannelId, { threadId, expiresAt: Date.now() + VOICE_THREAD_TTL_MS });
       }
 
       const ls = await createLiveStream(threadId, discordToken, { model });
