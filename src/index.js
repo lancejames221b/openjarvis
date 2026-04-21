@@ -173,20 +173,11 @@ const ALLOWED_USERS = getAllowedUserIds();
 const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 
 // ── Per-Task Voice Model Trigger Table ───────────────────────────────
-// Maps trigger phrases (lowercase) → voice model alias.
-// Checked in order; first match wins. Add new models here — no logic changes needed.
-// voiceAlias: sent to the gateway as the model; agentAlias: used for /spawn-style dispatch.
-const VOICE_MODEL_TRIGGERS = [
-  { phrases: ['use opus plan', 'use plan mode', 'opus plan'],              voiceAlias: 'opus-plan' },
-  { phrases: ['use opus max', 'opus max'],                                  voiceAlias: 'opus-max' },
-  { phrases: ['use opus high', 'opus high'],                                voiceAlias: 'opus-high' },
-  { phrases: ['use opus', 'choose opus', 'claude opus', 'opus 4.6'],       voiceAlias: 'opus',        agentEnvKey: 'MODEL_OPUS' },
-  { phrases: ['use sonnet max', 'sonnet max', 'use sonnet-max'],            voiceAlias: 'sonnet-max' },
-  { phrases: ['use sonnet high', 'sonnet high'],                            voiceAlias: 'sonnet-high' },
-  { phrases: ['use sonnet', 'choose sonnet', 'claude sonnet'],              voiceAlias: 'sonnet',      agentEnvKey: 'MODEL_SONNET' },
-  { phrases: ['use haiku', 'choose haiku', 'claude haiku'],                 voiceAlias: 'haiku' },
-  { phrases: ['use gemini', 'choose gemini', 'gemini 3.1 pro', 'gemini 3 pro'], agentEnvKey: 'MODEL_GEMINI' },
-];
+// Loaded from data/models.json — edit that file to add new models/phrases.
+const _MODELS_CFG_PATH = new URL('../config/models.json', import.meta.url).pathname;
+function _loadModelTriggers() {
+  try { return JSON.parse(readFileSync(_MODELS_CFG_PATH, 'utf-8')).triggers || []; } catch { return []; }
+}
 // ──────────────────────────────────────────────────────────────────────
 
 // ── Webhook Callback Mode ─────────────────────────────────────────────
@@ -4061,7 +4052,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   // ── Per-Task Model Override (voice phrase) ──────────────────────────
   // Driven by VOICE_MODEL_TRIGGERS table — add new models there, not here.
   const lowerTranscript = transcript.toLowerCase();
-  const _triggerMatch = VOICE_MODEL_TRIGGERS.find(t => t.phrases.some(p => lowerTranscript.includes(p)));
+  const _triggerMatch = _loadModelTriggers().find(t => t.phrases.some(p => lowerTranscript.includes(p)));
   if (_triggerMatch) {
     if (_triggerMatch.voiceAlias) brainOptions.model = _triggerMatch.voiceAlias;
     brainOptions.agentModel = _triggerMatch.agentEnvKey
