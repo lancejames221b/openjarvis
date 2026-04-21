@@ -381,6 +381,51 @@ async function callClaudeAgent(prompt, modelOverride, chatId, channelKey) {
   });
 }
 
+// Extract the single most-informative argument from a tool_use input object.
+function _toolArg(name, input) {
+  const s = (v) => String(v ?? "").trim();
+  switch (name) {
+    case "Bash":        return s(input.command).slice(0, 120);
+    case "Read":        return s(input.file_path);
+    case "Write":       return s(input.file_path);
+    case "Edit":        return s(input.file_path);
+    case "Glob":        return [s(input.pattern), s(input.path)].filter(Boolean).join("  ");
+    case "Grep":        return `/${s(input.pattern)}/` + (input.path ? `  ${s(input.path)}` : "");
+    case "WebFetch":    return s(input.url).slice(0, 100);
+    case "WebSearch":   return s(input.query).slice(0, 100);
+    case "Agent":       return s(input.description || input.prompt).slice(0, 80);
+    case "Task":
+    case "TaskCreate":
+    case "TaskUpdate":  return s(input.description || input.title || input.task_id).slice(0, 80);
+    default: {
+      // Generic: first string value in input
+      const first = Object.values(input).find(v => typeof v === "string");
+      return first ? s(first).slice(0, 80) : "";
+    }
+  }
+}
+
+// Format tool result into a short readable preview line.
+function _toolResultPreview(toolName, raw) {
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (!text) return "✓ (empty)";
+  // For Bash: show exit-code hint if present, then first line of output
+  if (toolName === "Bash") {
+    const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+    const first = lines[0] ?? "";
+    const more = lines.length > 1 ? `  (+${lines.length - 1} lines)` : "";
+    return `✓  ${first.slice(0, 120)}${more}`;
+  }
+  // For Read/Grep/Glob: line count + first content line
+  if (["Read", "Grep", "Glob"].includes(toolName)) {
+    const lines = raw.split("\n").filter(Boolean);
+    const first = lines[0]?.trim() ?? "";
+    return `✓  ${first.slice(0, 100)}${lines.length > 1 ? `  (${lines.length} lines)` : ""}`;
+  }
+  // Generic: first 140 chars
+  return `✓  ${text.slice(0, 140)}${text.length > 140 ? "…" : ""}`;
+}
+
 // Stream claude -p NDJSON deltas directly to an SSE response.
 // Returns the resolvedSessionId once the stream completes.
 async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, effort) {
@@ -394,7 +439,8 @@ async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, ef
     let resolvedSessionId = chatId;
     let clientAborted = false;
     let lastTextLen = 0;  // tracks how many chars we've already forwarded as deltas
-    const _seenToolIds = new Set();  // dedupe tool_use progress lines per request
+    const _seenToolIds = new Set();       // dedupe tool_use progress lines per request
+    const _toolIdToName = new Map();      // tool_use_id → name, for result attribution
 
     // Client-disconnect handler — kill the cursor-agent child when the HTTP
     // client aborts the stream. Without this, aborted requests orphan the
@@ -444,23 +490,31 @@ async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, ef
           sendDelta(text.slice(lastTextLen));
           lastTextLen = text.length;
         }
-        // Emit synthetic progress lines for tool_use blocks (tool calls in progress)
+        // Emit full tool_use lines: name + key argument
         for (const block of blocks) {
           if (block.type === "tool_use" && block.name) {
             const toolKey = `tool:${block.id ?? block.name}`;
             if (!_seenToolIds.has(toolKey)) {
               _seenToolIds.add(toolKey);
-              sendDelta(`\n🔧 *${block.name}…*\n`);
+              if (block.id) _toolIdToName.set(block.id, block.name);
+              const arg = _toolArg(block.name, block.input ?? {});
+              const argStr = arg ? ` › ${arg}` : "";
+              sendDelta(`\n🔧 **${block.name}**${argStr}\n`);
             }
           }
         }
       }
-      // user-type events carry tool_result blocks (tool calls completed)
+      // user-type events carry tool_result blocks — emit truncated result
       if (ev.type === "user") {
         const blocks = ev.message?.content ?? [];
         for (const block of blocks) {
           if (block.type === "tool_result") {
-            sendDelta(`✓\n`);
+            const toolName = _toolIdToName.get(block.tool_use_id) ?? "";
+            const raw = Array.isArray(block.content)
+              ? block.content.map(c => c.text ?? "").join("")
+              : (block.content ?? "");
+            const preview = _toolResultPreview(toolName, raw);
+            sendDelta(`  ↳ ${preview}\n`);
           }
         }
       }
