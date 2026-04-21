@@ -151,6 +151,9 @@ const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 let voiceModel = process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude'; // mutable — /model set updates at runtime
 export function getVoiceModel() { return voiceModel; }
 export function setVoiceModel(m) { voiceModel = m; logger.info(`[model] active model → ${m}`); }
+let textModel = process.env.TEXT_MODEL || 'claude-high'; // chat/text path — high effort by default
+export function getTextModel() { return textModel; }
+export function setTextModel(m) { textModel = m; logger.info(`[model] text model → ${m}`); }
 const _dispatchModel = process.env.DISPATCH_MODEL || process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude-sonnet-4-6';
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
@@ -1240,7 +1243,7 @@ export async function generateTextResponse(userMessage, options = {}) {
         messages,
         max_tokens: 8192,
         user: options.sessionUser || getActiveSessionUser(),
-        model: voiceModel,
+        model: textModel,
         ...THINKING_PARAM,
       }),
     }, undefined, channelId);
@@ -1367,7 +1370,7 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
         messages,
         max_tokens: 8192,
         user: options.sessionUser || getActiveSessionUser(),
-        model: voiceModel,
+        model: textModel,
         stream: true,
         ...THINKING_PARAM,
       }),

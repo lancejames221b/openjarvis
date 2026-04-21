@@ -1037,7 +1037,8 @@ client.on('messageCreate', async (message) => {
 
   // All remaining handlers: skip bots and non-allowed users
   if (message.author.bot) return;
-  if (!canAccessChannel(message.author.id, message.channelId)) return;
+  const _accessChannelId = message.channel?.isThread?.() ? (message.channel.parentId || message.channelId) : message.channelId;
+  if (!canAccessChannel(message.author.id, _accessChannelId)) return;
 
   const content = (message.content || '').trim();
 
@@ -1993,7 +1994,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   // Proactively search haivemind for relevant context so Claude arrives with memory loaded
   // rather than needing the user to say "recall X" first.
   const [hmMemory, chMemory] = await Promise.all([
-    searchHaivemind(content.substring(0, 100)),
+    isChannelOwner(message.author.id) ? searchHaivemind(content.substring(0, 100)) : Promise.resolve(null),
     getChannelContext(message.channelId),
   ]);
   const memoryBlock = [hmMemory, chMemory].filter(Boolean).join('\n---\n');

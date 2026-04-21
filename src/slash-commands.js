@@ -195,6 +195,28 @@ const RESUME_CMD = new SlashCommandBuilder()
     .setDescription('Box to run on (default: active box)').setRequired(false)
     .addChoices(...BOX_NAMES.map(n => ({ name: n, value: n }))));
 
+const EFFORT_CMD = new SlashCommandBuilder()
+  .setName('effort')
+  .setDescription('Set thinking effort for the current model (owner only)')
+  .addStringOption(o => o.setName('level')
+    .setDescription('Effort level')
+    .setRequired(true)
+    .addChoices(
+      { name: 'none (fastest, no thinking)', value: 'none' },
+      { name: 'low', value: 'low' },
+      { name: 'medium', value: 'medium' },
+      { name: 'high', value: 'high' },
+      { name: 'xhigh', value: 'xhigh' },
+      { name: 'max', value: 'max' },
+    ));
+
+const PLAN_CMD = new SlashCommandBuilder()
+  .setName('plan')
+  .setDescription('Switch to plan mode — Opus with max effort for deep reasoning (owner only)')
+  .addSubcommand(sub => sub.setName('on').setDescription('Enable plan mode (Opus, max effort)'))
+  .addSubcommand(sub => sub.setName('off').setDescription('Disable plan mode (back to default model)'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show current plan mode state'));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -223,9 +245,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -509,6 +531,41 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       await interaction.editReply(status);
     } catch (err) {
       await interaction.editReply(`Failed: \`${err.message}\``);
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'effort') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const level = interaction.options.getString('level');
+    const current = getVoiceModel();
+    const baseModel = current.replace(/-(?:low|medium|high|xhigh|max)$/, '').replace(/-plan$/, '') || 'claude';
+    const newModel = level === 'none' ? baseModel : `${baseModel}-${level}`;
+    setVoiceModel(newModel);
+    const desc = level === 'none' ? 'no thinking (fastest)' : `--effort ${level}`;
+    await interaction.reply({ content: `Effort set to **${level}** — ${desc}. Model: \`${newModel}\`` });
+    return true;
+  }
+
+  if (interaction.commandName === 'plan') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const sub = interaction.options.getSubcommand();
+    if (sub === 'on') {
+      setVoiceModel('opus-plan');
+      await interaction.reply({ content: '**Plan mode ON** — Opus with max effort. Deep reasoning active. Use `/plan off` to return to default.' });
+    } else if (sub === 'off') {
+      setVoiceModel('claude');
+      await interaction.reply({ content: '**Plan mode OFF** — back to default model.' });
+    } else if (sub === 'status') {
+      const m = getVoiceModel();
+      const active = m === 'opus-plan';
+      await interaction.reply({ content: `Plan mode: **${active ? 'ON' : 'OFF'}** (current model: \`${m}\`)` });
     }
     return true;
   }
