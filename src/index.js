@@ -850,7 +850,13 @@ class AudioQueue {
     const wasPlaying = this.playing;
     this.playing = true;
     isSpeaking = true;
-    if (!wasPlaying) serverMuteOwner(true);
+    if (!wasPlaying) {
+      serverMuteOwner(true);
+      // Open conversation window as soon as Jarvis starts speaking so the
+      // wake-word bypass is active for the full window after speech ends.
+      const _qOwner = _pendingUtterance?.userId || [...activeTasks.values()][0]?.userId;
+      if (_qOwner) markBotResponse(_qOwner);
+    }
     let { audioSource } = this.queue.shift();
     // Prepend silence to first clip so BT speaker wakes on dead air, not speech
     if (!wasPlaying) {
@@ -1243,7 +1249,11 @@ client.once('ready', async () => {
 
   // Wire up conversation window refresh for /speak callback responses
   setMarkBotResponseCallback((userId, opts) => {
-    audioQueue.waitForPlaybackDrained().then(() => markBotResponse(userId, opts));
+    audioQueue.waitForPlaybackDrained().then(() => {
+      markBotResponse(userId, opts);
+      // Re-arm 60s follow-up window from when /speak audio drains (same as inline path).
+      if (getState() === 'ACTIVE') startTaskAutoSleep();
+    });
   });
 
   // Wire up activity feed posting for /speak endpoint
@@ -4558,6 +4568,9 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       // Reset idle timer from bot's last speech, not just user's last speech.
       // Prevents premature ACTIVE→IDLE when Jarvis takes a while to respond.
       if (getState() === 'ACTIVE') resetIdleSleepTimer();
+      // Re-arm the 60s follow-up window from when audio actually finishes, not from dispatch.
+      // This ensures the user has a full 60s to follow up after Jarvis finishes speaking.
+      startTaskAutoSleep();
     });
 
     // ── Two-tier auto-sleep: sign-off phrase was embedded in a task request ──
