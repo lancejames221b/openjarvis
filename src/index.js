@@ -172,6 +172,23 @@ import { getAllowedUserIds } from './allowed-users.js';
 const ALLOWED_USERS = getAllowedUserIds();
 const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 
+// ── Per-Task Voice Model Trigger Table ───────────────────────────────
+// Maps trigger phrases (lowercase) → voice model alias.
+// Checked in order; first match wins. Add new models here — no logic changes needed.
+// voiceAlias: sent to the gateway as the model; agentAlias: used for /spawn-style dispatch.
+const VOICE_MODEL_TRIGGERS = [
+  { phrases: ['use opus plan', 'use plan mode', 'opus plan'],              voiceAlias: 'opus-plan' },
+  { phrases: ['use opus max', 'opus max'],                                  voiceAlias: 'opus-max' },
+  { phrases: ['use opus high', 'opus high'],                                voiceAlias: 'opus-high' },
+  { phrases: ['use opus', 'choose opus', 'claude opus', 'opus 4.6'],       voiceAlias: 'opus',        agentEnvKey: 'MODEL_OPUS' },
+  { phrases: ['use sonnet max', 'sonnet max', 'use sonnet-max'],            voiceAlias: 'sonnet-max' },
+  { phrases: ['use sonnet high', 'sonnet high'],                            voiceAlias: 'sonnet-high' },
+  { phrases: ['use sonnet', 'choose sonnet', 'claude sonnet'],              voiceAlias: 'sonnet',      agentEnvKey: 'MODEL_SONNET' },
+  { phrases: ['use haiku', 'choose haiku', 'claude haiku'],                 voiceAlias: 'haiku' },
+  { phrases: ['use gemini', 'choose gemini', 'gemini 3.1 pro', 'gemini 3 pro'], agentEnvKey: 'MODEL_GEMINI' },
+];
+// ──────────────────────────────────────────────────────────────────────
+
 // ── Webhook Callback Mode ─────────────────────────────────────────────
 // When enabled, voice requests go through /hooks/agent (fire-and-forget).
 // Gateway delivers response to VOICE_CALLBACK_CHANNEL_ID as a Discord message.
@@ -4042,35 +4059,15 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   const tldrModeEnabled = isTldrModeEnabled();
 
   // ── Per-Task Model Override (voice phrase) ──────────────────────────
-  // "use opus for this", "use sonnet max for this", etc. — overrides voice
-  // model for this task only. Resets to default on next task automatically.
-  let voiceModelOverride = null;
-  let agentModelOverride = null;
+  // Driven by VOICE_MODEL_TRIGGERS table — add new models there, not here.
   const lowerTranscript = transcript.toLowerCase();
-
-  if (lowerTranscript.includes('use opus plan') || lowerTranscript.includes('use plan mode') || lowerTranscript.includes('opus plan')) {
-    voiceModelOverride = 'opus-plan';
-  } else if (lowerTranscript.includes('use opus') || lowerTranscript.includes('choose opus') || lowerTranscript.includes('claude opus') || lowerTranscript.includes('opus 4.6')) {
-    voiceModelOverride = 'opus';
-    agentModelOverride = process.env.MODEL_OPUS;
-  } else if (lowerTranscript.includes('use sonnet max') || lowerTranscript.includes('sonnet max') || lowerTranscript.includes('use sonnet-max')) {
-    voiceModelOverride = 'sonnet-max';
-  } else if (lowerTranscript.includes('use sonnet high') || lowerTranscript.includes('sonnet high')) {
-    voiceModelOverride = 'sonnet-high';
-  } else if (lowerTranscript.includes('use sonnet') || lowerTranscript.includes('choose sonnet') || lowerTranscript.includes('claude sonnet')) {
-    voiceModelOverride = 'sonnet';
-    agentModelOverride = process.env.MODEL_SONNET;
-  } else if (lowerTranscript.includes('use gemini') || lowerTranscript.includes('choose gemini') || lowerTranscript.includes('gemini 3.1 pro') || lowerTranscript.includes('gemini 3 pro')) {
-    agentModelOverride = process.env.MODEL_GEMINI;
-  }
-
-  if (voiceModelOverride) {
-    brainOptions.model = voiceModelOverride;
-    if (!agentModelOverride) agentModelOverride = voiceModelOverride;
-    logger.info(`🔄 Per-task voice model override → ${voiceModelOverride}`);
-  }
-  if (agentModelOverride) {
-    brainOptions.agentModel = agentModelOverride;
+  const _triggerMatch = VOICE_MODEL_TRIGGERS.find(t => t.phrases.some(p => lowerTranscript.includes(p)));
+  if (_triggerMatch) {
+    if (_triggerMatch.voiceAlias) brainOptions.model = _triggerMatch.voiceAlias;
+    brainOptions.agentModel = _triggerMatch.agentEnvKey
+      ? (process.env[_triggerMatch.agentEnvKey] || _triggerMatch.voiceAlias)
+      : _triggerMatch.voiceAlias;
+    logger.info(`🔄 Per-task model override → voice=${_triggerMatch.voiceAlias ?? '(none)'} agent=${brainOptions.agentModel}`);
   }
   // ─────────────────────────────────────────────────────────────────────
 
