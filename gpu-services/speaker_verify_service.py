@@ -35,11 +35,13 @@ args, _ = parser.parse_known_args()
 DEVICE = args.device
 PORT = args.port
 SPEAKER_THRESHOLD = args.threshold or float(os.environ.get('SPEAKER_THRESHOLD', '0.65'))
+# Per-user voiceprint directory: ~/.jarvis/voiceprints/{user_id}.npy
+VOICEPRINTS_DIR = os.path.expanduser(os.environ.get('VOICEPRINTS_DIR', '~/.jarvis/voiceprints'))
+# Legacy single-user paths (kept for migration)
 VOICEPRINT_PATH = os.path.expanduser(os.environ.get('VOICEPRINT_PATH', '~/.jarvis/owner_voiceprint.npy'))
 VOICEPRINT_MULTI_PATH = os.path.expanduser(os.environ.get('VOICEPRINT_MULTI_PATH', '~/.jarvis/owner_voiceprints.npy'))
 
-# Ensure voiceprint directory exists
-os.makedirs(os.path.dirname(VOICEPRINT_PATH), exist_ok=True)
+os.makedirs(VOICEPRINTS_DIR, exist_ok=True)
 
 # Check CUDA availability
 try:
@@ -61,13 +63,21 @@ app = Flask(__name__)
 vad_lock = threading.Lock()  # Silero VAD has stateful RNN -- not thread-safe
 vad_model = None
 ecapa_model = None
-owner_voiceprint = None        # Legacy single averaged embedding (fallback)
-owner_voiceprints = None       # Multi-reference: all individual enrollment embeddings (N x 192)
-enrollment_embeddings = []     # Accumulator for enrollment clips
 
-# Score normalization cohort stats (computed from enrollment embeddings)
-# Each entry: (mean_similarity_to_others, std_similarity_to_others)
+# Per-user voiceprints: { user_id: np.ndarray (N x 192) }
+user_voiceprints = {}
+# Per-user s-norm cohort stats: { user_id: [(mean, std), ...] }
+user_cohort_stats = {}
+
+# Legacy single-user state (fallback if no per-user files found)
+owner_voiceprint = None
+owner_voiceprints = None
 cohort_stats = None
+
+# Per-enrollment-session accumulators: { user_id: [embedding, ...] }
+enrollment_embeddings_by_user = {}
+# Default enrollment user (when no user_id provided)
+enrollment_embeddings = []
 
 # GPU memory management: periodically flush PyTorch's CUDA allocator cache
 _inference_call_count = 0
@@ -135,16 +145,45 @@ def load_models():
     ecapa_model.eval()  # inference-only mode -- critical to prevent gradient accumulation
     logger.info(f"ECAPA-TDNN loaded on {DEVICE}")
 
-    # Load multi-reference voiceprints (preferred) or legacy single voiceprint
-    if os.path.exists(VOICEPRINT_MULTI_PATH):
-        owner_voiceprints = np.load(VOICEPRINT_MULTI_PATH)
-        logger.info(f"Multi-reference voiceprints loaded ({owner_voiceprints.shape}) from {VOICEPRINT_MULTI_PATH}")
-        cohort_stats = compute_cohort_stats(owner_voiceprints)
-    elif os.path.exists(VOICEPRINT_PATH):
-        owner_voiceprint = np.load(VOICEPRINT_PATH)
-        logger.info(f"Legacy single voiceprint loaded ({owner_voiceprint.shape}) from {VOICEPRINT_PATH}")
+    # Load per-user voiceprints from VOICEPRINTS_DIR/{user_id}.npy
+    loaded = 0
+    if os.path.isdir(VOICEPRINTS_DIR):
+        for fname in os.listdir(VOICEPRINTS_DIR):
+            if not fname.endswith('.npy'):
+                continue
+            user_id = fname[:-4]
+            path = os.path.join(VOICEPRINTS_DIR, fname)
+            try:
+                vp = np.load(path)
+                user_voiceprints[user_id] = vp
+                user_cohort_stats[user_id] = compute_cohort_stats(vp)
+                logger.info(f"Voiceprint loaded: user={user_id} refs={len(vp)} from {path}")
+                loaded += 1
+            except Exception as e:
+                logger.warning(f"Failed to load voiceprint {path}: {e}")
+
+    # Migrate legacy owner_voiceprints.npy → voiceprints/owner.npy
+    if loaded == 0 and os.path.exists(VOICEPRINT_MULTI_PATH):
+        vp = np.load(VOICEPRINT_MULTI_PATH)
+        dest = os.path.join(VOICEPRINTS_DIR, 'owner.npy')
+        np.save(dest, vp)
+        user_voiceprints['owner'] = vp
+        user_cohort_stats['owner'] = compute_cohort_stats(vp)
+        logger.info(f"Migrated legacy voiceprint → {dest} ({len(vp)} refs)")
+        loaded += 1
+    elif loaded == 0 and os.path.exists(VOICEPRINT_PATH):
+        vp = np.load(VOICEPRINT_PATH)
+        dest = os.path.join(VOICEPRINTS_DIR, 'owner.npy')
+        np.save(dest, vp)
+        user_voiceprints['owner'] = vp
+        user_cohort_stats['owner'] = None
+        logger.info(f"Migrated legacy single voiceprint → {dest}")
+        loaded += 1
+
+    if loaded == 0:
+        logger.warning("No voiceprints found -- run enrollment first")
     else:
-        logger.warning(f"No voiceprint found -- run enrollment first")
+        logger.info(f"Loaded voiceprints for {loaded} user(s): {list(user_voiceprints.keys())}")
 
 
 def detect_speech(audio_path):
@@ -257,47 +296,50 @@ def classify_confidence(raw_score, norm_score, threshold):
 
 @app.route('/health', methods=['GET'])
 def health():
-    has_voiceprint = owner_voiceprints is not None or owner_voiceprint is not None
-    ref_count = len(owner_voiceprints) if owner_voiceprints is not None else (1 if owner_voiceprint is not None else 0)
+    total_refs = sum(len(vp) for vp in user_voiceprints.values())
+    pending = sum(len(clips) for clips in enrollment_embeddings_by_user.values()) + len(enrollment_embeddings)
     return jsonify({
         "status": "healthy" if ecapa_model and vad_model else "loading",
         "device": DEVICE,
         "threshold": SPEAKER_THRESHOLD,
-        "voiceprint_loaded": has_voiceprint,
-        "reference_embeddings": ref_count,
-        "cohort_stats_loaded": cohort_stats is not None,
-        "enrollment_clips": len(enrollment_embeddings),
+        "enrolled_users": list(user_voiceprints.keys()),
+        "total_reference_embeddings": total_refs,
+        "enrollment_clips_pending": pending,
     }), 200 if ecapa_model and vad_model else 503
 
 
 @app.route('/verify', methods=['POST'])
 def verify():
-    """Verify if audio belongs to the enrolled owner.
-    Accepts multipart form with 'audio' file field.
-    Returns { is_owner, confidence, confidence_tier, raw_score, norm_score, has_speech }
+    """Verify which enrolled user the audio belongs to.
+    Accepts multipart form with 'audio' file and optional 'user_id' field.
+    Returns { user_id, is_owner, confidence, confidence_tier, raw_score, norm_score, has_speech }
+    - user_id: the matched enrolled user, or null if rejected
+    - is_owner: true when user_id matches ALLOWED_USERS[0] (the primary owner)
     """
     if not ecapa_model or not vad_model:
         return jsonify({"error": "Models not loaded"}), 503
 
-    if owner_voiceprints is None and owner_voiceprint is None:
+    if not user_voiceprints:
         return jsonify({"error": "No voiceprint enrolled. Run enrollment first."}), 400
 
     if 'audio' not in request.files:
         return jsonify({"error": "No audio file provided"}), 400
 
     audio_file = request.files['audio']
+    # Optional: verify against a specific user only
+    target_user_id = request.form.get('user_id')
     temp_path = None
 
     try:
-        # Save to temp file
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
             temp_path = tmp.name
             audio_file.save(temp_path)
 
-        # Stage 1: Silero VAD -- reject non-speech
+        # Stage 1: Silero VAD
         has_speech, timestamps = detect_speech(temp_path)
         if not has_speech:
             return jsonify({
+                "user_id": None,
                 "is_owner": False,
                 "confidence": 0.0,
                 "confidence_tier": "low",
@@ -305,28 +347,48 @@ def verify():
                 "reason": "no_speech_detected",
             })
 
-        # Stage 2: ECAPA-TDNN speaker verification with score normalization
+        # Stage 2: ECAPA-TDNN embedding
         embedding = extract_embedding(temp_path)
 
-        if owner_voiceprints is not None:
-            norm_score, raw_score, best_idx = compute_normalized_score(
-                embedding, owner_voiceprints, cohort_stats
-            )
-            # Decision uses raw score against threshold (normalized score informs tier)
-            is_owner = raw_score >= SPEAKER_THRESHOLD
-            tier = classify_confidence(raw_score, norm_score if cohort_stats else None, SPEAKER_THRESHOLD)
-            logger.info(f"Verify: raw={raw_score:.3f} norm={norm_score:.3f} tier={tier} ref={best_idx} -> {'owner' if is_owner else 'reject'}")
-        else:
-            raw_score = cosine_similarity(embedding, owner_voiceprint)
-            norm_score = raw_score
-            is_owner = raw_score >= SPEAKER_THRESHOLD
-            tier = classify_confidence(raw_score, None, SPEAKER_THRESHOLD)
+        # Determine which users to check
+        candidates = {target_user_id: user_voiceprints[target_user_id]} \
+            if target_user_id and target_user_id in user_voiceprints \
+            else user_voiceprints
+
+        best_user_id = None
+        best_raw = -1.0
+        best_norm = -1.0
+        best_tier = "low"
+
+        for uid, vp in candidates.items():
+            stats = user_cohort_stats.get(uid)
+            if len(vp) >= 2:
+                norm_score, raw_score, _ = compute_normalized_score(embedding, vp, stats)
+            else:
+                raw_score = cosine_similarity(embedding, vp[0]) if len(vp) else 0.0
+                norm_score = raw_score
+
+            tier = classify_confidence(raw_score, norm_score if stats else None, SPEAKER_THRESHOLD)
+            if raw_score > best_raw:
+                best_raw = raw_score
+                best_norm = norm_score
+                best_user_id = uid
+                best_tier = tier
+
+        matched = best_raw >= SPEAKER_THRESHOLD
+        matched_user = best_user_id if matched else None
+        # is_owner: true if the matched user is enrolled as 'owner' (legacy) or is ALLOWED_USERS[0]
+        _primary = os.environ.get('OWNER_USER_ID', 'owner')
+        is_owner = matched and (matched_user == _primary or matched_user == 'owner')
+
+        logger.info(f"Verify: user={matched_user} raw={best_raw:.3f} norm={best_norm:.3f} tier={best_tier} -> {'match' if matched else 'reject'}")
 
         return jsonify({
+            "user_id": matched_user,
             "is_owner": is_owner,
-            "confidence": round(raw_score, 4),
-            "norm_score": round(norm_score, 4),
-            "confidence_tier": tier,
+            "confidence": round(best_raw, 4),
+            "norm_score": round(best_norm, 4),
+            "confidence_tier": best_tier,
             "has_speech": True,
             "threshold": SPEAKER_THRESHOLD,
         })
@@ -341,9 +403,9 @@ def verify():
 
 @app.route('/enroll', methods=['POST'])
 def enroll():
-    """Add an enrollment clip. Accumulates embeddings.
-    POST multiple clips, then call POST /enroll/finalize to save the voiceprint.
-    Returns embedding consistency info after 3+ clips."""
+    """Add an enrollment clip for a specific user.
+    POST with 'audio' file and optional 'user_id' form field (defaults to 'owner').
+    Call POST /enroll/finalize with the same user_id to save."""
     if not ecapa_model or not vad_model:
         return jsonify({"error": "Models not loaded"}), 503
 
@@ -351,66 +413,63 @@ def enroll():
         return jsonify({"error": "No audio file provided"}), 400
 
     audio_file = request.files['audio']
+    user_id = request.form.get('user_id', 'owner')
     temp_path = None
+
+    if user_id not in enrollment_embeddings_by_user:
+        enrollment_embeddings_by_user[user_id] = []
+    clips = enrollment_embeddings_by_user[user_id]
 
     try:
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
             temp_path = tmp.name
             audio_file.save(temp_path)
 
-        # Check for speech first
         has_speech, timestamps = detect_speech(temp_path)
         if not has_speech:
             return jsonify({
                 "accepted": False,
                 "reason": "no_speech_detected",
-                "clips_collected": len(enrollment_embeddings),
+                "clips_collected": len(clips),
             })
 
-        # Compute speech duration from VAD timestamps (16kHz sample rate)
         speech_samples = sum(ts['end'] - ts['start'] for ts in timestamps)
         speech_duration_ms = (speech_samples / 16000) * 1000
 
-        # Reject clips with very little speech content (< 400ms of actual speech)
         if speech_duration_ms < 400:
             return jsonify({
                 "accepted": False,
                 "reason": "speech_too_short",
                 "speech_duration_ms": round(speech_duration_ms),
-                "clips_collected": len(enrollment_embeddings),
+                "clips_collected": len(clips),
             })
 
-        # Extract embedding
         embedding = extract_embedding(temp_path)
 
-        # Embedding consistency check: after 3 clips, reject outliers
+        # Consistency check: reject outliers after 3+ clips
         consistency_score = None
-        if len(enrollment_embeddings) >= 3:
-            sims = [cosine_similarity(embedding, existing) for existing in enrollment_embeddings]
+        if len(clips) >= 3:
+            sims = [cosine_similarity(embedding, existing) for existing in clips]
             consistency_score = float(np.mean(sims))
             if consistency_score < 0.35:
-                logger.warning(f"Enrollment clip rejected (outlier): consistency={consistency_score:.3f}")
+                logger.warning(f"Enroll [{user_id}] clip rejected (outlier): consistency={consistency_score:.3f}")
                 return jsonify({
                     "accepted": False,
                     "reason": "outlier_embedding",
                     "consistency_score": round(consistency_score, 3),
-                    "clips_collected": len(enrollment_embeddings),
+                    "clips_collected": len(clips),
                 })
 
-        enrollment_embeddings.append(embedding)
-
-        logger.info(f"Enrollment clip #{len(enrollment_embeddings)} accepted"
-                     + (f" (consistency={consistency_score:.3f})" if consistency_score else ""))
-        result = {
-            "accepted": True,
-            "clips_collected": len(enrollment_embeddings),
-        }
+        clips.append(embedding)
+        logger.info(f"Enroll [{user_id}] clip #{len(clips)} accepted"
+                    + (f" (consistency={consistency_score:.3f})" if consistency_score else ""))
+        result = {"accepted": True, "clips_collected": len(clips), "user_id": user_id}
         if consistency_score is not None:
             result["consistency_score"] = round(consistency_score, 3)
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Enrollment error: {e}")
+        logger.error(f"Enrollment error [{user_id}]: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -419,61 +478,62 @@ def enroll():
 
 @app.route('/enroll/finalize', methods=['POST'])
 def enroll_finalize():
-    """Save enrollment embeddings -- merges with existing voiceprints if present."""
-    global owner_voiceprint, owner_voiceprints, enrollment_embeddings, cohort_stats
+    """Save enrollment clips for a user. Merges with existing voiceprint if present (learn mode).
+    POST with optional 'user_id' form field (defaults to 'owner')."""
+    global user_voiceprints, user_cohort_stats
 
-    if len(enrollment_embeddings) < 1:
-        return jsonify({
-            "error": f"No enrollment clips to save",
-        }), 400
+    user_id = request.form.get('user_id', 'owner')
+    clips = enrollment_embeddings_by_user.get(user_id, [])
 
-    # For fresh enrollment, require at least 3 clips
-    if owner_voiceprints is None and len(enrollment_embeddings) < 3:
-        return jsonify({
-            "error": f"Need at least 3 enrollment clips, have {len(enrollment_embeddings)}",
-        }), 400
+    if len(clips) < 1:
+        return jsonify({"error": f"No enrollment clips for user '{user_id}'"}), 400
 
-    # L2-normalize each new embedding
+    existing = user_voiceprints.get(user_id)
+    if existing is None and len(clips) < 3:
+        return jsonify({"error": f"Need at least 3 clips for new enrollment, have {len(clips)}"}), 400
+
     normed = []
-    for emb in enrollment_embeddings:
-        norm = np.linalg.norm(emb)
-        normed.append(emb / norm if norm > 0 else emb)
+    for emb in clips:
+        n = np.linalg.norm(emb)
+        normed.append(emb / n if n > 0 else emb)
     new_embeds = np.stack(normed)
 
-    # Merge with existing voiceprints if present (learn mode)
-    if owner_voiceprints is not None:
-        multi = np.concatenate([owner_voiceprints, new_embeds], axis=0)
-        logger.info(f"Learn mode: added {len(normed)} clips to existing {len(owner_voiceprints)} (total: {len(multi)})")
+    if existing is not None:
+        multi = np.concatenate([existing, new_embeds], axis=0)
+        logger.info(f"Enroll [{user_id}] merged {len(normed)} new + {len(existing)} existing = {len(multi)} total")
     else:
         multi = new_embeds
 
-    np.save(VOICEPRINT_MULTI_PATH, multi)
-    owner_voiceprints = multi
-    owner_voiceprint = None  # Prefer multi-reference
-    clip_count = len(enrollment_embeddings)
-    enrollment_embeddings = []  # Reset accumulator
+    dest = os.path.join(VOICEPRINTS_DIR, f'{user_id}.npy')
+    np.save(dest, multi)
+    user_voiceprints[user_id] = multi
+    user_cohort_stats[user_id] = compute_cohort_stats(multi)
+    clip_count = len(clips)
+    enrollment_embeddings_by_user[user_id] = []
 
-    # Recompute cohort stats for score normalization
-    cohort_stats = compute_cohort_stats(multi)
-
-    logger.info(f"Multi-reference voiceprint saved to {VOICEPRINT_MULTI_PATH} ({len(multi)} total embeddings)")
+    logger.info(f"Voiceprint saved: user={user_id} path={dest} total_refs={len(multi)}")
     return jsonify({
         "saved": True,
-        "path": VOICEPRINT_MULTI_PATH,
+        "user_id": user_id,
+        "path": dest,
         "clips_saved": clip_count,
         "total_references": len(multi),
-        "embedding_dim": multi.shape[1],
-        "mode": "multi_reference",
+        "embedding_dim": int(multi.shape[1]),
     })
 
 
 @app.route('/enroll/reset', methods=['POST'])
 def enroll_reset():
-    """Reset enrollment accumulator without saving."""
-    global enrollment_embeddings
-    count = len(enrollment_embeddings)
-    enrollment_embeddings = []
-    return jsonify({"reset": True, "clips_discarded": count})
+    """Reset enrollment accumulator for a user without saving.
+    POST with optional 'user_id' form field (defaults to 'owner', or '*' to reset all)."""
+    user_id = request.form.get('user_id', 'owner')
+    if user_id == '*':
+        total = sum(len(c) for c in enrollment_embeddings_by_user.values()) + len(enrollment_embeddings)
+        enrollment_embeddings_by_user.clear()
+        enrollment_embeddings.clear()
+        return jsonify({"reset": True, "clips_discarded": total})
+    clips = enrollment_embeddings_by_user.pop(user_id, [])
+    return jsonify({"reset": True, "user_id": user_id, "clips_discarded": len(clips)})
 
 
 # ── Online Speaker Diarization (embedding clustering) ────────────────

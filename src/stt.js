@@ -572,6 +572,7 @@ export async function transcribeAudio(wavPath) {
         // Pass speaker info up -- index.js handles session-based auth decisions
         speakerInfo = {
           is_owner: speakerResult.is_owner,
+          user_id: speakerResult.user_id ?? null,
           confidence: speakerResult.confidence,
           norm_score: speakerResult.norm_score ?? null,
           confidence_tier: speakerResult.confidence_tier ?? null,

@@ -1339,7 +1339,7 @@ client.once('ready', async () => {
       const ownerMember = await guild.members.fetch(ALLOWED_USERS[0]);
       ownerChannel = ownerMember?.voice?.channelId;
       ownerMuted = !!ownerMember?.voice?.selfMute;
-      if (ownerChannel) logger.info(`👀 Owner is in voice channel ${ownerChannel} (${ownerMuted ? 'muted' : 'unmuted'})`);
+      if (ownerChannel) { logger.info(`👀 Owner is in voice channel ${ownerChannel} (${ownerMuted ? "muted" : "unmuted"})`); userDisconnected = false; }
     } catch (e) {
       logger.info(`Could not fetch owner voice state: ${e.message}`);
     }
@@ -3043,8 +3043,8 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         logger.info(`Enrollment clip ${enrollmentState.clipsCollected}/${enrollmentState.clipsNeeded} accepted${consistencyStr}`);
 
         if (enrollmentState.learnMode) {
-          postToCC('Learn', `Clip ${enrollmentState.clipsCollected} added. Keep going or say **"done"** to save.`);
-          const audio = await synthesizeSpeech(`Got it. ${enrollmentState.clipsCollected} samples total. Keep going or say done.`);
+          postToCC('Learn', `Clip ${enrollmentState.clipsCollected} added. Just keep talking naturally — say anything. Say **"done"** to save.`);
+          const audio = await synthesizeSpeech(`Got it, ${enrollmentState.clipsCollected} samples. Just keep talking — say anything at all. Say done when finished.`);
           if (audio) { audioQueue.add(audio); }
         } else if (enrollmentState.clipsCollected >= enrollmentState.clipsNeeded) {
           const finalResult = await enrollmentState.finalize();

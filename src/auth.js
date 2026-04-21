@@ -163,6 +163,7 @@ export const enrollmentState = {
       const FormData = (await import('form-data')).default;
       const form = new FormData();
       form.append('audio', createReadStream(wavPath));
+      if (this.userId) form.append('user_id', this.userId);
       const res = await fetch(`${SPEAKER_ENROLL_URL}/enroll`, {
         method: 'POST',
         body: form,
@@ -171,8 +172,12 @@ export const enrollmentState = {
       });
       const data = await res.json();
       if (data.accepted) {
-        this.recorded[this.promptIndex] = true;
-        this.clipsCollected = this.recorded.filter(Boolean).length;
+        if (this.learnMode) {
+          this.clipsCollected++;
+        } else {
+          this.recorded[this.promptIndex] = true;
+          this.clipsCollected = this.recorded.filter(Boolean).length;
+        }
         return { accepted: true, total: this.clipsCollected, needed: this.clipsNeeded };
       }
       return { accepted: false, reason: data.reason || 'unknown' };
@@ -183,12 +188,22 @@ export const enrollmentState = {
 
   async finalize() {
     try {
-      const res = await fetch(`${SPEAKER_ENROLL_URL}/enroll/finalize`, { method: 'POST' });
+      const { default: fetch } = await import('node-fetch');
+      const FormData = (await import('form-data')).default;
+      const form = new FormData();
+      if (this.userId) form.append('user_id', this.userId);
+      const res = await fetch(`${SPEAKER_ENROLL_URL}/enroll/finalize`, {
+        method: 'POST',
+        body: form,
+        headers: form.getHeaders(),
+      });
       const data = await res.json();
-      if (!this.learnMode) this.active = false;
+      this.active = false;
+      this.learnMode = false;
       return data;
     } catch (err) {
-      if (!this.learnMode) this.active = false;
+      this.active = false;
+      this.learnMode = false;
       return { saved: false, error: err.message };
     }
   },
@@ -199,6 +214,14 @@ export const enrollmentState = {
     this.clipsCollected = 0;
     this.promptIndex = 0;
     this.recorded = [];
-    fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST' }).catch(() => {});
+    // Reset per-user accumulator on the service
+    const userId = this.userId;
+    import('node-fetch').then(({ default: fetch }) => {
+      import('form-data').then(({ default: FormData }) => {
+        const form = new FormData();
+        if (userId) form.append('user_id', userId);
+        fetch(`${SPEAKER_ENROLL_URL}/enroll/reset`, { method: 'POST', body: form, headers: form.getHeaders() }).catch(() => {});
+      });
+    }).catch(() => {});
   },
 };
