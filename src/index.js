@@ -471,6 +471,12 @@ const recordMode = {
 const activeTasks = new Map(); // taskId -> { controller, transcript, startTime }
 let taskIdCounter = 0;
 
+// Verbose thread continuity: reuse the same Discord thread for follow-up voice
+// questions from the same channel within a time window.
+// parentChannelId → { threadId, expiresAt }
+const _voiceVerboseThreads = new Map();
+const VOICE_THREAD_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 // ── /speak queue: hold incoming speaks while audio is playing ─────────
 // Prevents cron results / sub-agent callbacks from interleaving mid-sentence.
 // Two conditions that gate a /speak:
@@ -2357,17 +2363,30 @@ async function handleVoiceTranscript(message) {
             const discordToken = process.env.DISCORD_TOKEN || '';
             const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
 
-            // Discord disallows threads-within-threads. If already in a thread (follow-up
-            // voice message), stream directly into the existing thread instead.
+            // Thread continuity: reuse an existing verbose thread for follow-ups
+            // rather than spawning a new one for every voice question.
+            // Falls back to creating a new thread if no active one exists,
+            // or if already inside a thread (Discord disallows nested threads).
             let verboseChannelId;
+            const _existingThread = _voiceVerboseThreads.get(_vmParentId);
             if (_vmIsThread) {
+              // Already in a thread — stream here directly
               verboseChannelId = message.channelId;
+            } else if (_existingThread && _existingThread.expiresAt > Date.now()) {
+              // Reuse active thread from a recent question
+              verboseChannelId = _existingThread.threadId;
+              logger.info(`[voice-verbose] reusing thread ${verboseChannelId} for follow-up`);
             } else {
               const vmThread = await echoReply.startThread({
                 name: text.substring(0, 80) || 'voice response',
                 autoArchiveDuration: 60,
               });
               verboseChannelId = vmThread.id;
+              _voiceVerboseThreads.set(_vmParentId, { threadId: verboseChannelId, expiresAt: Date.now() + VOICE_THREAD_TTL_MS });
+            }
+            // Refresh TTL on every use
+            if (!_vmIsThread) {
+              _voiceVerboseThreads.set(_vmParentId, { threadId: verboseChannelId, expiresAt: Date.now() + VOICE_THREAD_TTL_MS });
             }
 
             const ls = await createLiveStream(verboseChannelId, discordToken, { model });
