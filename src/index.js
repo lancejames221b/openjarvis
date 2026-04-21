@@ -2023,16 +2023,28 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     ? `agent:main:discord:channel:${_parentChannelId}:thread:${_threadId}`
     : `agent:main:discord:channel:${_parentChannelId}`;
 
-  // Verbose mode: stream live into a thread so activity is always visible
-  if (isVerboseModeEnabled() && !_isThread) {
+  // Verbose/live mode: stream activity into a thread so you always see what's happening.
+  // - In a top-level channel: create a new thread and stream there
+  // - Already in a thread: stream into the current thread (follow-ups keep the transparency)
+  if (isVerboseModeEnabled()) {
     try {
       const { createLiveStream } = await import('./live-stream.js');
+      const { getTextModel } = await import('./brain.js');
       const discordToken = process.env.DISCORD_TOKEN || '';
-      const thread = await message.startThread({
-        name: content.substring(0, 80) || 'response',
-        autoArchiveDuration: 60,
-      });
-      const ls = await createLiveStream(thread.id, discordToken);
+      const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
+
+      let threadId;
+      if (_isThread) {
+        threadId = message.channelId;
+      } else {
+        const thread = await message.startThread({
+          name: content.substring(0, 80) || 'response',
+          autoArchiveDuration: 60,
+        });
+        threadId = thread.id;
+      }
+
+      const ls = await createLiveStream(threadId, discordToken, { model });
       const ac = new AbortController();
       verboseSessions.set(_parentChannelId, { ac, ls });
       let fullText = '';
@@ -2052,18 +2064,20 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
           return;
         }
         if (!fullText || fullText.length < 2) {
-          ls.stop();
-          await thread.delete().catch(() => {});
+          await ls.finishEmpty('sub_agent_spawned').catch(() => {});
           verboseSessions.delete(_parentChannelId);
-          logger.info(`@mention: empty response (sub-agent likely spawned)`);
+          logger.info(`@mention: empty response — thread kept with no-response marker`);
           return;
         }
         await ls.finish(fullText);
         logger.info(`@mention: verbose stream complete (${fullText.length} chars)`);
       } catch (streamErr) {
-        ls.stop();
         logger.error(`@mention verbose stream error: ${streamErr.message}`);
-        await message.reply("Having trouble processing that right now, sir.").catch(() => {});
+        if (ls.finishError) {
+          await ls.finishError(streamErr).catch(() => {});
+        } else {
+          ls.stop();
+        }
       } finally {
         verboseSessions.delete(_parentChannelId);
       }

@@ -1,28 +1,34 @@
 /**
- * live-stream.js — Pinned-message live updater for in-flight cursor-agent runs.
+ * live-stream.js — Pinned status-header + streaming body for in-flight agent runs.
  *
- * Creates a message in a Discord thread, pins it, and edits it every 2 s as
- * new NDJSON deltas arrive. Hash-diff prevents redundant API calls. Truncates
- * to 1900 chars from the end so the most recent output is always visible.
+ * Creates a PINNED message in a Discord thread that renders a status header
+ * (state · elapsed · tokens · model) above the most recent N chars of output.
+ * Header stays visible and evolves through states: thinking → streaming → done.
+ * On finish, header becomes a permanent summary stamp and the full text posts
+ * as chunked replies below. The pin stays — so the top of the thread is always
+ * a legible "what happened here" marker.
  *
  * Usage:
- *   const ls = await createLiveStream(threadId, botToken);
- *   ls.update(textDelta);   // called per NDJSON delta
- *   await ls.finish(full);  // final text; unpins + posts clean summary
- *   ls.stop();              // emergency stop without finish
+ *   const ls = await createLiveStream(threadId, botToken, { model });
+ *   ls.update(textDelta);       // per streaming token/chunk
+ *   await ls.finish(fullText);  // finalize (or ls.finishEmpty('no_response') if empty)
+ *   ls.stop();                  // emergency stop (no cleanup)
  */
 
 import logger from './logger.js';
 
-const TICK_MS = 2_000;
-const MAX_LEN  = 1_900;
+const TICK_MS       = 2_000;
+const MAX_BODY_LEN  = 1_700;  // leave headroom for header
+const THINK_DOTS    = ['', '.', '..', '...'];
 
 /**
- * @param {string} channelId   Discord channel or thread ID to post into
- * @param {string} botToken    Discord bot token
- * @returns {{ update(delta: string): void, finish(finalText: string): Promise<void>, stop(): void }}
+ * @param {string} channelId    Discord channel or thread ID to post into
+ * @param {string} botToken     Discord bot token
+ * @param {object} [opts]
+ * @param {string} [opts.model] Model label for the status header
+ * @returns {{ update(delta: string): void, replace(text: string): void, finish(finalText: string): Promise<void>, finishEmpty(reason: string): Promise<void>, stop(): void }}
  */
-export async function createLiveStream(channelId, botToken) {
+export async function createLiveStream(channelId, botToken, opts = {}) {
   const headers = {
     Authorization: `Bot ${botToken}`,
     'Content-Type': 'application/json',
@@ -35,13 +41,17 @@ export async function createLiveStream(channelId, botToken) {
       signal: AbortSignal.timeout(8_000),
     });
 
-  // Create the initial placeholder message.
-  // Throws on failure so the caller can surface the error instead of running
-  // the agent against a no-op sink (silent blind-agent bug).
+  const startedAt = Date.now();
+  const model = opts.model || 'claude';
+  let state = 'thinking';   // thinking → streaming → done | empty | error
+  let errorMsg = null;
+  let emptyReason = null;
+
+  // Create the initial pinned header message.
   let msgId;
   try {
     const res = await api(`/channels/${channelId}/messages`, 'POST', {
-      content: '```\nAgent starting...\n```',
+      content: _renderHeader({ state, startedAt, model, tokens: 0, body: '' }),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -55,7 +65,7 @@ export async function createLiveStream(channelId, botToken) {
     throw err;
   }
 
-  // Pin it
+  // Pin — best-effort
   try {
     await api(`/channels/${channelId}/pins/${msgId}`, 'PUT');
   } catch { /* non-fatal — still update even if pin fails */ }
@@ -63,9 +73,9 @@ export async function createLiveStream(channelId, botToken) {
   let buf = '';
   let lastHash = '';
   let done = false;
+  let tokens = 0;  // rough: chunks received
 
   function _hash(s) {
-    // djb2 — fast enough, no deps
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
     return (h >>> 0).toString(16);
@@ -79,40 +89,44 @@ export async function createLiveStream(channelId, botToken) {
     }
   }
 
-  // 2 s ticker — only edits when content has changed
+  // Ticker: re-render every 2s when visible state changed
   const ticker = setInterval(async () => {
     if (done) return;
-    const display = _truncate(buf);
-    const h = _hash(display);
+    const rendered = _renderHeader({ state, startedAt, model, tokens, body: buf });
+    const h = _hash(rendered);
     if (h === lastHash) return;
     lastHash = h;
-    await _edit('```\n' + display + '\n```');
+    await _edit(rendered);
   }, TICK_MS);
 
   function update(delta) {
     if (done) return;
+    if (state === 'thinking') state = 'streaming';
     buf += delta;
+    tokens += 1;  // approximate: one delta = one "token"
   }
 
   function replace(text) {
     if (done) return;
     buf = text;
+    if (state === 'thinking' && text) state = 'streaming';
   }
 
   async function finish(finalText) {
     done = true;
     clearInterval(ticker);
+    state = 'done';
 
-    // Unpin the live message
-    try {
-      await api(`/channels/${channelId}/pins/${msgId}`, 'DELETE');
-    } catch { /* non-fatal */ }
+    const text = _dedupSentences((finalText || '').trim());
+    if (!text || text.length < 2) {
+      return finishEmpty('no_output');
+    }
 
-    // Replace live message with "done" marker
-    await _edit('```\n[done]\n```');
+    // Render final header as a permanent summary — keeps the pin
+    const header = _renderHeader({ state, startedAt, model, tokens, body: '', final: true });
+    await _edit(header);
 
-    // Post final result as a new message (chunked if needed)
-    const text = _dedupSentences((finalText || '').trim()) || '(no output)';
+    // Post full text below as chunked replies (pin stays on header)
     const chunks = _chunkText(text, 1_900);
     for (const chunk of chunks) {
       try {
@@ -123,12 +137,63 @@ export async function createLiveStream(channelId, botToken) {
     }
   }
 
+  async function finishEmpty(reason) {
+    done = true;
+    clearInterval(ticker);
+    state = 'empty';
+    emptyReason = reason || 'empty';
+    const header = _renderHeader({ state, startedAt, model, tokens, body: '', emptyReason, final: true });
+    await _edit(header);
+  }
+
+  async function finishError(err) {
+    done = true;
+    clearInterval(ticker);
+    state = 'error';
+    errorMsg = String(err?.message || err);
+    const header = _renderHeader({ state, startedAt, model, tokens, body: '', errorMsg, final: true });
+    await _edit(header);
+  }
+
   function stop() {
     done = true;
     clearInterval(ticker);
   }
 
-  return { update, replace, finish, stop };
+  return { update, replace, finish, finishEmpty, finishError, stop };
+}
+
+function _renderHeader({ state, startedAt, model, tokens, body, final = false, emptyReason = null, errorMsg = null }) {
+  const elapsed = _fmtElapsed(Date.now() - startedAt);
+  let statusLine;
+  if (state === 'thinking') {
+    const dots = THINK_DOTS[Math.floor((Date.now() / 600) % THINK_DOTS.length)];
+    statusLine = `⏳ thinking${dots}  ·  ${elapsed}  ·  ${model}`;
+  } else if (state === 'streaming') {
+    statusLine = `▸ streaming  ·  ${elapsed}  ·  ${tokens} chunks  ·  ${model}`;
+  } else if (state === 'done') {
+    statusLine = `✓ done  ·  ${elapsed}  ·  ${tokens} chunks  ·  ${model}`;
+  } else if (state === 'empty') {
+    statusLine = `∅ no response  ·  ${elapsed}  ·  ${model}  ·  reason: ${emptyReason || 'unknown'}`;
+  } else if (state === 'error') {
+    statusLine = `⚠ error  ·  ${elapsed}  ·  ${model}  ·  ${(errorMsg || '').slice(0, 80)}`;
+  } else {
+    statusLine = `${state}  ·  ${elapsed}  ·  ${model}`;
+  }
+
+  if (final) {
+    // Summary pin — no body block
+    return `**${statusLine}**`;
+  }
+
+  const display = _truncate(body);
+  return `**${statusLine}**\n\`\`\`\n${display || '(awaiting first output…)'}\n\`\`\``;
+}
+
+function _fmtElapsed(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
 }
 
 // Remove consecutively repeated sentences (model stutter artifact).
@@ -143,8 +208,8 @@ function _dedupSentences(text) {
 }
 
 function _truncate(s) {
-  if (s.length <= MAX_LEN) return s;
-  return '…' + s.slice(-(MAX_LEN - 1));
+  if (s.length <= MAX_BODY_LEN) return s;
+  return '…' + s.slice(-(MAX_BODY_LEN - 1));
 }
 
 function _chunkText(text, max) {
