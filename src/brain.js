@@ -682,7 +682,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
         'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -956,7 +956,7 @@ export async function generateResponse(userMessage, history = [], signal, option
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
         'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -1011,7 +1011,7 @@ export async function generateAck(userMessage) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
         'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -1098,7 +1098,7 @@ export async function generateContextualAck(userRequest, taskType, modelName) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
         'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -1155,7 +1155,7 @@ export async function generateContextualInterim(userRequest) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
         'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -1233,7 +1233,7 @@ export async function generateTextResponse(userMessage, options = {}) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
         'x-jarvis-scopes': 'operator.write',
       },
       body: JSON.stringify({
@@ -1305,7 +1305,7 @@ Never skip this step. The voice session cannot see your filesystem — this is t
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${HOOKS_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
       },
       body: JSON.stringify({
         message: hookMessage,
@@ -1360,7 +1360,7 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${GATEWAY_TOKEN}`,
-        "X-OpenClaw-Scopes": "operator.write",
+        "X-Jarvis-Scopes": "operator.write",
         "x-jarvis-scopes": "operator.write",
       },
       body: JSON.stringify({

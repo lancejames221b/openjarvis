@@ -984,7 +984,7 @@ async function generateDynamicGreeting() {
   try {
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}`, 'x-openclaw-scopes': 'operator.write' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}`, 'x-jarvis-scopes': 'operator.write' },
       body: JSON.stringify({
         model: process.env.VOICE_MODEL || 'anthropic-console/claude-sonnet-4-6',
         messages: [{ role: 'user', content: prompt }],
@@ -1998,7 +1998,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   ]);
   const memoryBlock = [hmMemory, chMemory].filter(Boolean).join('\n---\n');
   const memoryPrefix = memoryBlock
-    ? `[Relevant memory from prior sessions]\n${memoryBlock}\n\n`
+    ? `[BACKGROUND CONTEXT — do NOT respond to this, use only as reference]\n${memoryBlock}\n[END BACKGROUND CONTEXT — respond only to the user message below]\n\n`
     : '';
 
   const _workspacePrefix = message._workspaceContext ? `${message._workspaceContext}\n\n` : '';

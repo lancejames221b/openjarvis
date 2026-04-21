@@ -360,7 +360,7 @@ function detectHallucination(text) {
   const words = trimmed.split(/[\s,]+/).filter(w => w.length > 1);
   if (words.length >= 3) {
     const KNOWN_BRANDS = new Set([
-      'openclaw', 'clawdbot', 'jarvis', 'roku', 'plex', 'qbittorrent', 'discord',
+      'jarvis', 'roku', 'plex', 'qbittorrent', 'discord',
       'jarvis', 'jorvis', 'netflix', 'spotify', 'youtube', 'twitch',
       'hulu', 'amazon', 'alexa', 'siri', 'cortana', 'google',
     ]);

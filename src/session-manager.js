@@ -1,7 +1,7 @@
 /**
  * Session Manager — rotating gateway session keys with file + haivemind memory.
  *
- * Why: The OpenClaw gateway session accumulates ALL tool call results and
+ * Why: The Jarvis gateway session accumulates ALL tool call results and
  * history unbounded. After 15+ voice tasks the context window balloons and
  * inference slows from 7s → 130s. Rotating the session key gives a fresh
  * context window. Memory is persisted so nothing is lost across restarts.

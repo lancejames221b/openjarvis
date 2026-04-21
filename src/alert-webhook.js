@@ -231,7 +231,7 @@ async function executeReminderTier(id, reminder) {
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-              'x-openclaw-scopes': 'operator.write',
+              'x-jarvis-scopes': 'operator.write',
             },
             body: JSON.stringify({
               messages: [
@@ -813,7 +813,7 @@ app.post('/cancel', async (req, res) => {
  *   400  { ok: false, error: "invalid action" }
  *   401  Unauthorized
  *
- * Used by OpenClaw sub-agents and cron jobs to put Jarvis to sleep/wake
+ * Used by Jarvis sub-agents and cron jobs to put Jarvis to sleep/wake
  * without relying on voice commands.
  */
 app.post('/sleep_mode', async (req, res) => {

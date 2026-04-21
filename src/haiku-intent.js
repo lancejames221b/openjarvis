@@ -127,7 +127,7 @@ export async function classifyIntent(transcript) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${GATEWAY_TOKEN}`,
-        'X-OpenClaw-Scopes': 'operator.write',
+        'X-Jarvis-Scopes': 'operator.write',
       },
       body: JSON.stringify({
         messages: [

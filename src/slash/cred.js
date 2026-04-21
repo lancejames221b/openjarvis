@@ -17,7 +17,7 @@ import { execSync } from 'child_process';
 import logger from '../logger.js';
 
 const OP_VAULT = 'Employee';
-const SOCKET_DIR = `${process.env.TMPDIR || '/tmp'}/openclaw-tmux-sockets`;
+const SOCKET_DIR = `${process.env.TMPDIR || '/tmp'}/jarvis-tmux-sockets`;
 
 // ── Parse /cred command ───────────────────────────────────────────────────────
 
