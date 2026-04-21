@@ -2288,7 +2288,7 @@ async function handleVoiceTranscript(message) {
     try { unlinkSync(tmpPath); } catch {}
 
     if (transcript && transcript.trim().length > 0) {
-      await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
+      const echoReply = await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
       logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${transcript.trim().substring(0, 60)}"`);
 
       // If in a session channel, forward transcript as tmux keystrokes instead of LLM
@@ -2303,9 +2303,6 @@ async function handleVoiceTranscript(message) {
         const vmTaskId = ++taskIdCounter;
         createTask(vmTaskId, text, message.author.id);
 
-        // No working indicator to reduce noise
-        let statusMsg = null;
-
         // Fetch recent Discord messages for context (channel or thread aware)
         let discordChatHistory = [];
         if (isDiscordMemoryReady() && shouldServeDiscordMemoryForMessage(message)) {
@@ -2316,31 +2313,67 @@ async function handleVoiceTranscript(message) {
           discordChatHistory.length === 0 ? await buildDiscordContextFromApi(message, 10) : '';
 
         // Store task creation to haivemind
-        try {
-          await storeTaskToHaivemind(vmTaskId, text, null);
-        } catch (_) {}
+        try { await storeTaskToHaivemind(vmTaskId, text, null); } catch (_) {}
 
+        const _vmIsThread = message.channel?.isThread?.();
+        const _vmParentId = _vmIsThread ? (message.channel.parentId || message.channelId) : message.channelId;
+        const _vmThreadId = _vmIsThread ? message.channelId : null;
+        const _vmSessionUser = _vmThreadId
+          ? `agent:main:discord:channel:${_vmParentId}:thread:${_vmThreadId}`
+          : `agent:main:discord:channel:${_vmParentId}`;
+        const vmAttachCtx = await _buildAttachmentContext(message.attachments);
+        const prompt = channelContext + text + vmAttachCtx;
+
+        // Verbose mode: open a live-stream thread on the transcript echo, same as @mention text handler
+        if (isVerboseModeEnabled()) {
+          try {
+            const { createLiveStream } = await import('./live-stream.js');
+            const { getTextModel } = await import('./brain.js');
+            const discordToken = process.env.DISCORD_TOKEN || '';
+            const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
+
+            const vmThread = await echoReply.startThread({
+              name: text.substring(0, 80) || 'voice response',
+              autoArchiveDuration: 60,
+            });
+
+            const ls = await createLiveStream(vmThread.id, discordToken, { model });
+            let fullText = '';
+            try {
+              await generateTextResponseStreaming(prompt, (chunk) => {
+                fullText += chunk;
+                ls.update(chunk);
+              }, { channelId: _vmParentId, sessionUser: _vmSessionUser, discordChatHistory });
+              if (!fullText || fullText.length < 2) {
+                await ls.finishEmpty('sub_agent_spawned').catch(() => {});
+              } else {
+                await ls.finish(fullText);
+                try { await storeTaskToHaivemind(vmTaskId, text, fullText.substring(0, 300)); } catch (_) {}
+              }
+              ledgerMarkCompleted(vmTaskId);
+            } catch (streamErr) {
+              logger.error(`[voice-transcript] verbose stream error: ${streamErr.message}`);
+              if (ls.finishError) await ls.finishError(streamErr).catch(() => {});
+              else ls.stop();
+              markFailed(vmTaskId);
+            }
+            return;
+          } catch (threadErr) {
+            logger.error(`[voice-transcript] verbose thread error: ${threadErr.message}`);
+            // fall through to direct reply
+          }
+        }
+
+        // Direct reply (non-verbose or thread creation failed)
         try {
-          const _vmIsThread = message.channel?.isThread?.();
-          const _vmParentId = _vmIsThread ? (message.channel.parentId || message.channelId) : message.channelId;
-          const _vmThreadId = _vmIsThread ? message.channelId : null;
-          const _vmSessionUser = _vmThreadId
-            ? `agent:main:discord:channel:${_vmParentId}:thread:${_vmThreadId}`
-            : `agent:main:discord:channel:${_vmParentId}`;
-          const vmAttachCtx = await _buildAttachmentContext(message.attachments);
-          const prompt = channelContext + text + vmAttachCtx;
           const result = await generateTextResponse(prompt, {
             channelId: _vmParentId,
             sessionUser: _vmSessionUser,
             discordChatHistory,
           });
           if (result && result.text && result.text.length >= 2) {
-            // Store completed task to haivemind
             try { await storeTaskToHaivemind(vmTaskId, text, result.text.substring(0, 300)); } catch (_) {}
             ledgerMarkCompleted(vmTaskId);
-            if (statusMsg) {
-              try { await statusMsg.edit(`✅ Task #${vmTaskId} done`); } catch (_) {}
-            }
             if (result.text.length <= 2000) {
               await message.reply(result.text);
             } else {
@@ -2349,11 +2382,9 @@ async function handleVoiceTranscript(message) {
             }
           } else {
             ledgerMarkCompleted(vmTaskId);
-            if (statusMsg) { try { await statusMsg.edit(`⚠️ Task #${vmTaskId} — no response`); } catch (_) {} }
           }
         } catch (innerErr) {
           markFailed(vmTaskId);
-          if (statusMsg) { try { await statusMsg.edit(`❌ Task #${vmTaskId} failed`); } catch (_) {} }
           logger.error("Voice text response error: " + innerErr.message);
         }
       } catch (e) {
