@@ -38,6 +38,12 @@ export function startTaskAutoSleep() {
   cancelTaskAutoSleep(); // reset if already running
   _taskAutoSleepTimer = setTimeout(() => {
     _taskAutoSleepTimer = null;
+    // Don't sleep if tasks are still processing — extend window until they finish.
+    if (_getActiveTaskCount() > 0) {
+      logger.info(`⏱️  Task auto-sleep deferred — ${_getActiveTaskCount()} task(s) still active`);
+      startTaskAutoSleep();
+      return;
+    }
     const state = getState();
     if (state === 'ACTIVE' || state === 'IDLE') {
       logger.info(`😴 Task auto-sleep: ${TASK_AUTO_SLEEP_MS / 1000}s steering window expired — going to SLEEP`);
@@ -109,6 +115,7 @@ let _getAuthenticatedSession = () => false;
 let _setAuthenticatedSession = () => {};
 let _getPendingUtterance = () => ({});
 let _clearPendingUtterance = () => {};
+let _getActiveTaskCount = () => 0;
 
 export function wireFSMCallbacks({
   getEnrollmentActive,
@@ -116,12 +123,14 @@ export function wireFSMCallbacks({
   setAuthenticatedSession,
   getPendingUtterance,
   clearPendingUtterance,
+  getActiveTaskCount,
 }) {
   _getEnrollmentActive = getEnrollmentActive;
   _getAuthenticatedSession = getAuthenticatedSession;
   _setAuthenticatedSession = setAuthenticatedSession;
   _getPendingUtterance = getPendingUtterance;
   _clearPendingUtterance = clearPendingUtterance;
+  if (getActiveTaskCount) _getActiveTaskCount = getActiveTaskCount;
 }
 
 export function resetIdleSleepTimer() {

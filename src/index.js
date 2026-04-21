@@ -698,6 +698,7 @@ wireFSMCallbacks({
       _pendingUtterance.userId = null;
     }
   },
+  getActiveTaskCount: () => activeTasks.size,
 });
 
 // WAKE_UP_PATTERNS, applyImplicitWakeOnUnmute, handleSleepCheck, isWakeUpCommand imported from ./fsm.js
