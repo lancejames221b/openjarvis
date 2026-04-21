@@ -4041,23 +4041,34 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   let fullResponse = '';
   const tldrModeEnabled = isTldrModeEnabled();
 
-  // ── Sub-Agent Model Override ────────────────────────────────────────
-  // All model IDs live in .env (MODEL_OPUS, MODEL_SONNET, MODEL_GEMINI)
+  // ── Per-Task Model Override (voice phrase) ──────────────────────────
+  // "use opus for this", "use sonnet max for this", etc. — overrides voice
+  // model for this task only. Resets to default on next task automatically.
+  let voiceModelOverride = null;
   let agentModelOverride = null;
   const lowerTranscript = transcript.toLowerCase();
 
-  if (lowerTranscript.includes('use opus') || lowerTranscript.includes('choose opus') || lowerTranscript.includes('claude opus') || lowerTranscript.includes('opus 4.6')) {
+  if (lowerTranscript.includes('use opus plan') || lowerTranscript.includes('use plan mode') || lowerTranscript.includes('opus plan')) {
+    voiceModelOverride = 'opus-plan';
+  } else if (lowerTranscript.includes('use opus') || lowerTranscript.includes('choose opus') || lowerTranscript.includes('claude opus') || lowerTranscript.includes('opus 4.6')) {
+    voiceModelOverride = 'opus';
     agentModelOverride = process.env.MODEL_OPUS;
-    logger.info(`🔄 Sub-Agent model override → ${agentModelOverride}`);
+  } else if (lowerTranscript.includes('use sonnet max') || lowerTranscript.includes('sonnet max') || lowerTranscript.includes('use sonnet-max')) {
+    voiceModelOverride = 'sonnet-max';
+  } else if (lowerTranscript.includes('use sonnet high') || lowerTranscript.includes('sonnet high')) {
+    voiceModelOverride = 'sonnet-high';
   } else if (lowerTranscript.includes('use sonnet') || lowerTranscript.includes('choose sonnet') || lowerTranscript.includes('claude sonnet')) {
+    voiceModelOverride = 'sonnet';
     agentModelOverride = process.env.MODEL_SONNET;
-    logger.info(`🔄 Sub-Agent model override → ${agentModelOverride}`);
   } else if (lowerTranscript.includes('use gemini') || lowerTranscript.includes('choose gemini') || lowerTranscript.includes('gemini 3.1 pro') || lowerTranscript.includes('gemini 3 pro')) {
     agentModelOverride = process.env.MODEL_GEMINI;
-    logger.info(`🔄 Sub-Agent model override → ${agentModelOverride}`);
   }
-  
-  // Inject the model into brainOptions so downstream functions use it for agent dispatch
+
+  if (voiceModelOverride) {
+    brainOptions.model = voiceModelOverride;
+    if (!agentModelOverride) agentModelOverride = voiceModelOverride;
+    logger.info(`🔄 Per-task voice model override → ${voiceModelOverride}`);
+  }
   if (agentModelOverride) {
     brainOptions.agentModel = agentModelOverride;
   }
