@@ -18,6 +18,7 @@ const _execAsync = promisify(exec);
 
 const __slashDirname = dirname(fileURLToPath(import.meta.url));
 const _ENV_FILE = `${__slashDirname}/../.env`;
+const _DEFAULT_VOICE_MODEL = process.env.VOICE_MODEL || 'sonnet';
 // Base + effort-suffixed variants. `claude` omitted (alias to sonnet, redundant).
 const KNOWN_MODELS = [
   'sonnet', 'sonnet-high', 'sonnet-max',
@@ -570,8 +571,8 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       setVoiceModel('opus-plan');
       await interaction.reply({ content: '**Plan mode ON** — Opus with max effort. Deep reasoning active. Use `/plan off` to return to default.' });
     } else if (sub === 'off') {
-      setVoiceModel('claude');
-      await interaction.reply({ content: '**Plan mode OFF** — back to default model.' });
+      setVoiceModel(_DEFAULT_VOICE_MODEL);
+      await interaction.reply({ content: `**Plan mode OFF** — back to default (\`${_DEFAULT_VOICE_MODEL}\`).` });
     } else if (sub === 'status') {
       const m = getVoiceModel();
       const active = m === 'opus-plan';
