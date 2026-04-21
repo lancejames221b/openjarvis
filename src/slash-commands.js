@@ -18,7 +18,12 @@ const _execAsync = promisify(exec);
 
 const __slashDirname = dirname(fileURLToPath(import.meta.url));
 const _ENV_FILE = `${__slashDirname}/../.env`;
-const KNOWN_MODELS = ['claude', 'sonnet', 'opus', 'haiku'];
+// Base + effort-suffixed variants. `claude` omitted (alias to sonnet, redundant).
+const KNOWN_MODELS = [
+  'sonnet', 'sonnet-high', 'sonnet-max',
+  'opus', 'opus-high', 'opus-max', 'opus-plan',
+  'haiku', 'haiku-low',
+];
 
 function _persistModel(alias) {
   try {
@@ -90,13 +95,18 @@ const MODEL_CMD = new SlashCommandBuilder()
       .setDescription('Switch to a model alias')
       .addStringOption(opt =>
         opt.setName('name')
-          .setDescription('Model alias: claude, sonnet, opus, haiku')
+          .setDescription('Model + effort (e.g. opus-high, sonnet-max)')
           .setRequired(true)
           .addChoices(
-            { name: 'claude (sonnet, default)', value: 'claude' },
-            { name: 'sonnet', value: 'sonnet' },
-            { name: 'opus (heavy tasks)', value: 'opus' },
-            { name: 'haiku (fast/light)', value: 'haiku' },
+            { name: 'sonnet (default)', value: 'sonnet' },
+            { name: 'sonnet-high', value: 'sonnet-high' },
+            { name: 'sonnet-max', value: 'sonnet-max' },
+            { name: 'opus', value: 'opus' },
+            { name: 'opus-high', value: 'opus-high' },
+            { name: 'opus-max', value: 'opus-max' },
+            { name: 'opus-plan (deep reasoning)', value: 'opus-plan' },
+            { name: 'haiku (fast)', value: 'haiku' },
+            { name: 'haiku-low (fastest)', value: 'haiku-low' },
           )))
   .addSubcommand(sub => sub.setName('status').setDescription('Show current active model'));
 
