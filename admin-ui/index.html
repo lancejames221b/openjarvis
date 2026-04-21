@@ -1,0 +1,1843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jarvis · Operations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    /* ═══════════════════════════════════════════════════════════════════
+       TOKENS
+       ═══════════════════════════════════════════════════════════════════ */
+    :root {
+      --ink: #0a0807;
+      --ink-deep: #050403;
+      --bone: #ede4d0;
+      --bone-dim: #7c756a;
+      --bone-soft: #9a9185;
+      --panel: #131110;
+      --panel-lift: #1b1815;
+      --panel-edge: #221e1a;
+      --rule: rgba(237, 228, 208, 0.06);
+      --rule-strong: rgba(237, 228, 208, 0.14);
+      --rule-hot: rgba(255, 91, 31, 0.35);
+      --signal: #ff5b1f;
+      --signal-soft: rgba(255, 91, 31, 0.12);
+      --signal-edge: rgba(255, 91, 31, 0.45);
+      --live: #6be581;
+      --live-soft: rgba(107, 229, 129, 0.1);
+      --dead: #c74545;
+      --amber: #f6b33f;
+
+      --display: "Instrument Serif", "Cormorant", serif;
+      --ui: "Geist", "Helvetica Neue", Arial, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
+
+      --col: minmax(0, 1fr);
+      --space: 28px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       RESET + BASE
+       ═══════════════════════════════════════════════════════════════════ */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html,
+    body {
+      background: var(--ink);
+      color: var(--bone);
+      font-family: var(--ui);
+      font-feature-settings: "ss01", "ss02", "cv11";
+      font-weight: 400;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      min-height: 100vh;
+    }
+    body {
+      overflow-x: hidden;
+      background-image: radial-gradient(
+          ellipse at 50% -20%,
+          rgba(255, 91, 31, 0.08),
+          transparent 60%
+        ),
+        radial-gradient(
+          ellipse at 100% 120%,
+          rgba(255, 91, 31, 0.04),
+          transparent 55%
+        );
+    }
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+    button,
+    input,
+    textarea,
+    select {
+      font-family: inherit;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      outline: 0;
+    }
+
+    /* Grain overlay */
+    .grain {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 100;
+      opacity: 0.065;
+      mix-blend-mode: overlay;
+    }
+
+    /* Top/bottom scanline edges */
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--rule-strong);
+      z-index: 60;
+    }
+    body::before {
+      top: 0;
+    }
+    body::after {
+      bottom: 0;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       LAYOUT
+       ═══════════════════════════════════════════════════════════════════ */
+    .page {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 0 48px 96px;
+      position: relative;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       MASTHEAD
+       ═══════════════════════════════════════════════════════════════════ */
+    .masthead {
+      padding-top: 40px;
+      position: relative;
+    }
+    .eyebrow {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0.12em;
+      color: var(--bone-dim);
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .eyebrow-right {
+      color: var(--bone-soft);
+    }
+    .title {
+      font-family: var(--display);
+      font-style: italic;
+      font-weight: 400;
+      font-size: clamp(160px, 20vw, 320px);
+      line-height: 0.85;
+      letter-spacing: -0.03em;
+      color: var(--bone);
+      padding: 42px 0 26px;
+      display: flex;
+      align-items: baseline;
+      gap: 0.06em;
+      position: relative;
+    }
+    .title::after {
+      content: ".";
+      font-family: var(--display);
+      font-style: italic;
+      color: var(--signal);
+      margin-left: -0.04em;
+      align-self: flex-end;
+      line-height: 0.85;
+    }
+    .title-sup {
+      font-family: var(--mono);
+      font-style: normal;
+      font-size: 13px;
+      letter-spacing: 0.2em;
+      color: var(--bone-dim);
+      align-self: flex-start;
+      padding-top: 0.6em;
+      font-weight: 400;
+    }
+
+    .runtime-strip {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 1px;
+      background: var(--rule-strong);
+      border-top: 1px solid var(--rule-strong);
+      border-bottom: 1px solid var(--rule-strong);
+      margin-top: 8px;
+    }
+    .readout {
+      padding: 14px 18px;
+      background: var(--ink);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .readout-label {
+      font-family: var(--mono);
+      font-size: 9.5px;
+      letter-spacing: 0.18em;
+      color: var(--bone-dim);
+      text-transform: uppercase;
+    }
+    .readout-value {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--bone);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .readout-value .tick {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--live);
+      box-shadow: 0 0 8px rgba(107, 229, 129, 0.6);
+    }
+    .readout-value .tick.dead {
+      background: var(--dead);
+      box-shadow: 0 0 8px rgba(199, 69, 69, 0.5);
+    }
+    .readout-value .tick.idle {
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(246, 179, 63, 0.5);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       GRID
+       ═══════════════════════════════════════════════════════════════════ */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, var(--col));
+      gap: var(--space);
+      margin-top: 56px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      padding: 26px 28px 28px;
+      position: relative;
+      opacity: 0;
+      transform: translateY(16px);
+      animation: rise 700ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+    }
+    @keyframes rise {
+      to {
+        opacity: 1;
+        transform: none;
+      }
+    }
+    .panel[data-n="01"] {
+      animation-delay: 80ms;
+      grid-column: span 5;
+    }
+    .panel[data-n="02"] {
+      animation-delay: 140ms;
+      grid-column: span 4;
+    }
+    .panel[data-n="03"] {
+      animation-delay: 200ms;
+      grid-column: span 3;
+    }
+    .panel[data-n="04"] {
+      animation-delay: 260ms;
+      grid-column: span 12;
+    }
+    .panel[data-n="05"] {
+      animation-delay: 320ms;
+      grid-column: span 5;
+    }
+    .panel[data-n="06"] {
+      animation-delay: 380ms;
+      grid-column: span 4;
+    }
+    .panel[data-n="07"] {
+      animation-delay: 440ms;
+      grid-column: span 3;
+    }
+    .panel[data-n="08"] {
+      animation-delay: 500ms;
+      grid-column: span 12;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 22px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .panel-stamp {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.22em;
+      color: var(--bone-dim);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .panel-stamp .num {
+      color: var(--signal);
+    }
+    .panel-title {
+      font-family: var(--display);
+      font-weight: 400;
+      font-style: italic;
+      font-size: 42px;
+      line-height: 1;
+      letter-spacing: -0.01em;
+      margin-top: 6px;
+      color: var(--bone);
+    }
+    .panel-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      color: var(--bone-dim);
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .panel-meta .hot {
+      color: var(--signal);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       COMMON ELEMENTS
+       ═══════════════════════════════════════════════════════════════════ */
+    .kv-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: baseline;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--rule);
+      gap: 16px;
+    }
+    .kv:last-child {
+      border-bottom: 0;
+    }
+    .kv-key {
+      font-family: var(--ui);
+      font-size: 13px;
+      color: var(--bone-soft);
+      letter-spacing: 0.02em;
+    }
+    .kv-value {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--bone);
+      text-align: right;
+    }
+    .kv-value.hot {
+      color: var(--signal);
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      border: 1px solid var(--rule-strong);
+      color: var(--bone-soft);
+      border-radius: 1px;
+    }
+    .chip.hot {
+      color: var(--signal);
+      border-color: var(--signal-edge);
+      background: var(--signal-soft);
+    }
+    .chip.live {
+      color: var(--live);
+      border-color: rgba(107, 229, 129, 0.35);
+      background: var(--live-soft);
+    }
+    .chip.dim {
+      color: var(--bone-dim);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      border: 1px solid var(--rule-strong);
+      color: var(--bone);
+      cursor: pointer;
+      transition: all 180ms ease;
+      border-radius: 1px;
+    }
+    .btn:hover {
+      border-color: var(--signal-edge);
+      color: var(--signal);
+    }
+    .btn.primary {
+      background: var(--signal);
+      color: var(--ink);
+      border-color: var(--signal);
+    }
+    .btn.primary:hover {
+      background: var(--bone);
+      border-color: var(--bone);
+      color: var(--ink);
+    }
+    .btn .arrow {
+      font-family: var(--mono);
+      opacity: 0.6;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       01. IDENTITY // VOICEPRINTS
+       ═══════════════════════════════════════════════════════════════════ */
+    .users-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .user-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      align-items: center;
+      gap: 18px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .user-row:last-child {
+      border-bottom: 0;
+    }
+    .user-row:hover {
+      background: linear-gradient(
+        90deg,
+        var(--signal-soft) 0%,
+        transparent 30%
+      );
+    }
+    .user-waveform {
+      width: 52px;
+      height: 28px;
+      display: flex;
+      align-items: end;
+      gap: 2px;
+    }
+    .user-waveform span {
+      flex: 1;
+      background: var(--bone-dim);
+      min-height: 2px;
+      transition: background 280ms ease;
+    }
+    .user-row:hover .user-waveform span {
+      background: var(--signal);
+    }
+    .user-name {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .user-name-main {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 22px;
+      line-height: 1;
+      color: var(--bone);
+    }
+    .user-name-id {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--bone-dim);
+      letter-spacing: 0.1em;
+    }
+    .user-count {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--bone-soft);
+      text-align: right;
+    }
+    .user-count em {
+      color: var(--bone);
+      font-style: normal;
+      font-weight: 500;
+      font-size: 17px;
+    }
+
+    .metrics-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      background: var(--rule-strong);
+      margin-top: 20px;
+      border: 1px solid var(--rule-strong);
+    }
+    .metric {
+      padding: 16px 18px;
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .metric-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--bone-dim);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+    .metric-value {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 36px;
+      line-height: 1;
+      color: var(--bone);
+    }
+    .metric-value .unit {
+      font-family: var(--mono);
+      font-style: normal;
+      font-size: 11px;
+      color: var(--bone-dim);
+      margin-left: 6px;
+      letter-spacing: 0.12em;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       02. MODELS
+       ═══════════════════════════════════════════════════════════════════ */
+    .model-block {
+      padding: 18px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .model-block:last-of-type {
+      border-bottom: 0;
+    }
+    .model-block-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: var(--bone-dim);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .model-name {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 32px;
+      line-height: 1;
+      color: var(--bone);
+      margin-bottom: 8px;
+    }
+    .model-detail {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--bone-soft);
+      display: flex;
+      gap: 12px;
+    }
+
+    .effort-pills {
+      display: flex;
+      gap: 0;
+      margin-top: 12px;
+      border: 1px solid var(--rule-strong);
+      border-radius: 1px;
+      overflow: hidden;
+    }
+    .effort-pill {
+      flex: 1;
+      padding: 8px 6px;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: var(--bone-dim);
+      cursor: pointer;
+      border-right: 1px solid var(--rule-strong);
+      transition: all 180ms ease;
+      text-transform: uppercase;
+    }
+    .effort-pill:last-child {
+      border-right: 0;
+    }
+    .effort-pill:hover {
+      color: var(--bone);
+    }
+    .effort-pill.active {
+      background: var(--signal);
+      color: var(--ink);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       03. PERSONAS
+       ═══════════════════════════════════════════════════════════════════ */
+    .persona-list {
+      display: flex;
+      flex-direction: column;
+      max-height: 320px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .persona-list::-webkit-scrollbar {
+      width: 3px;
+    }
+    .persona-list::-webkit-scrollbar-thumb {
+      background: var(--rule-strong);
+    }
+    .persona-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--rule);
+      cursor: pointer;
+      transition: padding 180ms ease;
+    }
+    .persona-row .persona-name {
+      font-size: 19px;
+    }
+    .persona-row:hover {
+      padding-left: 10px;
+    }
+    .persona-row.active {
+      color: var(--signal);
+      padding-left: 10px;
+    }
+    .persona-row.active .persona-name {
+      color: var(--signal);
+    }
+    .persona-name {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 22px;
+      color: var(--bone);
+    }
+    .persona-voice {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--bone-dim);
+      letter-spacing: 0.08em;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       04. CLONING STATION
+       ═══════════════════════════════════════════════════════════════════ */
+    .station {
+      display: grid;
+      grid-template-columns: 340px 1fr 300px;
+      gap: 32px;
+      padding-top: 10px;
+    }
+    .station-col-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.22em;
+      color: var(--bone-dim);
+      text-transform: uppercase;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .station-col-title::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--rule);
+    }
+
+    /* Voice list */
+    .voices {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .voice-card {
+      padding: 16px 18px;
+      border: 1px solid var(--rule);
+      background: var(--panel-lift);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 220ms ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .voice-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        var(--signal-soft),
+        transparent 50%
+      );
+      opacity: 0;
+      transition: opacity 240ms ease;
+    }
+    .voice-card:hover {
+      border-color: var(--rule-strong);
+    }
+    .voice-card.active {
+      border-color: var(--signal-edge);
+    }
+    .voice-card.unavailable {
+      opacity: 0.5;
+    }
+    .voice-card.active::before {
+      opacity: 1;
+    }
+    .voice-card > * {
+      position: relative;
+    }
+    .voice-name {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 24px;
+      color: var(--bone);
+    }
+    .voice-card.active .voice-name {
+      color: var(--signal);
+    }
+    .voice-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--bone-dim);
+      letter-spacing: 0.1em;
+      margin-top: 2px;
+    }
+    .voice-play {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--rule-strong);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      transition: all 220ms ease;
+    }
+    .voice-card:hover .voice-play {
+      border-color: var(--signal-edge);
+      color: var(--signal);
+    }
+    .voice-play::before {
+      content: "";
+      border-left: 9px solid currentColor;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      translate: 2px 0;
+    }
+
+    /* Dropzone */
+    .dropzone {
+      border: 1px dashed var(--rule-strong);
+      background: var(--panel-lift);
+      padding: 32px 28px;
+      text-align: center;
+      min-height: 300px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 14px;
+      transition: all 240ms ease;
+      cursor: pointer;
+      position: relative;
+    }
+    .dropzone:hover,
+    .dropzone.drag {
+      border-color: var(--signal-edge);
+      background: var(--signal-soft);
+    }
+    .dropzone-icon {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 80px;
+      line-height: 0.9;
+      color: var(--signal);
+    }
+    .dropzone-title {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 28px;
+      color: var(--bone);
+    }
+    .dropzone-hint {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--bone-dim);
+      letter-spacing: 0.1em;
+    }
+
+    .preview {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .preview textarea {
+      width: 100%;
+      padding: 14px 16px;
+      min-height: 88px;
+      border: 1px solid var(--rule);
+      background: var(--panel-lift);
+      color: var(--bone);
+      font-family: var(--ui);
+      font-size: 14px;
+      line-height: 1.5;
+      resize: vertical;
+      transition: border-color 240ms ease;
+    }
+    .preview textarea:focus {
+      border-color: var(--signal-edge);
+    }
+    .preview-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .preview-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--bone-dim);
+      letter-spacing: 0.14em;
+    }
+
+    /* Tuning sliders */
+    .tuning {
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+    .slider-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .slider-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .slider-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      color: var(--bone-dim);
+      text-transform: uppercase;
+    }
+    .slider-value {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 24px;
+      color: var(--signal);
+      line-height: 1;
+    }
+    .slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 2px;
+      background: var(--rule-strong);
+      cursor: pointer;
+    }
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      background: var(--signal);
+      border: 2px solid var(--ink);
+      box-shadow: 0 0 0 1px var(--signal);
+      cursor: grab;
+    }
+    .slider::-moz-range-thumb {
+      width: 12px;
+      height: 12px;
+      background: var(--signal);
+      border: 2px solid var(--ink);
+      box-shadow: 0 0 0 1px var(--signal);
+      cursor: grab;
+    }
+    .slider-ticks {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--bone-dim);
+      letter-spacing: 0.1em;
+      margin-top: 2px;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       05. ROUTING
+       ═══════════════════════════════════════════════════════════════════ */
+    .route-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .route-row {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .route-row:last-child {
+      border-bottom: 0;
+    }
+    .route-channel {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 22px;
+      color: var(--bone);
+    }
+    .route-channel-id {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--bone-dim);
+      letter-spacing: 0.08em;
+      display: block;
+      margin-top: 2px;
+    }
+    .route-arrow {
+      font-family: var(--mono);
+      color: var(--signal);
+      font-size: 18px;
+    }
+    .route-account {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--bone);
+      text-align: right;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       06. SHORTCUTS
+       ═══════════════════════════════════════════════════════════════════ */
+    .shortcut-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .shortcut-row {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .shortcut-row:last-child {
+      border-bottom: 0;
+    }
+    .shortcut-phrase {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 20px;
+      color: var(--bone);
+    }
+    .shortcut-action {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--bone-dim);
+      margin-top: 3px;
+      letter-spacing: 0.05em;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       07. SERVICES
+       ═══════════════════════════════════════════════════════════════════ */
+    .services {
+      display: flex;
+      flex-direction: column;
+    }
+    .service-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .service-row:last-child {
+      border-bottom: 0;
+    }
+    .service-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--live);
+      box-shadow: 0 0 10px rgba(107, 229, 129, 0.6);
+    }
+    .service-dot.dead {
+      background: var(--dead);
+      box-shadow: 0 0 10px rgba(199, 69, 69, 0.5);
+    }
+    .service-dot.idle {
+      background: var(--amber);
+      box-shadow: 0 0 10px rgba(246, 179, 63, 0.5);
+    }
+    .service-name {
+      font-family: var(--ui);
+      font-size: 13px;
+      color: var(--bone);
+      font-weight: 500;
+    }
+    .service-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--bone-dim);
+      letter-spacing: 0.08em;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       08. ACTIVITY
+       ═══════════════════════════════════════════════════════════════════ */
+    .activity {
+      display: flex;
+      flex-direction: column;
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .activity::-webkit-scrollbar {
+      width: 3px;
+    }
+    .activity::-webkit-scrollbar-thumb {
+      background: var(--rule-strong);
+    }
+    .activity-row {
+      display: grid;
+      grid-template-columns: 80px 100px 1fr;
+      align-items: baseline;
+      gap: 18px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--rule);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .activity-row:last-child {
+      border-bottom: 0;
+    }
+    .activity-time {
+      color: var(--bone-dim);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+    }
+    .activity-tag {
+      color: var(--signal);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .activity-tag.dim {
+      color: var(--bone-dim);
+    }
+    .activity-msg {
+      color: var(--bone);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       FOOTER
+       ═══════════════════════════════════════════════════════════════════ */
+    footer {
+      margin-top: 72px;
+      padding-top: 24px;
+      border-top: 1px solid var(--rule);
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      color: var(--bone-dim);
+      text-transform: uppercase;
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       RESPONSIVE
+       ═══════════════════════════════════════════════════════════════════ */
+    @media (max-width: 1200px) {
+      .panel[data-n="01"],
+      .panel[data-n="05"] {
+        grid-column: span 12;
+      }
+      .panel[data-n="02"],
+      .panel[data-n="06"] {
+        grid-column: span 8;
+      }
+      .panel[data-n="03"],
+      .panel[data-n="07"] {
+        grid-column: span 4;
+      }
+      .station {
+        grid-template-columns: 1fr 1fr;
+      }
+      .station-col-tuning {
+        grid-column: span 2;
+      }
+    }
+    @media (max-width: 820px) {
+      .page {
+        padding: 0 20px 48px;
+      }
+      .title {
+        font-size: 110px;
+      }
+      .runtime-strip {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .panel[data-n] {
+        grid-column: span 12 !important;
+      }
+      .station {
+        grid-template-columns: 1fr;
+      }
+      .metrics-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Subtle hover glow on panels */
+    .panel:hover {
+      border-color: var(--rule-strong);
+    }
+  </style>
+</head>
+<body>
+  <!-- Grain overlay -->
+  <svg class="grain" xmlns="http://www.w3.org/2000/svg">
+    <filter id="n">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" />
+      <feColorMatrix values="0 0 0 0 1  0 0 0 0 0.95  0 0 0 0 0.85  0 0 0 0.6 0" />
+    </filter>
+    <rect width="100%" height="100%" filter="url(#n)" />
+  </svg>
+
+  <div class="page">
+    <!-- ═══════════════════════════════════════════════════════════════
+         MASTHEAD
+         ═══════════════════════════════════════════════════════════════ -->
+    <header class="masthead">
+      <div class="eyebrow">
+        <span class="eyebrow-left">// OPERATIONS · VOL. I</span>
+        <span class="eyebrow-right" id="now-stamp">EST. 2026 — UNIT 221B</span>
+      </div>
+      <h1 class="title">
+        <span>Jarvis</span>
+        <span class="title-sup">v2.6</span>
+      </h1>
+      <div class="runtime-strip" id="runtime">
+        <div class="readout">
+          <span class="readout-label">System</span>
+          <span class="readout-value"><span class="tick"></span>Online</span>
+        </div>
+        <div class="readout">
+          <span class="readout-label">Enrolled</span>
+          <span class="readout-value" id="r-enrolled">1 user</span>
+        </div>
+        <div class="readout">
+          <span class="readout-label">Voice Model</span>
+          <span class="readout-value" id="r-voice">sonnet</span>
+        </div>
+        <div class="readout">
+          <span class="readout-label">Text Model</span>
+          <span class="readout-value" id="r-text">claude-high</span>
+        </div>
+        <div class="readout">
+          <span class="readout-label">Persona</span>
+          <span class="readout-value" id="r-persona">jarvis</span>
+        </div>
+        <div class="readout">
+          <span class="readout-label">Clock</span>
+          <span class="readout-value" id="r-clock">—</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="grid">
+      <!-- ═══════════════════════════════════════════════════════════
+           01. IDENTITY // VOICEPRINTS
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="01">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 01</span>
+              <span>IDENTITY · VOICEPRINTS</span>
+            </div>
+            <div class="panel-title">Who speaks.</div>
+          </div>
+          <div class="panel-meta">
+            <span class="hot" id="thr-stamp">THRESHOLD 0.45</span>
+            <span id="refs-stamp">665 REFS TOTAL</span>
+          </div>
+        </div>
+        <div class="users-list" id="users-list"></div>
+        <div class="metrics-row">
+          <div class="metric">
+            <span class="metric-label">Enrolled</span>
+            <span class="metric-value" id="m-enrolled">1<span class="unit">user</span></span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">References</span>
+            <span class="metric-value" id="m-refs">665<span class="unit">emb</span></span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Threshold</span>
+            <span class="metric-value" id="m-thr">0.45<span class="unit">cos</span></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           02. MODELS
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="02">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 02</span>
+              <span>MODELS</span>
+            </div>
+            <div class="panel-title">Brain.</div>
+          </div>
+          <div class="panel-meta"><span>DUAL PATH</span></div>
+        </div>
+
+        <div class="model-block">
+          <div class="model-block-label">Voice Path · Fast</div>
+          <div class="model-name" id="voice-model">claude-sonnet-4-6</div>
+          <div class="model-detail">
+            <span>no effort</span>
+            <span>·</span>
+            <span>streaming</span>
+          </div>
+        </div>
+
+        <div class="model-block">
+          <div class="model-block-label">Text Path · Deep</div>
+          <div class="model-name" id="text-model">claude-sonnet-4-6</div>
+          <div class="effort-pills" id="effort-pills">
+            <div class="effort-pill" data-eff="low">Low</div>
+            <div class="effort-pill" data-eff="medium">Med</div>
+            <div class="effort-pill active" data-eff="high">High</div>
+            <div class="effort-pill" data-eff="xhigh">X-High</div>
+            <div class="effort-pill" data-eff="max">Max</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           03. PERSONAS
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="03">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 03</span>
+              <span>PERSONAS</span>
+            </div>
+            <div class="panel-title">Mask.</div>
+          </div>
+          <div class="panel-meta"><span id="persona-count">10</span></div>
+        </div>
+        <div class="persona-list" id="persona-list"></div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           04. CLONING STATION — FULL WIDTH
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="04">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 04</span>
+              <span>CHATTERBOX CLONING STATION</span>
+            </div>
+            <div class="panel-title">The voice lab.</div>
+          </div>
+          <div class="panel-meta">
+            <span>PORT :3340</span>
+            <span class="hot" id="cb-stamp">READY</span>
+          </div>
+        </div>
+
+        <div class="station">
+          <!-- LEFT: Voice library -->
+          <div class="station-col station-col-voices">
+            <div class="station-col-title">Library</div>
+            <div class="voices" id="voices"></div>
+          </div>
+
+          <!-- CENTER: Record / Upload / Preview -->
+          <div class="station-col station-col-studio">
+            <div class="station-col-title">Studio</div>
+            <label class="dropzone" id="dropzone" for="ref-upload">
+              <input type="file" id="ref-upload" accept="audio/wav,audio/mpeg,audio/flac" hidden />
+              <span class="dropzone-icon">&#8617;</span>
+              <span class="dropzone-title">Drop reference audio</span>
+              <span class="dropzone-hint">10–15s clean speech · wav / mp3 / flac</span>
+            </label>
+
+            <div class="preview">
+              <textarea id="preview-text" placeholder="Type a line to hear the selected voice speak it back…">Good evening. The household is calm. I am standing by.</textarea>
+              <div class="preview-actions">
+                <span class="preview-meta" id="preview-meta">VOICE · jarvis · EXAG 0.35</span>
+                <button class="btn primary" id="preview-btn">
+                  Synthesize
+                  <span class="arrow">↗</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT: Tuning -->
+          <div class="station-col station-col-tuning">
+            <div class="station-col-title">Tuning</div>
+            <div class="tuning">
+              <div class="slider-block">
+                <div class="slider-head">
+                  <span class="slider-label">Exaggeration</span>
+                  <span class="slider-value" id="v-exag">0.35</span>
+                </div>
+                <input class="slider" type="range" id="s-exag" min="0" max="1" step="0.05" value="0.35" />
+                <div class="slider-ticks"><span>subtle</span><span>wild</span></div>
+              </div>
+              <div class="slider-block">
+                <div class="slider-head">
+                  <span class="slider-label">CFG Weight</span>
+                  <span class="slider-value" id="v-cfg">1.50</span>
+                </div>
+                <input class="slider" type="range" id="s-cfg" min="0" max="3" step="0.05" value="1.5" />
+                <div class="slider-ticks"><span>loose</span><span>locked</span></div>
+              </div>
+              <div class="slider-block">
+                <div class="slider-head">
+                  <span class="slider-label">Temperature</span>
+                  <span class="slider-value" id="v-temp">0.50</span>
+                </div>
+                <input class="slider" type="range" id="s-temp" min="0" max="1.5" step="0.05" value="0.5" />
+                <div class="slider-ticks"><span>precise</span><span>creative</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           05. ROUTING
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="05">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 05</span>
+              <span>CHANNEL ROUTING</span>
+            </div>
+            <div class="panel-title">Wires.</div>
+          </div>
+          <div class="panel-meta"><span id="route-count">0 MAPS</span></div>
+        </div>
+        <div class="route-list" id="routes"></div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           06. SHORTCUTS
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="06">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 06</span>
+              <span>VOICE SHORTCUTS</span>
+            </div>
+            <div class="panel-title">Muscle.</div>
+          </div>
+          <div class="panel-meta"><span id="shortcut-count">0</span></div>
+        </div>
+        <div class="shortcut-list" id="shortcuts"></div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           07. SERVICES
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="07">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 07</span>
+              <span>SERVICES</span>
+            </div>
+            <div class="panel-title">Vitals.</div>
+          </div>
+          <div class="panel-meta"><span id="svc-ok">—</span></div>
+        </div>
+        <div class="services" id="services"></div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           08. ACTIVITY
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="panel" data-n="08">
+        <div class="panel-head">
+          <div>
+            <div class="panel-stamp">
+              <span class="num">// 08</span>
+              <span>ACTIVITY FEED</span>
+            </div>
+            <div class="panel-title">The log.</div>
+          </div>
+          <div class="panel-meta">
+            <span class="hot">LIVE</span>
+          </div>
+        </div>
+        <div class="activity" id="activity"></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>JARVIS · HOUSEHOLD OPS</span>
+      <span>UNIT 221B, INC.</span>
+      <span id="foot-stamp">—</span>
+    </footer>
+  </div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════
+    // MOCK DATA (wire to real endpoints via fetch() later)
+    // ═══════════════════════════════════════════════════════════════════
+    const API = window.JARVIS_API || "/api";
+    const fallback = {
+      speaker: {
+        enrolled_users: ["OWNER_USER_ID"],
+        total_reference_embeddings: 665,
+        threshold: 0.45,
+        status: "healthy",
+      },
+      users: [
+        { id: "OWNER_USER_ID", name: "Lance", refs: 665, primary: true },
+      ],
+      models: {
+        voice: "claude-sonnet-4-6",
+        text: "claude-sonnet-4-6",
+        effort: "high",
+        persona: "jarvis",
+      },
+      personas: [
+        { name: "Jarvis", voice: "jarvis", wake: ["jarvis", "hey jarvis"], active: true },
+        { name: "Alfred", voice: "en-GB-RyanNeural", wake: ["alfred"] },
+        { name: "HAL", voice: "en-US-DavisNeural", wake: ["hal", "hey hal"] },
+        { name: "Joshua", voice: "en-US-GuyNeural", wake: ["joshua"] },
+        { name: "Liam", voice: "en-IE-ConnorNeural", wake: ["liam"] },
+        { name: "Neil", voice: "en-US-ChristopherNeural", wake: ["neil"] },
+        { name: "Sherlock (BBC)", voice: "en-GB-ThomasNeural", wake: ["sherlock"] },
+        { name: "Sherlock (Film)", voice: "en-GB-RyanNeural", wake: ["sherlock holmes"] },
+        { name: "Snoop", voice: "snoop", wake: ["snoop"] },
+        { name: "Walken", voice: "en-US-GuyNeural", wake: ["walken"] },
+      ],
+      voices: [
+        { name: "jarvis", source: "Paul Bettany / YT ref", refs: 3, active: true },
+        { name: "owner", source: "Lance · 11min sample", refs: 1 },
+        { name: "snoop", source: "Doggystyle era", refs: 1 },
+        { name: "c3po", source: "Anthony Daniels", refs: 1 },
+      ],
+      routes: [
+        { channel: "#jarvis-voice", id: "1482...567229", account: "default" },
+        { channel: "#hud", id: "1482...567229", account: "default" },
+        { channel: "#dev-lance", id: "1469...305581", account: "owner" },
+        { channel: "#eng", id: "1471...112094", account: "unit221b" },
+      ],
+      shortcuts: [
+        { phrase: "deploy", action: "gh workflow run deploy.yml" },
+        { phrase: "news", action: "fetch /news/latest and summarize" },
+        { phrase: "check infra", action: "run /status skill on critical hosts" },
+        { phrase: "learn mode", action: "enrollmentState.start(userId, learn=true)" },
+        { phrase: "focus ewitness", action: "switch focus → eWitness project" },
+        { phrase: "resume openjarvis", action: "pick up most recent session in cwd" },
+      ],
+      services: [
+        { name: "speaker-verify", port: 8767, state: "live", meta: "cosine 0.45 · 665 refs" },
+        { name: "whisper-stt", port: 8765, state: "live", meta: "tiny · avg 1.2s" },
+        { name: "piper-tts", port: 59125, state: "live", meta: "en_US-lessac-high" },
+        { name: "chatterbox-tts", port: 3340, state: "live", meta: "cuda · 4 voices" },
+        { name: "jarvis-gateway", port: 31338, state: "live", meta: "3 sessions" },
+        { name: "jarvis-voice (bot)", port: "—", state: "live", meta: "owner in voice" },
+      ],
+      activity: [
+        { t: "12:04:32", tag: "VERIFY", msg: "owner matched · tier=high · conf=0.82" },
+        { t: "12:04:21", tag: "WAKE", msg: "“hey jarvis” → ACTIVE" },
+        { t: "12:03:58", tag: "STT", msg: "“what’s the weather like” · 820ms" },
+        { t: "12:03:59", tag: "BRAIN", msg: "route=haiku-intent · weather" },
+        { t: "12:04:02", tag: "TTS", msg: "piper · 2.3s · 143 chars" },
+        { t: "12:02:11", tag: "GATE", msg: "auth carryover (medium) · session=OK" },
+        { t: "12:01:05", tag: "LEARN", msg: "+4 refs · total=665" },
+        { t: "11:58:22", tag: "MODEL", msg: "text → claude-high" },
+        { t: "11:55:01", tag: "SVC", msg: "speaker-verify restart · 1.8s cold" },
+        { t: "11:41:19", tag: "PERSONA", msg: "alfred → jarvis" },
+      ],
+    };
+
+    async function safeJSON(url) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function loadAll() {
+      const [speaker, data] = await Promise.all([
+        safeJSON(`${API}/speaker/health`),
+        safeJSON(`${API}/state`),
+      ]);
+      const pick = (arr, fb) => (Array.isArray(arr) && arr.length ? arr : fb);
+      return {
+        speaker: (speaker && speaker.total_reference_embeddings) ? speaker : fallback.speaker,
+        users: pick(data?.users, fallback.users),
+        models: data?.models || fallback.models,
+        personas: pick(data?.personas, fallback.personas),
+        voices: pick(data?.voices, fallback.voices),
+        routes: pick(data?.routes, fallback.routes),
+        shortcuts: pick(data?.shortcuts, fallback.shortcuts),
+        services: pick(data?.services, fallback.services),
+        activity: pick(data?.activity, fallback.activity),
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RENDERERS
+    // ═══════════════════════════════════════════════════════════════════
+    function waveform(seed = 1) {
+      const bars = 14;
+      let out = "";
+      for (let i = 0; i < bars; i++) {
+        const h = 8 + Math.abs(Math.sin((i + seed) * 1.3)) * 20;
+        out += `<span style="height:${h}px"></span>`;
+      }
+      return out;
+    }
+
+    function renderUsers(users) {
+      const el = document.getElementById("users-list");
+      el.innerHTML = users
+        .map(
+          (u, i) => `
+          <div class="user-row">
+            <div class="user-waveform">${waveform(i + 1)}</div>
+            <div class="user-name">
+              <span class="user-name-main">${u.name}</span>
+              <span class="user-name-id">${u.id.slice(0, 8)}…${u.id.slice(-4)}</span>
+            </div>
+            <div class="user-count"><em>${u.refs}</em> refs</div>
+            ${u.primary ? `<span class="chip hot">Owner</span>` : `<span class="chip">Family</span>`}
+          </div>`
+        )
+        .join("");
+    }
+
+    function renderMetrics(s, users) {
+      document.getElementById("m-enrolled").innerHTML =
+        `${users.length}<span class="unit">user${users.length !== 1 ? "s" : ""}</span>`;
+      document.getElementById("m-refs").innerHTML =
+        `${s.total_reference_embeddings}<span class="unit">emb</span>`;
+      document.getElementById("m-thr").innerHTML =
+        `${s.threshold}<span class="unit">cos</span>`;
+      document.getElementById("thr-stamp").textContent =
+        `THRESHOLD ${s.threshold}`;
+      document.getElementById("refs-stamp").textContent =
+        `${s.total_reference_embeddings} REFS TOTAL`;
+      document.getElementById("r-enrolled").textContent =
+        `${users.length} user${users.length !== 1 ? "s" : ""}`;
+    }
+
+    function renderModels(m) {
+      document.getElementById("voice-model").textContent = m.voice;
+      document.getElementById("text-model").textContent = m.text;
+      document.getElementById("r-voice").textContent = m.voice.replace(
+        "claude-",
+        ""
+      );
+      document.getElementById("r-text").textContent = m.text.replace(
+        "claude-",
+        ""
+      );
+      document.querySelectorAll(".effort-pill").forEach((p) => {
+        p.classList.toggle("active", p.dataset.eff === m.effort);
+      });
+    }
+
+    function renderPersonas(list) {
+      const el = document.getElementById("persona-list");
+      el.innerHTML = list
+        .map(
+          (p) => `
+          <div class="persona-row ${p.active ? "active" : ""}" data-name="${p.name}">
+            <span class="persona-name">${p.name}</span>
+            <span class="persona-voice">${(p.wake || [])[0] || p.voice}</span>
+          </div>`
+        )
+        .join("");
+      document.getElementById("persona-count").textContent = `${list.length} LOADED`;
+      const active = list.find((p) => p.active);
+      if (active) document.getElementById("r-persona").textContent = active.name.toLowerCase();
+      el.querySelectorAll(".persona-row").forEach((row) => {
+        row.addEventListener("click", () => {
+          el.querySelectorAll(".persona-row").forEach((r) => r.classList.remove("active"));
+          row.classList.add("active");
+          document.getElementById("r-persona").textContent = row.dataset.name.toLowerCase();
+        });
+      });
+    }
+
+    function renderVoices(list) {
+      const el = document.getElementById("voices");
+      el.innerHTML = list
+        .map(
+          (v) => `
+          <div class="voice-card ${v.active ? "active" : ""} ${v.available === false ? "unavailable" : ""}" data-voice="${v.name}">
+            <div>
+              <div class="voice-name">${v.name}</div>
+              <div class="voice-meta">${v.source}${v.available === false ? " · <span style='color:var(--dead)'>missing ref</span>" : ""}</div>
+            </div>
+            <div class="voice-play" aria-label="preview ${v.name}"></div>
+          </div>`
+        )
+        .join("");
+      const cards = el.querySelectorAll(".voice-card");
+      cards.forEach((c) => {
+        c.addEventListener("click", () => {
+          cards.forEach((x) => x.classList.remove("active"));
+          c.classList.add("active");
+          updatePreviewMeta(c.dataset.voice);
+        });
+      });
+    }
+
+    function renderRoutes(list) {
+      const el = document.getElementById("routes");
+      el.innerHTML = list
+        .map(
+          (r) => `
+          <div class="route-row">
+            <div>
+              <span class="route-channel">${r.channel}</span>
+              <span class="route-channel-id">${r.id}</span>
+            </div>
+            <span class="route-arrow">→</span>
+            <span class="route-account">${r.account}</span>
+          </div>`
+        )
+        .join("");
+      document.getElementById("route-count").textContent = `${list.length} MAPS`;
+    }
+
+    function renderShortcuts(list) {
+      const el = document.getElementById("shortcuts");
+      el.innerHTML = list
+        .map(
+          (s) => `
+          <div class="shortcut-row">
+            <div class="shortcut-phrase">“${s.phrase}”</div>
+            <div class="shortcut-action">${s.action}</div>
+          </div>`
+        )
+        .join("");
+      document.getElementById("shortcut-count").textContent = `${list.length} WIRED`;
+    }
+
+    function renderServices(list) {
+      const el = document.getElementById("services");
+      el.innerHTML = list
+        .map(
+          (s) => `
+          <div class="service-row">
+            <span class="service-dot ${s.state === "live" ? "" : s.state}"></span>
+            <div>
+              <div class="service-name">${s.name}</div>
+              <div class="service-meta">${s.meta}</div>
+            </div>
+            <span class="service-meta">:${s.port}</span>
+          </div>`
+        )
+        .join("");
+      const live = list.filter((s) => s.state === "live").length;
+      document.getElementById("svc-ok").textContent = `${live}/${list.length} LIVE`;
+    }
+
+    function renderActivity(list) {
+      const el = document.getElementById("activity");
+      el.innerHTML = list
+        .map(
+          (a) => `
+          <div class="activity-row">
+            <span class="activity-time">${a.t}</span>
+            <span class="activity-tag">${a.tag}</span>
+            <span class="activity-msg">${a.msg}</span>
+          </div>`
+        )
+        .join("");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CLONING STATION INTERACTIONS
+    // ═══════════════════════════════════════════════════════════════════
+    function updatePreviewMeta(voice) {
+      const exag = document.getElementById("v-exag").textContent;
+      document.getElementById(
+        "preview-meta"
+      ).textContent = `VOICE · ${voice} · EXAG ${exag}`;
+    }
+
+    function wireSliders() {
+      const pairs = [
+        ["s-exag", "v-exag"],
+        ["s-cfg", "v-cfg"],
+        ["s-temp", "v-temp"],
+      ];
+      pairs.forEach(([s, v]) => {
+        const slider = document.getElementById(s);
+        const display = document.getElementById(v);
+        slider.addEventListener("input", () => {
+          display.textContent = parseFloat(slider.value).toFixed(2);
+          const activeVoice = document.querySelector(".voice-card.active")?.dataset.voice || "jarvis";
+          updatePreviewMeta(activeVoice);
+        });
+      });
+    }
+
+    function wireDropzone() {
+      const dz = document.getElementById("dropzone");
+      ["dragenter", "dragover"].forEach((ev) =>
+        dz.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dz.classList.add("drag");
+        })
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dz.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dz.classList.remove("drag");
+        })
+      );
+      dz.addEventListener("drop", (e) => {
+        const f = e.dataTransfer.files[0];
+        if (f) handleRef(f);
+      });
+      document
+        .getElementById("ref-upload")
+        .addEventListener("change", (e) => {
+          if (e.target.files[0]) handleRef(e.target.files[0]);
+        });
+    }
+
+    async function handleRef(file) {
+      const dz = document.getElementById("dropzone");
+      dz.querySelector(".dropzone-title").textContent = file.name;
+      dz.querySelector(".dropzone-hint").textContent = `${(
+        file.size / 1024
+      ).toFixed(0)} KB · ready for enrollment`;
+      // Future: POST to /api/chatterbox/enroll with voice name + file
+    }
+
+    async function wirePreview() {
+      document.getElementById("preview-btn").addEventListener("click", async () => {
+        const btn = document.getElementById("preview-btn");
+        const original = btn.innerHTML;
+        btn.innerHTML = `Synthesizing… <span class="arrow">○</span>`;
+        btn.disabled = true;
+        const text = document.getElementById("preview-text").value;
+        const voice =
+          document.querySelector(".voice-card.active")?.dataset.voice || "jarvis";
+        try {
+          const r = await fetch(`${API}/chatterbox/tts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              voice,
+              exaggeration: parseFloat(document.getElementById("s-exag").value),
+              cfg_weight: parseFloat(document.getElementById("s-cfg").value),
+              temperature: parseFloat(document.getElementById("s-temp").value),
+            }),
+          });
+          if (r.ok) {
+            const blob = await r.blob();
+            new Audio(URL.createObjectURL(blob)).play();
+          }
+        } catch (e) {}
+        btn.innerHTML = original;
+        btn.disabled = false;
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RUNTIME
+    // ═══════════════════════════════════════════════════════════════════
+    function tickClock() {
+      const el = document.getElementById("r-clock");
+      const foot = document.getElementById("foot-stamp");
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      el.textContent = `${hh}:${mm}:${ss}`;
+      foot.textContent = `${now.toISOString().slice(0, 10)} · ${hh}:${mm}`;
+    }
+    setInterval(tickClock, 1000);
+    tickClock();
+
+    (async () => {
+      const d = await loadAll();
+      renderUsers(d.users);
+      renderMetrics(d.speaker, d.users);
+      renderModels(d.models);
+      renderPersonas(d.personas);
+      renderVoices(d.voices);
+      renderRoutes(d.routes);
+      renderShortcuts(d.shortcuts);
+      renderServices(d.services);
+      renderActivity(d.activity);
+
+      wireSliders();
+      wireDropzone();
+      wirePreview();
+    })();
+  </script>
+</body>
+</html>
