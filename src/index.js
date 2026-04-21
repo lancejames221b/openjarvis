@@ -2357,12 +2357,20 @@ async function handleVoiceTranscript(message) {
             const discordToken = process.env.DISCORD_TOKEN || '';
             const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
 
-            const vmThread = await echoReply.startThread({
-              name: text.substring(0, 80) || 'voice response',
-              autoArchiveDuration: 60,
-            });
+            // Discord disallows threads-within-threads. If already in a thread (follow-up
+            // voice message), stream directly into the existing thread instead.
+            let verboseChannelId;
+            if (_vmIsThread) {
+              verboseChannelId = message.channelId;
+            } else {
+              const vmThread = await echoReply.startThread({
+                name: text.substring(0, 80) || 'voice response',
+                autoArchiveDuration: 60,
+              });
+              verboseChannelId = vmThread.id;
+            }
 
-            const ls = await createLiveStream(vmThread.id, discordToken, { model });
+            const ls = await createLiveStream(verboseChannelId, discordToken, { model });
             let fullText = '';
             try {
               await generateTextResponseStreaming(prompt, (chunk) => {
