@@ -234,9 +234,16 @@ function spawnClaudeStream(prompt, model, chatId, channelKey, effort) {
   const args = [...BASE_ARGS, "--model", model];
   if (effort) args.push("--effort", effort);
   if (chatId) args.push("--resume", chatId);
-  // Strip proxy/token overrides so claude uses its own stored OAuth credentials
-  // from ~/.claude/ rather than any stale env vars set by the parent service.
-  const { ANTHROPIC_BASE_URL: _a, CLAUDE_CODE_OAUTH_TOKEN: _b, ...cleanEnv } = process.env;
+  // Strip stale token overrides; keep ANTHROPIC_BASE_URL only if ClaudeFlare is configured.
+  const { CLAUDE_CODE_OAUTH_TOKEN: _b, ...cleanEnv } = process.env;
+  // Route through ClaudeFlare proxy when JARVIS_CLAUDEFLARE_URL is set.
+  // Unset it otherwise so claude uses its own stored OAuth credentials.
+  if (process.env.JARVIS_CLAUDEFLARE_URL) {
+    cleanEnv.ANTHROPIC_BASE_URL = process.env.JARVIS_CLAUDEFLARE_URL;
+    if (process.env.JARVIS_CLAUDEFLARE_TOKEN) cleanEnv.ANTHROPIC_AUTH_TOKEN = process.env.JARVIS_CLAUDEFLARE_TOKEN;
+  } else {
+    delete cleanEnv.ANTHROPIC_BASE_URL;
+  }
   const profile = resolveProfile(channelKey);
   if (profile?.configDir) cleanEnv.CLAUDE_CONFIG_DIR = profile.configDir;
   log("claude_spawn", { model, chatId: chatId || null, channelKey, profile: profile?.label || "default", configDir: profile?.configDir || null });
