@@ -2065,14 +2065,14 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       const discordToken = process.env.DISCORD_TOKEN || '';
       const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
 
-      let threadId;
-      if (_isThread) {
-        threadId = message.channelId;
-      } else {
-        const _existingChatThread = _verboseThreads.get(_parentChannelId);
-        if (_existingChatThread) {
-          threadId = _existingChatThread;
-          logger.info(`[@mention] reusing verbose thread ${threadId}`);
+      // Key by actual channel/thread where the message came from.
+      // In a thread: reuse that thread itself (Discord disallows nested threads).
+      // In a parent channel: reuse or create a dedicated verbose sub-thread.
+      const _verboseKey = message.channelId;
+      let threadId = _verboseThreads.get(_verboseKey);
+      if (!threadId) {
+        if (_isThread) {
+          threadId = message.channelId; // stream directly into the existing thread
         } else {
           const thread = await message.startThread({
             name: content.substring(0, 80) || 'response',
@@ -2080,7 +2080,10 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
           });
           threadId = thread.id;
         }
-        _verboseThreads.set(_parentChannelId, threadId);
+        _verboseThreads.set(_verboseKey, threadId);
+        logger.info(`[@mention] created verbose thread ${threadId} for key ${_verboseKey}`);
+      } else {
+        logger.info(`[@mention] reusing verbose thread ${threadId}`);
       }
 
       const ls = await createLiveStream(threadId, discordToken, { model });
@@ -2373,15 +2376,11 @@ async function handleVoiceTranscript(message) {
             // rather than spawning a new one for every voice question.
             // Falls back to creating a new thread if no active one exists,
             // or if already inside a thread (Discord disallows nested threads).
-            let verboseChannelId;
-            if (_vmIsThread) {
-              // Already in a thread — stream here directly
-              verboseChannelId = message.channelId;
-            } else {
-              const _existingThread = _verboseThreads.get(_vmParentId);
-              if (_existingThread) {
-                verboseChannelId = _existingThread;
-                logger.info(`[voice-verbose] reusing thread ${verboseChannelId}`);
+            const _vmVerboseKey = message.channelId;
+            let verboseChannelId = _verboseThreads.get(_vmVerboseKey);
+            if (!verboseChannelId) {
+              if (_vmIsThread) {
+                verboseChannelId = message.channelId;
               } else {
                 const vmThread = await echoReply.startThread({
                   name: text.substring(0, 80) || 'voice response',
@@ -2389,7 +2388,10 @@ async function handleVoiceTranscript(message) {
                 });
                 verboseChannelId = vmThread.id;
               }
-              _verboseThreads.set(_vmParentId, verboseChannelId);
+              _verboseThreads.set(_vmVerboseKey, verboseChannelId);
+              logger.info(`[voice-verbose] created verbose thread ${verboseChannelId}`);
+            } else {
+              logger.info(`[voice-verbose] reusing thread ${verboseChannelId}`);
             }
 
             const ls = await createLiveStream(verboseChannelId, discordToken, { model });
