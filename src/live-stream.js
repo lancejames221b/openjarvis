@@ -21,6 +21,39 @@ const TICK_MS       = 2_000;
 const MAX_BODY_LEN  = 1_700;  // leave headroom for header
 const THINK_DOTS    = ['', '.', '..', '...'];
 
+// Map gateway model aliases → human-readable display labels.
+// Add new models here when they ship; unknown aliases fall through as-is.
+const MODEL_DISPLAY = {
+  // bare aliases
+  'claude':        'Sonnet 4.6',
+  'sonnet':        'Sonnet 4.6',
+  'opus':          'Opus 4.7',
+  'haiku':         'Haiku 4.5',
+  // effort-suffixed
+  'claude-low':    'Sonnet 4.6 · low',
+  'claude-medium': 'Sonnet 4.6 · medium',
+  'claude-high':   'Sonnet 4.6 · high',
+  'claude-max':    'Sonnet 4.6 · max',
+  'sonnet-low':    'Sonnet 4.6 · low',
+  'sonnet-medium': 'Sonnet 4.6 · medium',
+  'sonnet-high':   'Sonnet 4.6 · high',
+  'sonnet-max':    'Sonnet 4.6 · max',
+  'opus-low':      'Opus 4.7 · low',
+  'opus-medium':   'Opus 4.7 · medium',
+  'opus-high':     'Opus 4.7 · high',
+  'opus-max':      'Opus 4.7 · max',
+  'opus-plan':     'Opus 4.7 · plan',
+  'haiku-low':     'Haiku 4.5 · low',
+  // raw model IDs (gateway may pass these through)
+  'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-opus-4-7':   'Opus 4.7',
+  'claude-haiku-4-5-20251001': 'Haiku 4.5',
+};
+function _displayModel(alias) {
+  if (!alias) return 'Sonnet 4.6';
+  return MODEL_DISPLAY[alias] ?? alias;
+}
+
 /**
  * @param {string} channelId    Discord channel or thread ID to post into
  * @param {string} botToken     Discord bot token
@@ -42,7 +75,7 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     });
 
   const startedAt = Date.now();
-  const model = opts.model || 'claude';
+  const model = _displayModel(opts.model);
   let state = 'thinking';   // thinking → streaming → done | empty | error
   let errorMsg = null;
   let emptyReason = null;
