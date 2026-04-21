@@ -9,6 +9,7 @@
 
 import { createLiveStream } from '../live-stream.js';
 import { verboseSessions } from '../verbose-sessions.js';
+import { abortAllVoiceTasks } from '../voice-tasks.js';
 import logger from '../logger.js';
 
 const GATEWAY_URL      = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
@@ -161,6 +162,13 @@ export async function handleStopCommand(interaction) {
     verboseSession.ls.stop();
     verboseSessions.delete(channelId);
     await interaction.reply({ content: 'Response stopped.', ephemeral: false });
+    return;
+  }
+
+  // Fall back to aborting voice tasks (microphone-triggered tasks in index.js)
+  const aborted = abortAllVoiceTasks();
+  if (aborted > 0) {
+    await interaction.reply({ content: `Stopped ${aborted} active voice task${aborted > 1 ? 's' : ''}.`, ephemeral: false });
     return;
   }
 

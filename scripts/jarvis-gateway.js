@@ -394,6 +394,7 @@ async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, ef
     let resolvedSessionId = chatId;
     let clientAborted = false;
     let lastTextLen = 0;  // tracks how many chars we've already forwarded as deltas
+    const _seenToolIds = new Set();  // dedupe tool_use progress lines per request
 
     // Client-disconnect handler — kill the cursor-agent child when the HTTP
     // client aborts the stream. Without this, aborted requests orphan the
@@ -435,10 +436,32 @@ async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, ef
       if (ev.session_id) resolvedSessionId = ev.session_id;
       // claude CLI accumulates text across assistant events; emit only the new chars each time
       if (ev.type === "assistant") {
-        const text = ev.message?.content?.[0]?.text ?? "";
+        const blocks = ev.message?.content ?? [];
+        // Emit text deltas
+        const textBlock = blocks.find(b => b.type === "text");
+        const text = textBlock?.text ?? "";
         if (text.length > lastTextLen) {
           sendDelta(text.slice(lastTextLen));
           lastTextLen = text.length;
+        }
+        // Emit synthetic progress lines for tool_use blocks (tool calls in progress)
+        for (const block of blocks) {
+          if (block.type === "tool_use" && block.name) {
+            const toolKey = `tool:${block.id ?? block.name}`;
+            if (!_seenToolIds.has(toolKey)) {
+              _seenToolIds.add(toolKey);
+              sendDelta(`\n🔧 *${block.name}…*\n`);
+            }
+          }
+        }
+      }
+      // user-type events carry tool_result blocks (tool calls completed)
+      if (ev.type === "user") {
+        const blocks = ev.message?.content ?? [];
+        for (const block of blocks) {
+          if (block.type === "tool_result") {
+            sendDelta(`✓\n`);
+          }
         }
       }
       if (ev.type === "result" && ev.is_error) reject(new Error(ev.result || "claude stream error"));

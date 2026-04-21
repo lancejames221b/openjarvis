@@ -49,6 +49,7 @@ import { handleSessionMessage, isSessionChannel } from './slash/session.js';
 import { handleSessionSetup } from './session-setup.js';
 import { canAccessChannel, isOwner as isChannelOwner, OWNER_USER_ID } from './channel-access.js';
 import { setMcpAuthNotify } from './mcp-access.js';
+import { voiceTasks } from './voice-tasks.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
 import { touchFocus } from './focus-state.js';
@@ -374,6 +375,7 @@ setInterval(() => {
       for (const [id] of toClear) {
         markFailed(id, 'backlog-cleared');
         activeTasks.delete(id);
+        voiceTasks.delete(id);
         _spokeLostTrackFor.delete(id);
         _staleInlineTasks.delete(id);
       }
@@ -593,6 +595,7 @@ function flushPendingUtterance() {
   const taskId = ++taskIdCounter;
   const controller = new AbortController();
   activeTasks.set(taskId, { controller, transcript: merged, startTime: Date.now(), userId, autoSleepAfterTask });
+  voiceTasks.set(taskId, { controller, transcript: merged, startTime: Date.now(), userId });
 
   // ── Task Ledger: track lifecycle ──
   createTask(taskId, merged, userId);
@@ -4609,6 +4612,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
   } finally {
     // Guarantee task cleanup regardless of success/failure/abort
     activeTasks.delete(taskId);
+    voiceTasks.delete(taskId);
     _staleInlineTasks.delete(taskId);
   }
 }
