@@ -26,7 +26,9 @@ const SERVICES = {
   piper: process.env.PIPER_URL || 'http://localhost:59125',
   whisper: process.env.WHISPER_URL || 'http://localhost:8765',
   gateway: process.env.JARVIS_GATEWAY_URL || 'http://localhost:31338',
+  bot: process.env.JARVIS_ADMIN_URL || 'http://localhost:3101',
 };
+const ADMIN_TOKEN = process.env.JARVIS_ADMIN_TOKEN || '';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -191,7 +193,40 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const path = url.pathname;
 
-  if (req.method === 'OPTIONS') return send(res, 204, '', { 'Access-Control-Allow-Methods': 'GET,POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+  if (req.method === 'OPTIONS') return send(res, 204, '', { 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE', 'Access-Control-Allow-Headers': 'Content-Type' });
+
+  // ── Admin API proxy: /api/admin/* → bot admin-api with bearer token ──
+  if (path.startsWith('/api/admin/')) {
+    const botPath = path.replace(/^\/api\/admin/, '/admin') + (url.search || '');
+    try {
+      const proxyUrl = `${SERVICES.bot}${botPath}`;
+      const init = {
+        method: req.method,
+        headers: {
+          Authorization: `Bearer ${ADMIN_TOKEN}`,
+          'Content-Type': req.headers['content-type'] || 'application/json',
+        },
+      };
+      if (!['GET', 'HEAD', 'DELETE'].includes(req.method)) {
+        init.body = await new Promise((resolve, reject) => {
+          const chunks = [];
+          req.on('data', c => chunks.push(c));
+          req.on('end', () => resolve(Buffer.concat(chunks)));
+          req.on('error', reject);
+        });
+      }
+      const r = await fetch(proxyUrl, init);
+      const text = await r.text();
+      res.writeHead(r.status, {
+        'Content-Type': r.headers.get('content-type') || 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(text);
+    } catch (e) {
+      sendJSON(res, 502, { error: `bot unreachable: ${e.message}` });
+    }
+    return;
+  }
 
   if (path === '/api/state') {
     try {

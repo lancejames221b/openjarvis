@@ -374,17 +374,63 @@ export function addVoiceShortcut(trigger, actionType, actionData) {
   const entry = { id: `voice_${Date.now()}`, trigger: triggerLower, actionType, actionData };
   _voiceShortcuts.push(entry);
 
+  if (_persistShortcuts()) {
+    logger.info({ trigger, actionType }, '⚡ shortcut-engine: shortcut registered and persisted');
+    return { ok: true, id: entry.id, entry };
+  }
+  return { ok: false, reason: 'persist_failed' };
+}
+
+function _persistShortcuts() {
   try {
-    const raw = readFileSync(SHORTCUTS_PATH, 'utf8');
-    const data = JSON.parse(raw);
+    let data;
+    try {
+      data = JSON.parse(readFileSync(SHORTCUTS_PATH, 'utf8'));
+    } catch {
+      data = { shortcuts: [] };
+    }
     data.shortcuts = _voiceShortcuts;
     writeFileSync(SHORTCUTS_PATH, JSON.stringify(data, null, 2), 'utf8');
-    logger.info({ trigger, actionType }, '⚡ shortcut-engine: shortcut registered and persisted');
-    return { ok: true, id: entry.id };
+    return true;
   } catch (err) {
-    logger.warn({ err: err.message }, '⚡ shortcut-engine: failed to persist shortcut');
-    return { ok: false, reason: err.message };
+    logger.warn({ err: err.message }, '⚡ shortcut-engine: failed to persist shortcuts');
+    return false;
   }
+}
+
+export function listVoiceShortcuts() {
+  return _voiceShortcuts.map(s => ({ ...s }));
+}
+
+export function updateVoiceShortcut(id, patch = {}) {
+  const idx = _voiceShortcuts.findIndex(s => s.id === id);
+  if (idx === -1) return { ok: false, reason: 'not_found' };
+  const allowed = ['trigger', 'actionType', 'actionData'];
+  const next = { ..._voiceShortcuts[idx] };
+  for (const k of allowed) {
+    if (k in patch) next[k] = patch[k];
+  }
+  if (next.actionType && !ACTION_HANDLERS[next.actionType]) {
+    return { ok: false, reason: `Unknown action type: ${next.actionType}` };
+  }
+  if (typeof next.trigger === 'string') next.trigger = next.trigger.toLowerCase().trim();
+  _voiceShortcuts[idx] = next;
+  if (_persistShortcuts()) {
+    logger.info({ id, trigger: next.trigger }, '⚡ shortcut-engine: shortcut updated');
+    return { ok: true, entry: next };
+  }
+  return { ok: false, reason: 'persist_failed' };
+}
+
+export function deleteVoiceShortcut(id) {
+  const before = _voiceShortcuts.length;
+  _voiceShortcuts = _voiceShortcuts.filter(s => s.id !== id);
+  if (_voiceShortcuts.length === before) return { ok: false, reason: 'not_found' };
+  if (_persistShortcuts()) {
+    logger.info({ id }, '⚡ shortcut-engine: shortcut deleted');
+    return { ok: true };
+  }
+  return { ok: false, reason: 'persist_failed' };
 }
 
 // ── Main entry point ──────────────────────────────────────────────────
