@@ -471,11 +471,10 @@ const recordMode = {
 const activeTasks = new Map(); // taskId -> { controller, transcript, startTime }
 let taskIdCounter = 0;
 
-// Verbose thread continuity: reuse the same Discord thread for follow-up voice
-// questions from the same channel within a time window.
-// parentChannelId → { threadId, expiresAt }
-const _voiceVerboseThreads = new Map();
-const VOICE_THREAD_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// Verbose thread registry: one persistent thread per channel for the bot session.
+// All input mediums (voice mic, Discord voice message, text @mention) share this.
+// parentChannelId → threadId  (cleared only on bot restart or explicit /newchat)
+const _verboseThreads = new Map();
 
 // ── /speak queue: hold incoming speaks while audio is playing ─────────
 // Prevents cron results / sub-agent callbacks from interleaving mid-sentence.
@@ -2070,9 +2069,9 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       if (_isThread) {
         threadId = message.channelId;
       } else {
-        const _existingChatThread = _voiceVerboseThreads.get(_parentChannelId);
-        if (_existingChatThread && _existingChatThread.expiresAt > Date.now()) {
-          threadId = _existingChatThread.threadId;
+        const _existingChatThread = _verboseThreads.get(_parentChannelId);
+        if (_existingChatThread) {
+          threadId = _existingChatThread;
           logger.info(`[@mention] reusing verbose thread ${threadId}`);
         } else {
           const thread = await message.startThread({
@@ -2081,7 +2080,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
           });
           threadId = thread.id;
         }
-        _voiceVerboseThreads.set(_parentChannelId, { threadId, expiresAt: Date.now() + VOICE_THREAD_TTL_MS });
+        _verboseThreads.set(_parentChannelId, threadId);
       }
 
       const ls = await createLiveStream(threadId, discordToken, { model });
@@ -2375,25 +2374,22 @@ async function handleVoiceTranscript(message) {
             // Falls back to creating a new thread if no active one exists,
             // or if already inside a thread (Discord disallows nested threads).
             let verboseChannelId;
-            const _existingThread = _voiceVerboseThreads.get(_vmParentId);
             if (_vmIsThread) {
               // Already in a thread — stream here directly
               verboseChannelId = message.channelId;
-            } else if (_existingThread && _existingThread.expiresAt > Date.now()) {
-              // Reuse active thread from a recent question
-              verboseChannelId = _existingThread.threadId;
-              logger.info(`[voice-verbose] reusing thread ${verboseChannelId} for follow-up`);
             } else {
-              const vmThread = await echoReply.startThread({
-                name: text.substring(0, 80) || 'voice response',
-                autoArchiveDuration: 60,
-              });
-              verboseChannelId = vmThread.id;
-              _voiceVerboseThreads.set(_vmParentId, { threadId: verboseChannelId, expiresAt: Date.now() + VOICE_THREAD_TTL_MS });
-            }
-            // Refresh TTL on every use
-            if (!_vmIsThread) {
-              _voiceVerboseThreads.set(_vmParentId, { threadId: verboseChannelId, expiresAt: Date.now() + VOICE_THREAD_TTL_MS });
+              const _existingThread = _verboseThreads.get(_vmParentId);
+              if (_existingThread) {
+                verboseChannelId = _existingThread;
+                logger.info(`[voice-verbose] reusing thread ${verboseChannelId}`);
+              } else {
+                const vmThread = await echoReply.startThread({
+                  name: text.substring(0, 80) || 'voice response',
+                  autoArchiveDuration: 60,
+                });
+                verboseChannelId = vmThread.id;
+              }
+              _verboseThreads.set(_vmParentId, verboseChannelId);
             }
 
             const ls = await createLiveStream(verboseChannelId, discordToken, { model });
