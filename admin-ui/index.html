@@ -1285,6 +1285,20 @@
       white-space: pre-wrap; line-height: 1.6; cursor: text;
       user-select: all;
     }
+
+    /* ─── Activity filter chips ─── */
+    .activity-filters {
+      display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 12px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .af-chip {
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em;
+      text-transform: uppercase; padding: 3px 8px;
+      background: transparent; border: 1px solid var(--rule-strong);
+      color: var(--bone-dim); cursor: pointer; transition: all 120ms ease;
+    }
+    .af-chip:hover { border-color: var(--signal-edge); color: var(--bone); }
+    .af-chip.active { border-color: var(--signal); color: var(--signal); background: var(--signal-soft); }
   </style>
 </head>
 <body>
@@ -1619,8 +1633,19 @@
             <div class="panel-title">The log.</div>
           </div>
           <div class="panel-meta">
-            <span class="hot">LIVE</span>
+            <span class="hot" id="feed-state">CONNECTING</span>
           </div>
+        </div>
+        <div class="activity-filters" id="activity-filters">
+          <button class="af-chip active" data-tag="*">ALL</button>
+          <button class="af-chip" data-tag="VERIFY">VERIFY</button>
+          <button class="af-chip" data-tag="WAKE">WAKE</button>
+          <button class="af-chip" data-tag="STT">STT</button>
+          <button class="af-chip" data-tag="BRAIN">BRAIN</button>
+          <button class="af-chip" data-tag="TTS">TTS</button>
+          <button class="af-chip" data-tag="LEARN">LEARN</button>
+          <button class="af-chip" data-tag="PERSONA">PERSONA</button>
+          <button class="af-chip" data-tag="MODEL">MODEL</button>
         </div>
         <div class="activity" id="activity"></div>
       </section>
@@ -1805,7 +1830,6 @@
         routes: pick(data?.routes, fallback.routes),
         shortcuts: pick(data?.shortcuts, fallback.shortcuts),
         services: pick(data?.services, fallback.services),
-        activity: pick(data?.activity, fallback.activity),
         adminShortcuts: adminShortcuts?.shortcuts || null,
         profiles: adminRouting?.profiles || null,
       };
@@ -2047,18 +2071,79 @@
       document.getElementById("svc-ok").textContent = `${live}/${list.length} LIVE`;
     }
 
-    function renderActivity(list) {
+    function wireActivityFeed() {
       const el = document.getElementById("activity");
-      el.innerHTML = list
-        .map(
-          (a) => `
-          <div class="activity-row">
-            <span class="activity-time">${a.t}</span>
-            <span class="activity-tag">${a.tag}</span>
-            <span class="activity-msg">${a.msg}</span>
-          </div>`
-        )
-        .join("");
+      const stateEl = document.getElementById("feed-state");
+      const MAX_ROWS = 80;
+      let activeTags = new Set(['*']);
+      let autoScroll = true;
+
+      el.addEventListener('scroll', () => {
+        autoScroll = el.scrollTop <= 20;
+      });
+
+      document.getElementById('activity-filters').addEventListener('click', e => {
+        const chip = e.target.closest('.af-chip');
+        if (!chip) return;
+        const tag = chip.dataset.tag;
+        if (tag === '*') {
+          activeTags = new Set(['*']);
+          document.querySelectorAll('.af-chip').forEach(c => c.classList.toggle('active', c.dataset.tag === '*'));
+        } else {
+          activeTags.delete('*');
+          chip.classList.toggle('active');
+          if (chip.classList.contains('active')) activeTags.add(tag);
+          else activeTags.delete(tag);
+          if (activeTags.size === 0) {
+            activeTags.add('*');
+            document.querySelectorAll('.af-chip').forEach(c => c.classList.toggle('active', c.dataset.tag === '*'));
+          } else {
+            document.querySelector('.af-chip[data-tag="*"]').classList.remove('active');
+          }
+        }
+        document.querySelectorAll('.activity-row').forEach(row => {
+          row.style.display = (activeTags.has('*') || activeTags.has(row.dataset.tag)) ? '' : 'none';
+        });
+      });
+
+      function makeRow(ev) {
+        const row = document.createElement('div');
+        row.className = 'activity-row';
+        row.dataset.tag = ev.tag;
+        row.style.display = (activeTags.has('*') || activeTags.has(ev.tag)) ? '' : 'none';
+        row.innerHTML = `<span class="activity-time">${ev.t}</span><span class="activity-tag">${ev.tag}</span><span class="activity-msg">${(ev.msg||'').replace(/</g,'&lt;')}</span>`;
+        return row;
+      }
+
+      function prependRow(ev) {
+        el.insertBefore(makeRow(ev), el.firstChild);
+        while (el.children.length > MAX_ROWS) el.removeChild(el.lastChild);
+        if (autoScroll) el.scrollTop = 0;
+      }
+
+      function connect() {
+        stateEl.textContent = 'CONNECTING';
+        stateEl.style.color = '';
+        const es = new EventSource('/api/admin/events');
+
+        es.onopen = () => {
+          stateEl.textContent = 'LIVE';
+          stateEl.style.color = 'var(--accent)';
+        };
+
+        es.onmessage = e => {
+          try { prependRow(JSON.parse(e.data)); } catch {}
+        };
+
+        es.onerror = () => {
+          stateEl.textContent = 'DISCONNECTED';
+          stateEl.style.color = '#e55';
+          es.close();
+          setTimeout(connect, 5000);
+        };
+      }
+
+      connect();
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -2455,7 +2540,6 @@
       renderRoutes(d.routes, d.profiles);
       renderShortcuts(d.shortcuts, d.adminShortcuts);
       renderServices(d.services);
-      renderActivity(d.activity);
 
       wireSliders();
       wireDropzone();
@@ -2466,6 +2550,7 @@
       wireShortcutAdd();
       wireRoutingAdd(d.profiles);
       wireMemberWizard();
+      wireActivityFeed();
 
       setInterval(async () => {
         const d = await loadAll();

@@ -195,6 +195,37 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') return send(res, 204, '', { 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE', 'Access-Control-Allow-Headers': 'Content-Type' });
 
+  // ── SSE passthrough: stream /api/admin/events without buffering ──
+  if (path === '/api/admin/events' && req.method === 'GET') {
+    try {
+      const r = await fetch(`${SERVICES.bot}/admin/events`, {
+        headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
+      res.writeHead(r.status, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+      const reader = r.body.getReader();
+      const pump = async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done || req.destroyed) break;
+            res.write(value);
+          }
+        } catch {}
+        res.end();
+      };
+      pump();
+      req.on('close', () => reader.cancel().catch(() => {}));
+    } catch (e) {
+      sendJSON(res, 502, { error: `SSE proxy failed: ${e.message}` });
+    }
+    return;
+  }
+
   // ── Admin API proxy: /api/admin/* → bot admin-api with bearer token ──
   if (path.startsWith('/api/admin/')) {
     const botPath = path.replace(/^\/api\/admin/, '/admin') + (url.search || '');

@@ -36,6 +36,7 @@ import {
 } from './shortcut-engine.js';
 import { enrollmentState } from './auth.js';
 import { getAllowedUsers, addMember, removeMember } from './allowed-users.js';
+import { emit as busEmit, getRingBuffer, subscribe } from './event-bus.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -196,7 +197,9 @@ export function startAdminApi() {
       if (path === '/admin/persona' && req.method === 'POST') {
         const body = await readJsonBody(req);
         if (!body.name) return sendJSON(res, 400, { error: 'name required' });
+        const prev = getActivePersona()?.name || '—';
         const r = await switchPersonaFull(body.name);
+        busEmit('PERSONA', `${prev} → ${body.name}`);
         return sendJSON(res, 200, { ok: true, ...r });
       }
 
@@ -219,6 +222,9 @@ export function startAdminApi() {
           setTextModel(next);
           applied.text = next;
           applied.effort = body.effort;
+        }
+        if (Object.keys(applied).length) {
+          busEmit('MODEL', Object.entries(applied).map(([k, v]) => `${k}=${v}`).join(' '));
         }
         return sendJSON(res, 200, {
           ok: true,
@@ -412,6 +418,29 @@ export function startAdminApi() {
 
         logger.info(`[admin-api] yt clone complete: ${name} → ${refPath}`);
         return sendJSON(res, 200, { ok: true, name, path: refPath, make_default });
+      }
+
+      // ── Activity SSE ──────────────────────────────────────────────────
+      if (path === '/admin/events' && req.method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+        });
+        const write = (ev) => {
+          try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
+        };
+        // Flush backlog (newest 80) so the panel paints on connect
+        const backlog = getRingBuffer().slice(-80);
+        backlog.forEach(write);
+
+        const unsub = subscribe(write);
+        const hb = setInterval(() => {
+          try { res.write(': heartbeat\n\n'); } catch {}
+        }, 30_000);
+        req.on('close', () => { unsub(); clearInterval(hb); });
+        return;
       }
 
       // ── Fallback ───────────────────────────────────────────────────────

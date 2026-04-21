@@ -58,6 +58,7 @@ import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriori
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
 import logger from './logger.js';
+import { emit as busEmit } from './event-bus.js';
 import {
   initDiscordMemory,
   maybeRecordDiscordMessage,
@@ -3057,6 +3058,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const result = await enrollmentState.addClip(enrollWavPath);
       try { unlinkSync(enrollWavPath); } catch {}
       if (result.accepted) {
+        busEmit('LEARN', `clip ${enrollmentState.clipsCollected}/${enrollmentState.clipsNeeded} · user=${enrollmentState.userId}`, { userId: enrollmentState.userId });
         const consistencyStr = result.consistency_score != null ? ` consistency=${result.consistency_score}` : '';
         logger.info(`Enrollment clip ${enrollmentState.clipsCollected}/${enrollmentState.clipsNeeded} accepted${consistencyStr}`);
 
@@ -3175,6 +3177,13 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // enough that TV rarely produces it, and owner's embedding gets corrupted by
     // TV background noise (scoring 0.30-0.33, same as pure TV).
     const spkr = sttResult?.speakerInfo;
+    if (spkr) {
+      const matched = isVerifiedOwner(spkr, 'medium');
+      busEmit('VERIFY', `${matched ? 'matched' : 'rejected'} · conf=${spkr.confidence?.toFixed(3)} tier=${spkr.confidence_tier}`, { userId, matched });
+    }
+    if (rawTranscript && rawTranscript.length > 1) {
+      busEmit('STT', `"${rawTranscript.slice(0, 80)}${rawTranscript.length > 80 ? '…' : ''}"`, { userId });
+    }
     if (spkr && !isVerifiedOwner(spkr, 'medium')) {
       const trimmed = rawTranscript.trim();
       const _wwEscIdx = VOICE_WAKE_WORD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -3246,6 +3255,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
         // Allow wake word even with TV-corrupted embeddings - "Jarvis" is rare on TV.
         // Session stays unauthenticated so follow-up commands need clean speaker verify.
         transition('ACTIVE', 'wake-word');
+        busEmit('WAKE', `"${rawTranscript.slice(0, 60)}" → ACTIVE`, { userId });
         authCtx.isOwner = isVerifiedOwner(wakeSpkr, 'high');
         authenticatedSession = authCtx.isOwner;
         resetIdleSleepTimer();
@@ -4103,6 +4113,7 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       const _defaultDispatchModel = process.env.DISPATCH_MODEL || _activeVoiceModel;
       const _targetAgentModel = brainOptions.agentModel || _defaultDispatchModel;
       const dispatchOptions = { ...brainOptions, taskId, model: _targetAgentModel };
+      busEmit('BRAIN', `route=webhook intent=${intentType} model=${_targetAgentModel} task=#${taskId}`, { userId, taskId });
       const webhookResult = await dispatchViaWebhook(transcript, history, dispatchOptions);
 
       if (webhookResult.dispatched) {
@@ -4181,14 +4192,17 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
 
       batchNum++;
       logger.info(`🔊 Chunk #${batchNum}: ${text.length} chars → pipeline`);
-      // Mark this task as having spoken inline - suppresses redundant /speak task-progress voice
-      if (batchNum === 1) markTaskSpokeInline(taskId);
+      if (batchNum === 1) {
+        markTaskSpokeInline(taskId);
+        busEmit('TTS', `chunk #1 · ${text.length} chars · task=#${taskId}`, { taskId });
+      }
       // Record in semantic dedup as we speak - prevents /speak task-progress from repeating
       recordInlineSpoken(text);
       ttsPipeline.add(text);
     };
 
     const onScreenMode = process.env.ON_SCREEN || 'no_ack';
+    busEmit('BRAIN', `route=inline intent=${intentType} task=#${taskId}`, { userId, taskId });
     const result = await generateResponseStreaming(transcript, history, signal, (sentence) => {
       sentence = trimForVoice(sentence);
       if (!sentence || sentence.length < 2) return;
