@@ -1106,6 +1106,9 @@ client.once('ready', async () => {
   // Start admin HTTP API for the dashboard (no-op if JARVIS_ADMIN_TOKEN unset)
   import('./admin-api.js').then(m => m.startAdminApi()).catch(e => logger.warn(`[admin-api] start error: ${e.message}`));
 
+  // Patch any live-stream messages left in "thinking" state by a prior crash
+  import('./live-stream.js').then(m => m.sweepOrphanedStreams()).catch(e => logger.warn(`[live-stream] sweep error: ${e.message}`));
+
   // Wire MCP auth notify — DM the owner when any mcporter call needs OAuth re-auth
   setMcpAuthNotify(async (server, tool, url) => {
     const msg = `**MCP authorization required**\n\`${server}.${tool}\` needs re-auth:\n${url}`;

@@ -16,9 +16,45 @@
  */
 
 import logger from './logger.js';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, unlinkSync, readdirSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+
+const __dirname_ls = dirname(fileURLToPath(import.meta.url));
+const STREAMS_DIR = join(__dirname_ls, '..', 'data', 'live-streams');
+try { mkdirSync(STREAMS_DIR, { recursive: true }); } catch {}
+
+function _streamStatePath(msgId) { return join(STREAMS_DIR, `${msgId}.json`); }
+function _trackStream(channelId, msgId, botToken) {
+  try { writeFileSync(_streamStatePath(msgId), JSON.stringify({ channelId, msgId, botToken, startedAt: Date.now() })); } catch {}
+}
+function _untrackStream(msgId) {
+  try { unlinkSync(_streamStatePath(msgId)); } catch {}
+}
+
+/** On startup, patch any live-stream messages left in "thinking" state by a prior crash. */
+export async function sweepOrphanedStreams() {
+  let files;
+  try { files = readdirSync(STREAMS_DIR).filter(f => f.endsWith('.json')); } catch { return; }
+  if (!files.length) return;
+  logger.info(`[live-stream] sweeping ${files.length} orphaned stream(s)`);
+  for (const f of files) {
+    try {
+      const { channelId, msgId, botToken } = JSON.parse(readFileSync(join(STREAMS_DIR, f), 'utf-8'));
+      await fetch(`https://discord.com/api/v10/channels/${channelId}/messages/${msgId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: '**⚠️ interrupted** — bot restarted mid-stream.' }),
+        signal: AbortSignal.timeout(6_000),
+      });
+      _untrackStream(msgId);
+      logger.info(`[live-stream] patched orphan ${msgId} in ${channelId}`);
+    } catch (e) {
+      logger.warn(`[live-stream] sweep failed for ${f}: ${e.message}`);
+      try { unlinkSync(join(STREAMS_DIR, f)); } catch {}
+    }
+  }
+}
 
 const TICK_MS       = 2_000;
 const MAX_BODY_LEN  = 1_700;  // leave headroom for header
@@ -73,6 +109,7 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     const data = await res.json();
     if (!data?.id) throw new Error(`Discord returned no message id: ${JSON.stringify(data).slice(0, 200)}`);
     msgId = data.id;
+    _trackStream(channelId, msgId, botToken);
   } catch (err) {
     logger.warn(`[live-stream] Failed to create live message: ${err.message}`);
     throw err;
@@ -148,6 +185,7 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
         logger.warn(`[live-stream] failed to post final chunk: ${err.message}`);
       }
     }
+    _untrackStream(msgId);
   }
 
   async function finishEmpty(reason) {
@@ -157,6 +195,7 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     emptyReason = reason || 'empty';
     const header = _renderHeader({ state, startedAt, model, tokens, body: '', emptyReason, final: true });
     await _edit(header);
+    _untrackStream(msgId);
   }
 
   async function finishError(err) {
@@ -166,11 +205,13 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     errorMsg = String(err?.message || err);
     const header = _renderHeader({ state, startedAt, model, tokens, body: '', errorMsg, final: true });
     await _edit(header);
+    _untrackStream(msgId);
   }
 
   function stop() {
     done = true;
     clearInterval(ticker);
+    _untrackStream(msgId);
   }
 
   return { update, replace, finish, finishEmpty, finishError, stop };
