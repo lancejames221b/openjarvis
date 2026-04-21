@@ -536,6 +536,21 @@ def enroll_reset():
     return jsonify({"reset": True, "user_id": user_id, "clips_discarded": len(clips)})
 
 
+@app.route('/voiceprint/<user_id>', methods=['DELETE'])
+def delete_voiceprint(user_id):
+    """Remove a user's voiceprint from memory and disk."""
+    global user_voiceprints, user_cohort_stats
+    was_enrolled = user_id in user_voiceprints
+    user_voiceprints.pop(user_id, None)
+    user_cohort_stats.pop(user_id, None)
+    enrollment_embeddings_by_user.pop(user_id, None)
+    fp = os.path.join(VOICEPRINTS_DIR, f'{user_id}.npy')
+    if os.path.exists(fp):
+        os.remove(fp)
+    logger.info(f"[delete] voiceprint removed for {user_id} (was_enrolled={was_enrolled})")
+    return jsonify({"ok": True, "user_id": user_id, "was_enrolled": was_enrolled})
+
+
 # ── Online Speaker Diarization (embedding clustering) ────────────────
 # Maintains speaker clusters during a recording session. Each utterance
 # gets assigned to the closest cluster or spawns a new one. Owner voice

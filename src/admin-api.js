@@ -35,6 +35,7 @@ import {
   deleteVoiceShortcut,
 } from './shortcut-engine.js';
 import { enrollmentState } from './auth.js';
+import { getAllowedUsers, addMember, removeMember } from './allowed-users.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -288,6 +289,34 @@ export function startAdminApi() {
           return sendJSON(res, 200, { ok: true });
         }
         return sendJSON(res, 404, { error: 'not_found' });
+      }
+
+      // ── Members ───────────────────────────────────────────────────────
+      if (path === '/admin/members' && req.method === 'GET') {
+        return sendJSON(res, 200, { members: getAllowedUsers() });
+      }
+      if (path === '/admin/members' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        if (!body.userId || !body.name) return sendJSON(res, 400, { error: 'userId and name required' });
+        const r = addMember(body.userId, body.name);
+        return sendJSON(res, r.ok ? 200 : 400, r);
+      }
+      const mbMatch = path.match(/^\/admin\/members\/([^\/]+)$/);
+      if (mbMatch && req.method === 'DELETE') {
+        const userId = decodeURIComponent(mbMatch[1]);
+        const r = removeMember(userId);
+        if (!r.ok) return sendJSON(res, r.reason === 'not_found' ? 404 : 400, r);
+        // Best-effort: delete voiceprint from speaker-verify service
+        const svUrl = process.env.SPEAKER_VERIFY_URL || 'http://localhost:8767';
+        try {
+          await fetch(`${svUrl}/voiceprint/${encodeURIComponent(userId)}`, {
+            method: 'DELETE', signal: AbortSignal.timeout(5_000),
+          });
+        } catch (e) {
+          logger.warn(`[admin-api] speaker-verify delete failed (member removed anyway): ${e.message}`);
+        }
+        logger.info(`[admin-api] member removed: ${userId}`);
+        return sendJSON(res, 200, { ok: true, userId });
       }
 
       // ── Enrollment ─────────────────────────────────────────────────────

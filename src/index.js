@@ -167,7 +167,8 @@ const VOICE_REPORT_CHANNEL_ID = process.env.VOICE_REPORT_CHANNEL_ID || TEXT_CHAN
 const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || TEXT_CHANNEL_ID; // Task activity feed
 const ACTIVITY_FEED_ENABLED = process.env.ACTIVITY_FEED_ENABLED !== 'false'; // Feature flag - default ON
 const VOICE_THREAD_REPORTS_ENABLED = process.env.VOICE_THREAD_REPORTS !== 'false'; // Thread reports in #hud - default ON, set VOICE_THREAD_REPORTS=false to disable
-const ALLOWED_USERS = (process.env.ALLOWED_USERS || '').split(',').map(s => s.trim());
+import { getAllowedUserIds } from './allowed-users.js';
+const ALLOWED_USERS = getAllowedUserIds();
 const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 
 // ── Webhook Callback Mode ─────────────────────────────────────────────

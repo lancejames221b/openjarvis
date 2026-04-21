@@ -1232,6 +1232,59 @@
       display: flex; gap: 8px; align-items: center;
       padding: 12px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
     }
+
+    /* ─── User row remove button ─── */
+    .user-row { position: relative; }
+    .user-del-btn {
+      position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+      background: transparent; border: 0; color: var(--bone-dim);
+      width: 22px; height: 22px; display: flex; align-items: center;
+      justify-content: center; cursor: pointer; font-size: 16px;
+      opacity: 0; transition: opacity 150ms ease, color 150ms ease;
+    }
+    .user-row:hover .user-del-btn { opacity: 1; }
+    .user-del-btn:hover { color: var(--dead); }
+
+    /* ─── Add Member Modal ─── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(5,4,3,0.88);
+      z-index: 300; display: flex; align-items: center; justify-content: center;
+    }
+    .modal-box {
+      background: var(--panel); border: 1px solid var(--rule-strong);
+      width: 480px; max-width: calc(100vw - 48px); padding: 32px;
+    }
+    .modal-title {
+      font-family: var(--display); font-style: italic; font-size: 36px;
+      color: var(--bone); margin-bottom: 24px; line-height: 1;
+    }
+    .modal-step-label {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+      color: var(--signal); text-transform: uppercase; margin-bottom: 14px;
+    }
+    .modal-hint {
+      font-family: var(--mono); font-size: 10px; color: var(--bone-dim);
+      margin-top: 6px; line-height: 1.5;
+    }
+    .modal-enroll-opts { display: flex; flex-direction: column; gap: 8px; }
+    .modal-enroll-opt {
+      display: flex; flex-direction: column; align-items: flex-start;
+      gap: 3px; padding: 12px 14px; background: var(--panel-lift);
+      border: 1px solid var(--rule-strong); text-align: left; cursor: pointer;
+      transition: border-color 150ms ease;
+    }
+    .modal-enroll-opt:hover { border-color: var(--signal-edge); }
+    .modal-enroll-sub {
+      font-family: var(--mono); font-size: 10px; color: var(--bone-dim);
+      letter-spacing: 0.06em;
+    }
+    .modal-template {
+      margin-top: 10px; padding: 10px 12px;
+      background: var(--panel-lift); border: 1px solid var(--rule-strong);
+      font-family: var(--mono); font-size: 11px; color: var(--bone-dim);
+      white-space: pre-wrap; line-height: 1.6; cursor: text;
+      user-select: all;
+    }
   </style>
 </head>
 <body>
@@ -1299,6 +1352,7 @@
             <div class="panel-title">Who speaks.</div>
           </div>
           <div class="panel-meta">
+            <button class="panel-add-btn" id="add-member-btn">+ Add</button>
             <span class="hot" id="thr-stamp">THRESHOLD 0.45</span>
             <span id="refs-stamp">665 REFS TOTAL</span>
           </div>
@@ -1579,6 +1633,56 @@
     </footer>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════════
+       ADD MEMBER MODAL
+       ═══════════════════════════════════════════════════════════════ -->
+  <div class="modal-overlay" id="member-modal" style="display:none">
+    <div class="modal-box">
+      <div class="modal-title">New face.</div>
+      <div class="modal-steps">
+        <!-- Step 1 -->
+        <div class="modal-step" id="ms-1">
+          <div class="modal-step-label">01 · Identity</div>
+          <input class="ii" id="mb-name" placeholder="Display name" style="width:100%;margin-bottom:8px" />
+          <input class="ii" id="mb-id" placeholder="Discord user ID  (e.g. OWNER_USER_ID)" style="width:100%" />
+          <div class="modal-hint">Right-click a user in Discord → Copy User ID (enable Developer Mode first)</div>
+          <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+            <button class="btn btn-xs" id="mb-cancel-1">Cancel</button>
+            <button class="btn btn-xs primary" id="mb-next-1">Next →</button>
+          </div>
+        </div>
+        <!-- Step 2 -->
+        <div class="modal-step" id="ms-2" style="display:none">
+          <div class="modal-step-label">02 · Enroll</div>
+          <div class="modal-enroll-opts">
+            <button class="btn modal-enroll-opt" id="mb-enroll-now">
+              <span style="font-size:18px">🎙</span>
+              <span>Enroll by voice now</span>
+              <span class="modal-enroll-sub">Jarvis will prompt them to speak 10 clips</span>
+            </button>
+            <button class="btn modal-enroll-opt" id="mb-enroll-later">
+              <span style="font-size:18px">✉</span>
+              <span>Send instructions</span>
+              <span class="modal-enroll-sub">Copy a Discord message template</span>
+            </button>
+          </div>
+          <div id="mb-enroll-status" style="font-family:var(--mono);font-size:10px;color:var(--bone-dim);margin-top:10px;min-height:14px"></div>
+          <div id="mb-enroll-template" class="modal-template" style="display:none"></div>
+          <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+            <button class="btn btn-xs" id="mb-back-2">← Back</button>
+            <button class="btn btn-xs primary" id="mb-skip-2">Skip enrollment →</button>
+          </div>
+        </div>
+        <!-- Step 3 -->
+        <div class="modal-step" id="ms-3" style="display:none">
+          <div class="modal-step-label">03 · Done</div>
+          <div id="mb-done-msg" style="font-family:var(--mono);font-size:12px;color:var(--live);margin-bottom:12px"></div>
+          <button class="btn btn-xs primary" id="mb-close-3">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     // ═══════════════════════════════════════════════════════════════════
     // MOCK DATA (wire to real endpoints via fetch() later)
@@ -1725,7 +1829,7 @@
       el.innerHTML = users
         .map(
           (u, i) => `
-          <div class="user-row">
+          <div class="user-row" data-uid="${u.id}">
             <div class="user-waveform">${waveform(i + 1)}</div>
             <div class="user-name">
               <span class="user-name-main">${u.name}</span>
@@ -1733,9 +1837,27 @@
             </div>
             <div class="user-count"><em>${u.refs}</em> refs</div>
             ${u.primary ? `<span class="chip hot">Owner</span>` : `<span class="chip">Family</span>`}
+            ${!u.primary ? `<button class="user-del-btn" title="Remove member" data-uid="${u.id}" data-name="${u.name}">×</button>` : ''}
           </div>`
         )
         .join("");
+      // Wire delete buttons
+      el.querySelectorAll('.user-del-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const uid = btn.dataset.uid;
+          const name = btn.dataset.name;
+          if (!confirm(`Remove ${name} from Jarvis? This will delete their voiceprint.`)) return;
+          const r = await fetch(`${API}/admin/members/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok) {
+            toast(`${name} removed`);
+            btn.closest('.user-row').remove();
+          } else {
+            toast(d.reason || d.error || 'remove failed', false);
+          }
+        });
+      });
     }
 
     function renderMetrics(s, users) {
@@ -2225,6 +2347,88 @@
       });
     }
 
+    function wireMemberWizard() {
+      const openBtn = document.getElementById('add-member-btn');
+      const overlay = document.getElementById('member-modal');
+      if (!openBtn || !overlay) return;
+
+      let _pendingId = '', _pendingName = '';
+
+      function _show(step) {
+        [1, 2, 3].forEach(n => {
+          document.getElementById(`ms-${n}`).style.display = n === step ? '' : 'none';
+        });
+      }
+      function _close() {
+        overlay.style.display = 'none';
+        document.getElementById('mb-name').value = '';
+        document.getElementById('mb-id').value = '';
+        document.getElementById('mb-enroll-status').textContent = '';
+        document.getElementById('mb-enroll-template').style.display = 'none';
+        _show(1);
+      }
+
+      openBtn.addEventListener('click', () => { _show(1); overlay.style.display = 'flex'; });
+      overlay.addEventListener('click', e => { if (e.target === overlay) _close(); });
+      document.getElementById('mb-cancel-1').addEventListener('click', _close);
+
+      document.getElementById('mb-next-1').addEventListener('click', async () => {
+        const name = document.getElementById('mb-name').value.trim();
+        const id = document.getElementById('mb-id').value.trim();
+        if (!name || !id) return toast('name and Discord user ID required', false);
+        if (!/^\d{17,20}$/.test(id)) return toast('Discord user ID must be 17-20 digits', false);
+        const r = await fetch(`${API}/admin/members`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: id, name }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) return toast(d.reason || d.error || 'add failed', false);
+        _pendingId = id;
+        _pendingName = name;
+        _show(2);
+      });
+
+      document.getElementById('mb-back-2').addEventListener('click', () => _show(1));
+
+      document.getElementById('mb-enroll-now').addEventListener('click', async () => {
+        const status = document.getElementById('mb-enroll-status');
+        status.textContent = 'Starting enrollment…';
+        const r = await fetch(`${API}/admin/enroll/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: _pendingId, learn: false }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) {
+          status.textContent = `✓ Enrollment started — Jarvis will prompt ${_pendingName} in voice.`;
+          status.style.color = 'var(--live)';
+        } else {
+          status.textContent = `✗ ${d.error || 'failed to start enrollment'}`;
+          status.style.color = 'var(--dead)';
+        }
+      });
+
+      document.getElementById('mb-enroll-later').addEventListener('click', () => {
+        const tpl = document.getElementById('mb-enroll-template');
+        tpl.textContent = `Hey ${_pendingName} — join the #jarvis-voice channel and say:\n\n"Jarvis, enroll my voice"\n\nJarvis will guide you through 10 short voice clips.`;
+        tpl.style.display = 'block';
+      });
+
+      document.getElementById('mb-skip-2').addEventListener('click', () => {
+        document.getElementById('mb-done-msg').textContent =
+          `${_pendingName} (${_pendingId.slice(0,8)}…) added. Enroll their voice via the #jarvis-voice channel when ready.`;
+        _show(3);
+        // Refresh users panel
+        safeJSON(`${API}/state`).then(d => { if (d?.users) renderUsers(d.users); });
+      });
+
+      document.getElementById('mb-close-3').addEventListener('click', () => {
+        _close();
+        safeJSON(`${API}/state`).then(d => { if (d?.users) renderUsers(d.users); });
+      });
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // RUNTIME
     // ═══════════════════════════════════════════════════════════════════
@@ -2261,6 +2465,7 @@
       wireEffortPills();
       wireShortcutAdd();
       wireRoutingAdd(d.profiles);
+      wireMemberWizard();
 
       setInterval(async () => {
         const d = await loadAll();
