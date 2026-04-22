@@ -1,0 +1,3 @@
+[submodule "haivemind"]
+	path = haivemind
+	url = https://github.com/owner221b/agent-hivemind
