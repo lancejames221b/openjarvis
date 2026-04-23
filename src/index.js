@@ -292,7 +292,7 @@ function startHealthMonitor() {
       const guild = client.isReady() ? client.guilds.cache.get(GUILD_ID) : null;
       if (guild && ALLOWED_USERS[0]) {
         const member = guild.members.cache.get(ALLOWED_USERS[0]);
-        if (member?.voice?.serverMute && activeTasks.size === 0 && !audioQueue?.playing && !isSpeaking) {
+        if (member?.voice?.channelId && member.voice.serverMute && activeTasks.size === 0 && !audioQueue?.playing && !isSpeaking) {
           logger.warn('🔧 Watchdog: detected stuck server mute with no active playback - clearing');
           await member.voice.setMute(false, 'Watchdog: clearing stuck server mute');
         }
@@ -2055,10 +2055,10 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     ? `agent:main:discord:channel:${_parentChannelId}:thread:${_threadId}`
     : `agent:main:discord:channel:${_parentChannelId}`;
 
-  // Verbose/live mode: stream activity into a thread so you always see what's happening.
-  // - In a top-level channel: create a new thread and stream there
-  // - Already in a thread: stream into the current thread (follow-ups keep the transparency)
-  if (isVerboseModeEnabled()) {
+  // Verbose/live mode: stream into the current thread if already in one.
+  // Skip for parent-channel @mentions — the thread response is invisible to the user.
+  // Direct reply in the channel (below) is the correct behavior for text mentions.
+  if (isVerboseModeEnabled() && _isThread) {
     try {
       const { createLiveStream } = await import('./live-stream.js');
       const { getTextModel } = await import('./brain.js');
