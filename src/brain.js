@@ -382,6 +382,7 @@ import { isMobileModeEnabled } from './mobile-mode.js';
 import { isVisualModeEnabled } from './visual-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
 import { getFocusContextTag, getFullFocusContext } from './focus-state.js';
+import { getSkillsBlock } from './skills-loader.js';
 
 // Prompts vars resolved at call time so runtime env values are current
 // ON_SCREEN ack mode for "open X on my screen" commands
@@ -435,11 +436,12 @@ Cursor IDE (code editing):
 - Local project: ssh ${MAC_SSH_HOST} 'cursor /path/to/folder'
 - Remote project: ssh ${MAC_SSH_HOST} "cursor --folder-uri 'vscode-remote://ssh-remote+HOST/path'"
 - Key projects are loaded from config/projects.json — see cursor-projects.js
-- Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor`;
+- Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor` + getSkillsBlock();
   }
 
   let tag = resolvePrompt('voice-main.txt', vars);
   if (isMobileModeEnabled()) tag += '\n' + resolvePrompt('mobile-mode.txt', vars);
+  tag += getSkillsBlock();
   return tag;
 }
 
