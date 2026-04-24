@@ -111,6 +111,30 @@ export function parseMcpModeCommand(text) {
 }
 
 /**
+ * Detect cross-channel handoff commands.
+ * Requires a Discord channel mention (<#channelId>) in the message.
+ * Returns { targetChannelId } or null.
+ *
+ * Matches:
+ *   "continue in #hud"      "resume in #channel"
+ *   "send this to #hud"     "send all this to #hud"
+ *   "handoff to #hud"       "hand off to #hud"
+ *   "move this to #hud"     "take this to #hud"
+ *   "pass this to #hud"     "pick this up in #hud"
+ */
+export function parseCrossChannelHandoff(text) {
+  if (!text) return null;
+  const chanMatch = text.match(/<#(\d{17,20})>/);
+  if (!chanMatch) return null;
+  const targetChannelId = chanMatch[1];
+  const t = text.toLowerCase();
+  const hasVerb = /\b(continue|resume|pick\s+this\s+up|move\s+this|take\s+this|pass\s+this|handoff|hand\s+off|send(\s+all\s+this)?|transfer)\b/.test(t);
+  const hasPrep = /\b(in|to|into|over\s+to)\b/.test(t);
+  if (hasVerb && hasPrep) return { targetChannelId };
+  return null;
+}
+
+/**
  * Resolve the full resume-card info for a Discord message.
  * @param {import('discord.js').Message} message
  * @returns {{channelId, threadId?, chatId, model, directory, configDir?} | null}

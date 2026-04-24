@@ -30,7 +30,7 @@ import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFra
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, getTask, TaskState } from './task-ledger.js';
-import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext } from './session-manager.js';
+import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext, storeChannelMemory } from './session-manager.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
 import { StreamingSTTSession } from './stt-streaming.js';
@@ -58,7 +58,7 @@ import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriori
 // Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
 import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx, resetSonosCtx, sonosScopeKey, VOICE_SCOPE, getLastSonosTarget } from './sonos-mode.js';
-import { isHandoffCommand, resolveHandoff, parseVerboseCommand, parseAskModeCommand, parseMcpModeCommand } from './handoff-resolver.js';
+import { isHandoffCommand, resolveHandoff, parseVerboseCommand, parseAskModeCommand, parseMcpModeCommand, parseCrossChannelHandoff } from './handoff-resolver.js';
 import { setMcpMode as setChannelMcpMode, getMcpMode as getChannelMcpMode } from './channel-mcp-mode.js';
 import { postResumeCard } from './handoff-thread.js';
 import { enableVerboseForThread, disableVerboseForThread, hasThreadVerboseOverride } from './verbose-mode.js';
@@ -2291,6 +2291,62 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       await message.reply(`Handed off — see 🔗 Handoff thread.`);
     } catch (err) {
       logger.warn(`[handoff] failed: ${err.message}`);
+      await message.reply(`Handoff failed: ${err.message}`);
+    }
+    return;
+  }
+
+  // Cross-channel handoff — "continue in #hud", "send this to #channel", etc.
+  // Posts a context card to the target channel and stores a summary in haivemind
+  // tagged to the destination so getChannelContext surfaces it when you arrive.
+  // OWNER ONLY: posts to arbitrary channels on the owner's behalf.
+  const _xHandoff = parseCrossChannelHandoff(content);
+  if (_xHandoff) {
+    if (!isChannelOwner(message.author.id)) {
+      await message.reply('🔒 Cross-channel handoff is owner-only.');
+      return;
+    }
+    const { targetChannelId } = _xHandoff;
+    try {
+      const targetChannel = await message.client.channels.fetch(targetChannelId).catch(() => null);
+      if (!targetChannel?.isTextBased?.()) {
+        await message.reply("Can't find that channel or it's not a text channel.");
+        return;
+      }
+      const srcName = message.channel?.name || message.channelId;
+
+      // Build context from this channel — no gateway dependency so this works even if gateway is down
+      const [recentMsgs, hmCtx] = await Promise.all([
+        buildDiscordContextFromApi(message, 20),
+        getChannelContext(message.channelId),
+      ]);
+
+      // Try gateway summary (short, focused) — fall back to raw context if unavailable
+      let summary = null;
+      try {
+        const summaryPrompt = [
+          `Summarize the conversation below into a compact handoff card (5-8 bullets, under 800 chars total).`,
+          `Cover: what was researched/worked on, key findings, and what to do next.`,
+          `Do not include preamble — output only the bullet list.\n`,
+          recentMsgs || '',
+          hmCtx ? `\nRecent memory: ${hmCtx}` : '',
+        ].join('\n');
+        const sr = await generateTextResponse(summaryPrompt, { channelId: _parentChannelId, skipChannelContext: true });
+        if (sr?.text && sr.text.length > 20) summary = sr.text.trim();
+      } catch (_) { /* gateway down — fall through */ }
+
+      const cardBody = summary || (recentMsgs || '*(no recent messages)*').substring(0, 1400);
+      const card = `📎 **Continued from #${srcName}**\n\n${cardBody}`.substring(0, 1900);
+
+      await targetChannel.send(card);
+
+      // Store in haivemind under the destination channel so getChannelContext finds it on arrival
+      await storeChannelMemory(targetChannelId, `Handoff from #${srcName}`, cardBody.substring(0, 400));
+
+      logger.info(`[cross-handoff] posted context card from #${srcName} → #${targetChannel.name || targetChannelId}`);
+      await message.reply(`📎 Context card posted to <#${targetChannelId}>. Continue there.`);
+    } catch (err) {
+      logger.warn(`[cross-handoff] failed: ${err.message}`);
       await message.reply(`Handoff failed: ${err.message}`);
     }
     return;
