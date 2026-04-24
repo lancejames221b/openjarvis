@@ -11,7 +11,7 @@ After=network.target
 Type=simple
 WorkingDirectory=%h/jarvis-voice
 ExecStart=/usr/bin/node %h/jarvis-voice/scripts/jarvis-gateway.js
-Restart=on-failure
+Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
 EnvironmentFile=%h/jarvis-voice/.env

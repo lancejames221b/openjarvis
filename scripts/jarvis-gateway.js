@@ -8,7 +8,7 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = Number(process.env.ZEROCLAW_COMPAT_PORT || 22103);
 const ZEROCLAW_BASE_URL = process.env.ZEROCLAW_BASE_URL || "http://127.0.0.1:22101";
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN || "";
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || "";
 // Shell aliases (like `claude --dangerously-skip-permissions`) don't survive spawn().
 // Use the actual binary path and pass flags explicitly.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
@@ -179,11 +179,64 @@ const activeChildren = new Set();
 //   Auto-approves tool use and MCP connections in headless mode.
 // --include-partial-messages: equivalent to --stream-partial-output.
 //   Emits partial assistant events as content accumulates (used for SSE delta forwarding).
+// --chrome: enables the Claude-in-Chrome integration. On a machine with Chrome
+// + the extension installed, claude-p creates a Unix socket bridge the extension
+// can connect to for browser tool calls. On headless hosts (generic) the flag
+// is a no-op — no extension to connect, so tool calls would just be unavailable
+// with no side effects.
 const BASE_ARGS = [
-  "-p", "--verbose", "--dangerously-skip-permissions",
+  "-p", "--verbose", "--dangerously-skip-permissions", "--chrome",
   "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config",
   "--output-format", "stream-json", "--include-partial-messages",
 ];
+
+// Channels in ask-only mode get these args instead (no dangerous perms, plan mode).
+// Plan mode means Claude can read + search + reason, but refuses Bash/Edit/Write.
+const ASK_MODE_ARGS = [
+  "-p", "--verbose", "--permission-mode", "plan", "--chrome",
+  "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config",
+  "--output-format", "stream-json", "--include-partial-messages",
+];
+
+// Read channel-ask-mode.json at spawn time — lightweight, one file read per spawn.
+const ASK_MODE_FILE = `${process.env.HOME}/.local/state/jarvis-voice/channel-ask-mode.json`;
+function _channelIsInAskMode(channelKey) {
+  if (!channelKey) return false;
+  let state;
+  try { state = JSON.parse(fs.readFileSync(ASK_MODE_FILE, "utf8")); } catch { return false; }
+  // channelKey format: "agent:main:discord:channel:<id>[:thread:<tid>]"
+  const m = channelKey.match(/discord:channel:(\d+)(?::thread:(\d+))?/);
+  if (!m) return false;
+  const [, channelId, threadId] = m;
+  // Thread-scoped first, then channel-scoped
+  if (threadId && state[threadId] === true) return true;
+  if (channelId && state[channelId] === true) return true;
+  return false;
+}
+
+// Read channel-mcp-mode.json at spawn time. Returns:
+//   { mode: 'off' }                        → use empty mcpServers (current fast default)
+//   { mode: 'full' }                       → use the curated jarvis-mcp.json
+//   { mode: 'subset', servers: [...] }     → use a narrowed subset of jarvis-mcp.json
+// Same file-read overhead as _channelIsInAskMode; both are ~1ms per spawn.
+const MCP_MODE_FILE   = `${process.env.HOME}/.local/state/jarvis-voice/channel-mcp-mode.json`;
+const MCP_CONFIG_PATH = process.env.JARVIS_MCP_CONFIG_PATH ||
+                        `${process.env.HOME}/.config/jarvis-voice/jarvis-mcp.json`;
+function _channelMcpMode(channelKey) {
+  if (!channelKey) return { mode: "off" };
+  let state;
+  try { state = JSON.parse(fs.readFileSync(MCP_MODE_FILE, "utf8")); } catch { return { mode: "off" }; }
+  const m = channelKey.match(/discord:channel:(\d+)(?::thread:(\d+))?/);
+  if (!m) return { mode: "off" };
+  const [, channelId, threadId] = m;
+  const raw = (threadId && state[threadId] !== undefined) ? state[threadId]
+            : (channelId && state[channelId] !== undefined) ? state[channelId]
+            : null;
+  if (raw === "full") return { mode: "full" };
+  if (raw === "off")  return { mode: "off" };
+  if (Array.isArray(raw) && raw.length) return { mode: "subset", servers: raw };
+  return { mode: "off" };
+}
 
 function log(event, data = {}) {
   const entry = { ts: new Date().toISOString(), svc: "jarvis-gateway", event, ...data };
@@ -231,7 +284,41 @@ function collapseMessages(messages = []) {
 // Spawn claude -p with stream-json output; optionally resume a prior session.
 // Prompt is written to stdin to avoid ARG_MAX limits on large conversation histories.
 function spawnClaudeStream(prompt, model, chatId, channelKey, effort) {
-  const args = [...BASE_ARGS, "--model", model];
+  const askMode = _channelIsInAskMode(channelKey);
+  const base = askMode ? ASK_MODE_ARGS : BASE_ARGS;
+
+  // Swap the --mcp-config value based on per-channel MCP mode.
+  // BASE_ARGS/ASK_MODE_ARGS both include `--mcp-config '{"mcpServers":{}}'` — when MCP mode
+  // is 'full' or 'subset' for this channel, we replace that inline JSON with a config-file
+  // path (or a narrowed inline JSON for subsets). --strict-mcp-config is kept in both cases
+  // so the subprocess doesn't load user-global MCP defaults.
+  const mcpMode = _channelMcpMode(channelKey);
+  const args = [...base];
+  const mcpIdx = args.indexOf("--mcp-config");
+  if (mcpIdx >= 0 && mcpIdx + 1 < args.length) {
+    if (mcpMode.mode === "full") {
+      args[mcpIdx + 1] = MCP_CONFIG_PATH;
+      log("mcp_mode_spawn", { channelKey, mode: "full", path: MCP_CONFIG_PATH });
+    } else if (mcpMode.mode === "subset") {
+      // Build an inline JSON by reading the full config and selecting the requested servers.
+      try {
+        const full = JSON.parse(fs.readFileSync(MCP_CONFIG_PATH, "utf8"));
+        const filtered = { mcpServers: {} };
+        for (const name of mcpMode.servers) {
+          if (full.mcpServers?.[name]) filtered.mcpServers[name] = full.mcpServers[name];
+        }
+        args[mcpIdx + 1] = JSON.stringify(filtered);
+        log("mcp_mode_spawn", { channelKey, mode: "subset", servers: mcpMode.servers });
+      } catch (err) {
+        log("mcp_mode_spawn_error", { channelKey, error: err.message });
+        // fall through with empty config
+      }
+    }
+    // 'off' — leave args[mcpIdx+1] as the empty-mcpServers string (default)
+  }
+
+  args.push("--model", model);
+  if (askMode) log("ask_mode_spawn", { channelKey });
   if (effort) args.push("--effort", effort);
   if (chatId) args.push("--resume", chatId);
   // Strip stale token overrides; keep ANTHROPIC_BASE_URL only if ClaudeFlare is configured.
@@ -252,9 +339,17 @@ function spawnClaudeStream(prompt, model, chatId, channelKey, effort) {
     timeout: CURSOR_AGENT_TIMEOUT_MS,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  child.stdin.end(prompt.replace(/\0/g, ""), "utf8");
+  // Track the child BEFORE touching stdin so a throw on `.end()` (non-string prompt,
+  // already-closed pipe, etc.) doesn't leave an untracked/unkillable subprocess.
   activeChildren.add(child);
   child.on("close", () => activeChildren.delete(child));
+  try {
+    child.stdin.end(String(prompt ?? "").replace(/\0/g, ""), "utf8");
+  } catch (err) {
+    log("stdin_write_failed", { channelKey, error: err.message });
+    try { child.kill("SIGKILL"); } catch {}
+    throw err;
+  }
   return child;
 }
 
@@ -268,12 +363,14 @@ async function summarizeAndStoreChat(channelKey, oldChatId) {
     // Store to haivemind under channel namespace — getChannelContext() will pick this up next turn
     const channelId = (channelKey.match(/channel:(\d+)/) || [])[1];
     if (channelId && DISCORD_TOKEN) {
-      await fetch(`http://127.0.0.1:${process.env.HAIVEMIND_PORT || 8900}/store_memory`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `[SESSION SUMMARY] ${result.text}`, category: `channel:${channelId}` }),
-        signal: AbortSignal.timeout(5_000),
-      }).catch(() => {});
+      // Use the MCP JSON-RPC envelope via storeMemory(). The prior code POSTed to
+      // a bare /store_memory path that haivemind doesn't serve — every session
+      // summary was silently dropped, and chat_summary_stored logs were misleading.
+      try {
+        await storeMemory(`[SESSION SUMMARY] ${result.text}`, `channel:${channelId}`);
+      } catch (err) {
+        log("chat_summary_store_failed", { channelKey, channelId, error: err.message });
+      }
     }
     log("chat_summary_stored", { channelKey, channelId, chars: result.text.length });
   } catch (e) {
@@ -311,11 +408,51 @@ async function getOrCreateChatId(channelKey) {
 
 function setSession(channelKey, sessionId) {
   if (!channelKey || !sessionId) return;
+  const prev = channelSessions.get(channelKey);
   const isNew = !channelSessions.has(channelKey);
+  const isRotation = !isNew && prev && prev !== sessionId;
   channelSessions.set(channelKey, sessionId);
   channelTurns.set(channelKey, (channelTurns.get(channelKey) || 0) + 1);
   if (isNew) { channelCreatedAt.set(channelKey, Date.now()); saveCreatedAt(); }
   saveSessions(); saveTurns();
+
+  // Notify jarvis-voice admin-api so it can update the pinned handoff card.
+  if (isRotation) notifyHandoffRotation(channelKey, prev, sessionId);
+}
+
+// Extract the parent channel id from a channelKey like
+// "agent:main:discord:channel:<channelId>[:thread:<threadId>]"
+function parseChannelId(channelKey) {
+  const m = (channelKey || '').match(/discord:channel:(\d+)(?::thread:(\d+))?/);
+  if (!m) return null;
+  return { channelId: m[1], threadId: m[2] || null };
+}
+
+function notifyHandoffRotation(channelKey, oldId, newId) {
+  const parsed = parseChannelId(channelKey);
+  if (!parsed) return;
+  const adminUrl = process.env.JARVIS_ADMIN_URL || "http://127.0.0.1:3101";
+  const token = process.env.JARVIS_ADMIN_TOKEN;
+  if (!token) return; // admin API disabled
+  const body = JSON.stringify({
+    channelId: parsed.channelId,
+    threadId: parsed.threadId,
+    oldChatId: oldId,
+    newChatId: newId,
+  });
+  fetch(`${adminUrl}/admin/handoff/rotation`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body,
+    signal: AbortSignal.timeout(5000),
+  }).then(r => {
+    if (!r.ok) log("handoff_rotation_notify_failed", { status: r.status, channelKey });
+  }).catch(err => {
+    log("handoff_rotation_notify_error", { error: err.message, channelKey });
+  });
 }
 
 // ── RSS watchdog — kills cursor-agent children that grow beyond 2.5 GB ───────
@@ -518,7 +655,15 @@ async function streamClaudeToSSE(prompt, model, chatId, res, req, channelKey, ef
           }
         }
       }
-      if (ev.type === "result" && ev.is_error) reject(new Error(ev.result || "claude stream error"));
+      if (ev.type === "result" && ev.is_error) {
+        // Kill the child so it doesn't keep running until its 10-minute spawn timeout.
+        // Before this fix, an is_error from claude rejected the Promise but left the
+        // subprocess alive — the onClose handler skipped the kill path when res was
+        // already ended by the outer catch.
+        try { child.kill("SIGTERM"); } catch {}
+        setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 2_000).unref();
+        return reject(new Error(ev.result || "claude stream error"));
+      }
     }
 
     child.stdout.on("data", (chunk) => {
@@ -665,6 +810,20 @@ app.get("/metrics", (_req, res) => {
   });
 });
 
+// Inject or overwrite a channelKey → chatId mapping. Used by the terminal-to-Discord
+// handoff flow: the terminal rsyncs its session .jsonl up, then tells us
+// "this chatId now belongs to <channelKey>" so subsequent Discord messages resume it.
+app.post("/v1/sessions/inject", requireAuth, (req, res) => {
+  const { channelKey, chatId } = req.body || {};
+  if (!channelKey || !chatId) {
+    return res.status(400).json({ error: "channelKey and chatId required" });
+  }
+  const prev = channelSessions.get(channelKey) || null;
+  setSession(channelKey, chatId);
+  log("session_injected", { channelKey, chatId, prevChatId: prev });
+  res.json({ ok: true, channelKey, chatId, prevChatId: prev });
+});
+
 app.post("/admin/reload-accounts", requireAuth, (_req, res) => {
   channelAccounts = loadChannelAccounts();
   const stats = validateProfiles();
@@ -714,25 +873,35 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
     // Serialize concurrent new-session requests for the same channel.
     // If another request is mid-create for this channel, wait for it to finish so we
     // don't spawn two separate claude -p sessions simultaneously.
-    const inflightLock = channelSessionLocks.get(channelKey);
-    if (inflightLock) await inflightLock;
+    //
+    // Previously: we awaited the inflight lock, THEN called getOrCreateChatId, THEN
+    // set our own lock. Two concurrent requests both saw no existing lock before the
+    // first await completed, both got null chatIds, and both installed separate locks
+    // (second overwrites first). Fix: take the lock BEFORE getOrCreateChatId, using a
+    // drain loop so arriving requests always see the in-flight promise.
+    while (channelSessionLocks.has(channelKey)) {
+      await channelSessionLocks.get(channelKey);
+    }
+    let lockResolve = null;
+    const sessionLock = new Promise(r => { lockResolve = r; });
+    channelSessionLocks.set(channelKey, sessionLock);
+    releaseLock = () => {
+      if (lockResolve) { lockResolve(); channelSessionLocks.delete(channelKey); lockResolve = null; }
+    };
 
     const chatId = await getOrCreateChatId(channelKey);
+
+    // If we got a resumed chatId, release the lock immediately — no spawn-serialization
+    // is needed for resumes (claude already has history, no double-session risk).
+    if (chatId) {
+      releaseLock();
+    }
 
     // On a resumed session claude already has full history — only send the new user message.
     // On a new session (no chatId yet) send the full collapsed context including system prompt.
     const prompt = chatId
       ? contentToText(lastUserMsg?.content || "")
       : collapseMessages(req.body?.messages || []);
-
-    // Hold a lock for the duration of a new-session spawn so concurrent requests wait.
-    let lockResolve = null;
-    if (!chatId) {
-      channelSessionLocks.set(channelKey, new Promise(r => { lockResolve = r; }));
-    }
-    releaseLock = () => {
-      if (lockResolve) { lockResolve(); channelSessionLocks.delete(channelKey); lockResolve = null; }
-    };
 
     if (wantStream) {
       res.status(200);
@@ -785,6 +954,10 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
 app.post("/hooks/agent", requireAuth, async (req, res) => {
   metrics.hooksAgent++;
   const message = String(req.body?.message || "");
+  // channelKey = req.body.user, matching /v1/chat/completions convention so voice
+  // ACTION tasks resume the same Claude chat as voice KNOWLEDGE turns.
+  const channelKey = String(req.body?.user || "").trim() || null;
+  const requestedModel = req.body?.model ? String(req.body.model) : undefined;
   const taskId = extractTaskId(message);
   const channelId = extractTargetChannelId(message);
   res.status(202).json({ accepted: true, taskId, backend: "jarvis-gateway" });
@@ -792,7 +965,9 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
   queueMicrotask(async () => {
     let result;
     try {
-      result = await callClaudeAgent(message);
+      const chatId = await getOrCreateChatId(channelKey);
+      result = await callClaudeAgent(message, requestedModel, chatId, channelKey);
+      if (channelKey && result?.sessionId) setSession(channelKey, result.sessionId);
     } catch (error) {
       const failure = `Task ${taskId || ""} failed: ${error.message || error}`.trim();
       log("hooks_agent_error", { taskId, channelId, error: String(error.message || error) });

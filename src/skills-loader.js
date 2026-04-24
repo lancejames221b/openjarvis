@@ -19,8 +19,9 @@ const SKILLS_DIR = process.env.SKILLS_DIR
   ? resolve(process.env.SKILLS_DIR)
   : join(homedir(), '.claude', 'skills');
 
-const CACHE_TTL_MS = 30_000;   // re-scan every 30s so new skills are picked up without restart
-const MAX_TOTAL_CHARS = 40_000; // hard cap to avoid bloating the system prompt
+const CACHE_TTL_MS = 30_000;        // re-scan every 30s so new skills are picked up without restart
+const MAX_TOTAL_CHARS = 120_000;    // hard cap to avoid bloating the system prompt
+const MAX_SINGLE_SKILL_CHARS = 8_000; // skip any single skill larger than this — it's a reference doc, not a voice skill
 
 let _cache = null;
 let _cacheTime = 0;
@@ -70,6 +71,12 @@ function _buildBlock() {
 
     // Opt-out: voice: false skips this skill
     if (meta.voice === 'false') continue;
+
+    // Skip oversized skills — they're reference docs, not voice-invokable commands
+    if (body.length > MAX_SINGLE_SKILL_CHARS) {
+      logger.debug(`[skills-loader] Skipping ${name} — ${body.length} chars exceeds per-skill cap of ${MAX_SINGLE_SKILL_CHARS}`);
+      continue;
+    }
 
     if (totalChars + body.length > MAX_TOTAL_CHARS) {
       logger.warn(`[skills-loader] Skipping remaining skills — hit ${MAX_TOTAL_CHARS} char cap`);

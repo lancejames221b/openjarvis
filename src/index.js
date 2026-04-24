@@ -1,7 +1,7 @@
 /**
  * Jarvis Voice Bot - Discord Real-Time Voice Assistant
  *
- * Thin voice I/O layer: Discord mic → Whisper STT → Clawdbot Gateway → TTS → Discord speaker
+ * Thin voice I/O layer: Discord mic → Whisper STT → Jarvis Gateway → TTS → Discord speaker
  * Same agent, same session, same tools as text chat. Voice is just another input method.
  */
 
@@ -29,7 +29,7 @@ import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, cl
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
-import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, TaskState } from './task-ledger.js';
+import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, getTask, TaskState } from './task-ledger.js';
 import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext } from './session-manager.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
@@ -57,6 +57,13 @@ import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
+import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx } from './sonos-mode.js';
+import { isHandoffCommand, resolveHandoff, parseVerboseCommand, parseAskModeCommand, parseMcpModeCommand } from './handoff-resolver.js';
+import { setMcpMode as setChannelMcpMode, getMcpMode as getChannelMcpMode } from './channel-mcp-mode.js';
+import { postResumeCard } from './handoff-thread.js';
+import { enableVerboseForThread, disableVerboseForThread, hasThreadVerboseOverride } from './verbose-mode.js';
+import { parseOrchestrationCommand, orchestrateThread } from './thread-orchestrator.js';
+import { setAskMode } from './channel-ask-mode.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
 import logger from './logger.js';
 import { emit as busEmit } from './event-bus.js';
@@ -69,12 +76,12 @@ import {
   updateDiscordMessageContent,
 } from './discord-memory.js';
 
-const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Webhook server bind address - matches TAILSCALE_IP in alert-webhook.js (defaults to localhost for non-Tailscale users)
 const WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || 'localhost';
 const WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || 3335;
 const WEBHOOK_BASE_URL = `http://${WEBHOOK_HOST}:${WEBHOOK_PORT}`;
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;
 
 // ── Gateway Health Check ─────────────────────────────────────────────
 
@@ -190,7 +197,7 @@ const VOICE_CALLBACK_CHANNEL_ID = process.env.VOICE_CALLBACK_CHANNEL_ID || TEXT_
 const IMMEDIATE_ACKS_ENABLED = process.env.IMMEDIATE_ACKS_ENABLED === 'true'; // Feature flag - default OFF (was ON, removed for natural flow)
 const VOICE_ACK_ENABLED = process.env.VOICE_ACK_ENABLED === 'true'; // Master ack flag - default OFF (no more "On it, sir." before every response)
 const AGENT_DISPATCH_ACK_ENABLED = process.env.AGENT_DISPATCH_ACK_ENABLED !== 'false'; // Contextual Jarvis-style ack on sub-agent spawn - default ON
-const JARVIS_BOT_ID = process.env.JARVIS_BOT_ID || process.env.CLAWDBOT_BOT_ID || ''; // Filter webhook callback messages to this bot's own ID
+const JARVIS_BOT_ID = process.env.JARVIS_BOT_ID || ''; // Filter webhook callback messages to this bot's own ID
 
 // ── Voice-message auto-reply ──────────────────────────────────────────
 // Transcribes Discord mic-button messages and dispatches to LLM.
@@ -329,7 +336,21 @@ setInterval(() => {
   try {
     const orphans = processOrphans();
     if (orphans.length > 0) {
-      const newOrphans = orphans.filter(t => t.state !== 'escalated');
+      // Final re-check right before the user-facing "Lost task" post.
+      // processOrphans() already double-checks state in task-ledger.js, but a
+      // completion can still land in the microsecond window between the mutation
+      // there and the post below. This cheap re-read via getTask ensures we
+      // never notify the user about a task that has since completed.
+      const newOrphans = orphans.filter(t => {
+        if (t.state === 'escalated') return false;
+        const fresh = getTask(t.taskId);
+        if (!fresh) return false;
+        if (fresh.state === TaskState.COMPLETED || fresh.state === TaskState.FAILED ||
+            fresh.state === TaskState.ESCALATED) {
+          return false; // task finished after we marked it orphaned — don't nag the user
+        }
+        return true;
+      });
       for (const task of newOrphans) {
         const age = ((Date.now() - task.createdAt) / 1000).toFixed(0);
         logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${age}s`);
@@ -565,7 +586,7 @@ const _pendingUtterance = {
   autoSleepAfterTask: false,  // Two-tier sleep: sign-off + task → sleep after response
 };
 
-function flushPendingUtterance() {
+async function flushPendingUtterance() {
   const { userId, parts, conv, speakerName, sentiment, autoSleepAfterTask } = _pendingUtterance;
   _pendingUtterance.timer = null;
   _pendingUtterance.parts = [];
@@ -576,6 +597,68 @@ function flushPendingUtterance() {
 
   const merged = parts.join(' ').trim();
   if (!merged) return;
+
+  // Speaker mode command (voice path) — activate/deactivate without LLM round-trip.
+  // The ack synthesizes through playAudioEnhanced, which will route based on the NEW state:
+  // "on" plays from the just-enabled Sonos (confirms correct speaker), "off" plays on Discord.
+  const _voiceSonosCmd = parseSonosModeCommand(merged);
+  if (_voiceSonosCmd) {
+    // Live voice has no Discord text channel — scope to the configured voice channel.
+    const _voiceChan = process.env.DISCORD_VOICE_CHANNEL_ID || 'voice';
+    if (_voiceSonosCmd.command === 'on') {
+      audioQueue.clear();  // drop stale briefings so they don't blast the speaker
+      setSonosMode(_voiceChan, _voiceSonosCmd.target);
+      const _ctx = { channelId: _voiceChan, threadId: 'main', taskId: 'mode-on', role: 'ack' };
+      setSonosCtx(_ctx); // global fallback for any audio that skips the queue
+      const targetLabel = _voiceSonosCmd.target === 'up' ? 'bedroom' : _voiceSonosCmd.target === 'all' ? 'all speakers' : 'kitchen';
+      const ack = `Speaker mode on, routing to ${targetLabel}.`;
+      postActivity(`🔊 ${ack}`);
+      try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio, _ctx); } catch {}
+      return;
+    } else if (_voiceSonosCmd.command === 'off') {
+      // Drop any queued audio before the mode flip so in-flight Sonos clips don't
+      // blast the speaker after the user already said "off". The ack below is
+      // then synthesized fresh and plays on Discord (not Sonos, since mode is cleared).
+      audioQueue.clear();
+      clearSonosMode(_voiceChan);
+      const ack = 'Speaker mode off.';
+      postActivity(`🔊 ${ack}`);
+      try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio); } catch {}
+      return;
+    }
+  }
+
+  // MCP mode toggle (live voice path) — "mcp on", "full mcp", "enable tools",
+  // "mcp off", "fast mode", etc. Mirrors @mention + voice-message handling.
+  // Live voice has no Discord text channel, so we scope the toggle to the
+  // voice channel ID (same scope as sonos-mode above).
+  //
+  // OWNER ONLY. Speaker diarization typically filters non-owner voices before
+  // reaching here, but we still gate explicitly on userId (set by upstream
+  // speaker-verification) so a diarization miss can't leak MCP toggle to a
+  // guest speaker in the same voice channel.
+  const _voiceMcpCmd = parseMcpModeCommand(merged);
+  if (_voiceMcpCmd) {
+    if (!ALLOWED_USERS.includes(userId)) {
+      logger.warn(`[mcp-mode] voice attempted by non-allowed userId=${userId} — denied`);
+      return; // silent: don't ack, no speaker-pattern to teach a guest user
+    }
+    const _mcpVoiceChan = process.env.DISCORD_VOICE_CHANNEL_ID || 'voice';
+    let ack = '';
+    if (_voiceMcpCmd.mode === 'off') {
+      setChannelMcpMode(_mcpVoiceChan, 'off');
+      ack = 'MCP off. Fast path.';
+    } else if (_voiceMcpCmd.mode === 'full' && _voiceMcpCmd.servers) {
+      setChannelMcpMode(_mcpVoiceChan, _voiceMcpCmd.servers);
+      ack = `MCP subset: ${_voiceMcpCmd.servers.join(', ')}.`;
+    } else if (_voiceMcpCmd.mode === 'full') {
+      setChannelMcpMode(_mcpVoiceChan, 'full');
+      ack = 'Full MCP on. Notion, calendar, Slack, Trello, Linear, hivemind, maps available.';
+    }
+    postActivity(`🔧 ${ack}`);
+    try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio); } catch {}
+    return;
+  }
 
   if (parts.length > 1) {
     logger.info(`🔗 Merged ${parts.length} utterances: "${merged.substring(0, 80)}..."`);
@@ -601,6 +684,15 @@ function flushPendingUtterance() {
   const controller = new AbortController();
   activeTasks.set(taskId, { controller, transcript: merged, startTime: Date.now(), userId, autoSleepAfterTask });
   voiceTasks.set(taskId, { controller, transcript: merged, startTime: Date.now(), userId });
+
+  // Sonos context: channel = the Discord voice channel (for naming wavs per-channel).
+  // In live voice there's no message.channel, so use the configured voice-channel ID.
+  setSonosCtx({
+    channelId: process.env.DISCORD_VOICE_CHANNEL_ID || 'voice',
+    threadId:  'main',
+    taskId,
+    role:      'response',
+  });
 
   // ── Task Ledger: track lifecycle ──
   createTask(taskId, merged, userId);
@@ -666,14 +758,22 @@ function queueUtterance(userId, transcript, conv, speakerName, sentiment) {
   _pendingUtterance.timer = setTimeout(flushPendingUtterance, UTTERANCE_DEBOUNCE_MS);
 }
 
-// ON_SCREEN sentence detection - matches "opening X", "on your screen", etc.
+// ON_SCREEN sentence detection — matches short confirmation sentences like
+// "Opening it on your screen" so the user doesn't hear TTS after visually
+// seeing a window pop up. Length-gated to 120 chars: real confirmations are
+// terse. When the gateway returns a multi-hundred-char explanation that
+// happens to contain "pulling up X's profile" or "your Mac's storage" etc.
+// in the middle of the prose, we DON'T want to silence the whole response.
 function _isScreenSentence(text) {
   if (!text) return false;
-  const lower = text.toLowerCase();
+  const trimmed = text.trim();
+  // Long responses are never just screen confirmations
+  if (trimmed.length > 120) return false;
+  const lower = trimmed.toLowerCase();
   const patterns = [
     'on your screen', 'on your mac', 'on your desktop',
     'opening ', 'pulling up', 'pulled up', 'brought up', 'bringing up',
-    'it\'s open', 'is open now',
+    "it's open", 'is open now',
   ];
   return patterns.some(p => lower.includes(p));
 }
@@ -864,17 +964,28 @@ class AudioQueue {
       return; // Will resume when owner mutes (voiceStateUpdate fires playNext)
     }
 
+    // Peek the next item so we can inspect its ctx before deciding whether to mute.
+    // In sonos mode, owner's Discord mic must NOT be muted (audio plays on speaker, not Discord).
+    const nextItem = this.queue[0];
+    const nextCtx = nextItem?.metadata ?? null;
+    const nextRoutesToSonos = nextCtx?.channelId
+      ? isSonosModeEnabled(nextCtx.channelId)
+      : isSonosModeEnabled(getSonosCtx().channelId);
+
     const wasPlaying = this.playing;
     this.playing = true;
     isSpeaking = true;
     if (!wasPlaying) {
-      serverMuteOwner(true);
+      // Only mute the Discord mic when playback goes to Discord.
+      // Sonos plays on a house speaker, not through the bot's Discord voice
+      // connection, so there's no echo risk and muting would break mic interrupts.
+      if (!nextRoutesToSonos) serverMuteOwner(true);
       // Open conversation window as soon as Jarvis starts speaking so the
       // wake-word bypass is active for the full window after speech ends.
       const _qOwner = _pendingUtterance?.userId || [...activeTasks.values()][0]?.userId;
       if (_qOwner) markBotResponse(_qOwner);
     }
-    let { audioSource } = this.queue.shift();
+    let { audioSource, metadata } = this.queue.shift();
     // Prepend silence to first clip so BT speaker wakes on dead air, not speech
     if (!wasPlaying) {
       const btLeadMs = parseInt(process.env.BT_LEAD_IN_MS || '0');
@@ -884,7 +995,9 @@ class AudioQueue {
         audioSource = padded;
       }
     }
-    try { await playAudioEnhanced(audioSource); } catch (err) { logger.error('Queue playback error:', err.message); }
+    // Pass per-item ctx as override so concurrent handlers don't clobber each other
+    // via the module-global singleton in sonos-mode.js.
+    try { await playAudioEnhanced(audioSource, metadata); } catch (err) { logger.error('Queue playback error:', err.message); }
     // Clean up TTS temp file after playback
     try { unlinkSync(audioSource); } catch {}
     setImmediate(() => this.playNext());
@@ -1112,10 +1225,44 @@ client.once('ready', async () => {
   registerSlashCommands(client).catch(e => logger.warn(`[slash] Registration error: ${e.message}`));
 
   // Start admin HTTP API for the dashboard (no-op if JARVIS_ADMIN_TOKEN unset)
-  import('./admin-api.js').then(m => m.startAdminApi()).catch(e => logger.warn(`[admin-api] start error: ${e.message}`));
+  import('./admin-api.js').then(m => m.startAdminApi({ discordClient: client })).catch(e => logger.warn(`[admin-api] start error: ${e.message}`));
 
   // Patch any live-stream messages left in "thinking" state by a prior crash
   import('./live-stream.js').then(m => m.sweepOrphanedStreams()).catch(e => logger.warn(`[live-stream] sweep error: ${e.message}`));
+
+  // Hydrate the channel registry from per-channel topic markers — durable
+  // recovery in case the local registry file was wiped.
+  import('./channel-topic.js')
+    .then(m => m.hydrateRegistryFromTopics(client, GUILD_ID))
+    .catch(e => logger.warn(`[channel-topic] hydrate error: ${e.message}`));
+
+  // Auto-on full MCP for research channels: #hud + 🔗 handoff threads.
+  // Idempotent — only sets channels that don't already have an explicit
+  // entry in channel-mcp-mode.json, so a user's `mcp off` decision sticks
+  // across restarts.
+  try {
+    const hudId = process.env.HUD_CHANNEL_ID;
+    if (hudId && !getChannelMcpMode(hudId)) {
+      setChannelMcpMode(hudId, 'full');
+      logger.info(`[mcp-mode] bootstrap: set ${hudId} (#hud) → full`);
+    }
+    // Handoff thread IDs live in ~/.local/state/jarvis-voice/handoff-pins.json
+    const handoffFile = `${process.env.HOME}/.local/state/jarvis-voice/handoff-pins.json`;
+    try {
+      const pins = JSON.parse(readFileSync(handoffFile, 'utf8'));
+      for (const entry of Object.values(pins || {})) {
+        const tid = entry?.threadId;
+        if (tid && !getChannelMcpMode(tid)) {
+          setChannelMcpMode(tid, 'full');
+          logger.info(`[mcp-mode] bootstrap: set ${tid} (handoff thread) → full`);
+        }
+      }
+    } catch {
+      // file may not exist yet — fine
+    }
+  } catch (e) {
+    logger.warn(`[mcp-mode] bootstrap error: ${e.message}`);
+  }
 
   // Wire MCP auth notify — DM the owner when any mcporter call needs OAuth re-auth
   setMcpAuthNotify(async (server, tool, url) => {
@@ -2040,8 +2187,155 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   const _workspacePrefix = message._workspaceContext ? `${message._workspaceContext}\n\n` : '';
   const finalPrompt = `${_workspacePrefix}${memoryPrefix}${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
 
+  // Sonos context: name wavs per Discord channel/thread for traceability
+  setSonosCtx({
+    channelId: message.channel?.parentId || message.channelId,
+    threadId:  message.channel?.isThread?.() ? message.channelId : 'main',
+    taskId:    null,
+    role:      'response',
+  });
+
   logger.info(`@mention/reply from ${message.author.tag} in #${message.channel.name}: "${content.substring(0, 80)}"`);
   if (message._workspaceContext) logger.info(`[session-setup] workspace context injected: ${message._workspaceContext}`);
+
+  // Ask-mode toggle — read-only: gateway will spawn claude with
+  // --permission-mode plan so it reads/thinks/discusses but won't execute tools.
+  const _askCmd = parseAskModeCommand(content);
+  if (_askCmd) {
+    if (!isChannelOwner(message.author.id)) {
+      logger.warn(`[ask-mode] @mention attempted by non-owner ${message.author.id} (${message.author.tag}) — denied`);
+      await message.reply('🔒 Ask-mode toggle is owner-only.');
+      return;
+    }
+    const _askId = message.channel?.isThread?.() ? message.channelId : (message.channel?.parentId || message.channelId);
+    setAskMode(_askId, _askCmd.ask);
+    await message.reply(_askCmd.ask
+      ? '🔒 Ask-only mode **ON** for this channel. I\'ll read, think, and answer — no edits, no shell.'
+      : '🔓 Ask-only mode **OFF** for this channel. Full tool access restored.');
+    return;
+  }
+
+  // MCP mode toggle — per-channel/thread full-MCP access (notion, gcal, slack, etc.).
+  // OWNER ONLY: flipping MCP on grants Claude access to the owner's tools
+  // (email, calendar, Slack, etc.) via the subprocess. Any non-owner user
+  // who could trigger this would gain effective access to those tools, so we
+  // gate the parser itself — not just the slash command.
+  const _mcpCmd = parseMcpModeCommand(content);
+  if (_mcpCmd) {
+    if (!isChannelOwner(message.author.id)) {
+      logger.warn(`[mcp-mode] @mention attempted by non-owner ${message.author.id} (${message.author.tag}) — denied`);
+      await message.reply('🔒 MCP mode is owner-only.');
+      return;
+    }
+    const _mcpId = message.channel?.isThread?.() ? message.channelId : (message.channel?.parentId || message.channelId);
+    if (_mcpCmd.mode === 'off') {
+      setChannelMcpMode(_mcpId, 'off');
+      await message.reply('🔧 Full MCP **OFF** for this channel. Fast path restored (intent pre-fetch only).');
+    } else if (_mcpCmd.mode === 'full' && _mcpCmd.servers) {
+      setChannelMcpMode(_mcpId, _mcpCmd.servers);
+      await message.reply(`🔧 MCP subset enabled: **${_mcpCmd.servers.join(', ')}** (~${_mcpCmd.servers.length}s init per turn).`);
+    } else if (_mcpCmd.mode === 'full') {
+      setChannelMcpMode(_mcpId, 'full');
+      await message.reply('🔧 Full MCP **ON** for this channel. Notion, Google Workspace, Slack, Trello, Linear, hAIveMind available. ~2-3s init per voice turn.');
+    }
+    return;
+  }
+
+  // Verbose toggle in-thread — flip per-thread verbose mid-conversation.
+  // Only applies when the user is IN a thread (overrides global). No LLM dispatch.
+  const _verboseCmd = parseVerboseCommand(content);
+  if (_verboseCmd && message.channel?.isThread?.()) {
+    if (!isChannelOwner(message.author.id)) {
+      logger.warn(`[verbose] @mention attempted by non-owner ${message.author.id} — denied`);
+      await message.reply('🔒 Verbose toggle is owner-only.');
+      return;
+    }
+    if (_verboseCmd.verbose) {
+      enableVerboseForThread(message.channelId);
+      await message.reply('Verbose mode on for this thread. Live-streaming from here out.');
+    } else {
+      disableVerboseForThread(message.channelId);
+      await message.reply('Verbose mode off for this thread.');
+    }
+    return;
+  }
+
+  // Handoff command detection — opens a handoff thread with a resume card.
+  // OWNER ONLY: the resume card exposes the owner's Claude chatId + working
+  // directory, which another user could use to resume/hijack the owner's
+  // session on their own machine.
+  if (isHandoffCommand(content)) {
+    if (!isChannelOwner(message.author.id)) {
+      logger.warn(`[handoff] @mention attempted by non-owner ${message.author.id} — denied`);
+      await message.reply('🔒 Handoff is owner-only.');
+      return;
+    }
+    const parent = message.channel?.isThread?.() ? (message.channel.parent || message.channel) : message.channel;
+    const info = resolveHandoff(message);
+    if (!info) {
+      await message.reply("No active session for this channel yet — ask me something first, then hand off.");
+      return;
+    }
+    try {
+      await postResumeCard(parent, info);
+      await message.reply(`Handed off — see 🔗 Handoff thread.`);
+    } catch (err) {
+      logger.warn(`[handoff] failed: ${err.message}`);
+      await message.reply(`Handoff failed: ${err.message}`);
+    }
+    return;
+  }
+
+  // Thread orchestration — "create a thread for X, check Slack/hivemind"
+  // OWNER ONLY: orchestrated threads auto-enable full MCP (notion, gmail,
+  // slack, etc.) so an unguarded non-owner trigger would bypass the MCP gate.
+  const _orchParsed = parseOrchestrationCommand(content);
+  if (_orchParsed) {
+    if (!isChannelOwner(message.author.id)) {
+      logger.warn(`[thread-orch] @mention attempted by non-owner ${message.author.id} — denied`);
+      await message.reply('🔒 Thread orchestration is owner-only.');
+      return;
+    }
+    try {
+      await orchestrateThread(message, _orchParsed, { gatewayUrl: GATEWAY_URL, gatewayToken: GATEWAY_TOKEN });
+    } catch (err) {
+      logger.error(`[@mention] orchestrateThread threw: ${err.message}`);
+      try { await message.reply(`Thread orchestration failed: ${err.message}`); } catch {}
+    }
+    return;
+  }
+
+  // Verbose-on-by-default for all threads: if this message arrived in a thread
+  // and the user hasn't explicitly toggled verbose for this thread, enable it.
+  // Thread conversations benefit from live streaming, and thread-scoped state
+  // keeps parent channels quiet.
+  if (message.channel?.isThread?.() && !hasThreadVerboseOverride(message.channelId)) {
+    enableVerboseForThread(message.channelId);
+  }
+
+  // Speaker mode command detection — activation/deactivation does NOT route through the LLM.
+  // OWNER ONLY: the speakers are the owner's home hardware; a guest toggling
+  // them on/off affects the owner's physical space.
+  const _sonosCmd = parseSonosModeCommand(content);
+  if (_sonosCmd) {
+    if (!isChannelOwner(message.author.id)) {
+      logger.warn(`[sonos] @mention attempted by non-owner ${message.author.id} — denied`);
+      await message.reply('🔒 Speaker mode is owner-only.');
+      return;
+    }
+    const _sonosChan = message.channel?.parentId || message.channelId;
+    if (_sonosCmd.command === 'on') {
+      audioQueue.clear();  // drop any pending briefings/alerts so they don't blast the speaker
+      setSonosMode(_sonosChan, _sonosCmd.target);
+      const targetLabel = _sonosCmd.target === 'up' ? 'bedroom' : _sonosCmd.target === 'all' ? 'all speakers' : 'kitchen';
+      await message.reply(`Speaker mode on for this channel — routing responses to ${targetLabel}.`);
+      return;
+    } else if (_sonosCmd.command === 'off') {
+      clearSonosMode(_sonosChan);
+      await message.reply('Speaker mode off for this channel.');
+      return;
+    }
+  }
 
   // Show typing indicator while we process
   try { await message.channel.sendTyping(); } catch (_) {}
@@ -2058,18 +2352,23 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   // Verbose/live mode: stream into the current thread if already in one.
   // Skip for parent-channel @mentions — the thread response is invisible to the user.
   // Direct reply in the channel (below) is the correct behavior for text mentions.
-  if (isVerboseModeEnabled() && _isThread) {
+  if (isVerboseModeEnabled(message.channelId) && _isThread) {
     try {
       const { createLiveStream } = await import('./live-stream.js');
       const { getTextModel } = await import('./brain.js');
+      const { getChannelModel } = await import('./channel-models.js');
       const discordToken = process.env.DISCORD_TOKEN || '';
-      const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
+      // Per-thread/channel override wins over global model.
+      const model = getChannelModel(message.channelId)
+                 || getChannelModel(message.channel?.parentId)
+                 || (() => { try { return getTextModel(); } catch { return 'claude'; } })();
 
       // Key by actual channel/thread where the message came from.
       // In a thread: reuse that thread itself (Discord disallows nested threads).
       // In a parent channel: reuse or create a dedicated verbose sub-thread.
       const _verboseKey = message.channelId;
       let threadId = _verboseThreads.get(_verboseKey);
+      let justCreated = false;
       if (!threadId) {
         if (_isThread) {
           threadId = message.channelId; // stream directly into the existing thread
@@ -2080,13 +2379,19 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
           });
           threadId = thread.id;
         }
-        _verboseThreads.set(_verboseKey, threadId);
-        logger.info(`[@mention] created verbose thread ${threadId} for key ${_verboseKey}`);
+        justCreated = true;
       } else {
         logger.info(`[@mention] reusing verbose thread ${threadId}`);
       }
 
       const ls = await createLiveStream(threadId, discordToken, { model });
+      // Only cache the thread ID AFTER createLiveStream succeeds — otherwise a
+      // pinned-message-create failure leaves a broken thread ID in the cache,
+      // and every subsequent @mention reuses it and also fails.
+      if (justCreated) {
+        _verboseThreads.set(_verboseKey, threadId);
+        logger.info(`[@mention] created verbose thread ${threadId} for key ${_verboseKey}`);
+      }
       const ac = new AbortController();
       verboseSessions.set(_parentChannelId, { ac, ls });
       let fullText = '';
@@ -2170,6 +2475,20 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     }
 
     logger.info(`@mention: replied (${response.length} chars)`);
+
+    // Speaker mode: @mention text replies don't normally produce TTS. When
+    // mode is on FOR THIS CHANNEL, synthesize so playAudioEnhanced routes it
+    // to the Sonos. Truncate heavily — the speaker should be brief.
+    const _mentionChan = message.channel?.parentId || message.channelId;
+    if (isSonosModeEnabled(_mentionChan)) {
+      try {
+        const spoken = response.length > 500 ? response.slice(0, 500) + '...' : response;
+        const audio = await synthesizeSpeech(spoken);
+        if (audio) audioQueue.add(audio);
+      } catch (e) {
+        logger.warn(`[sonos-mode] @mention synth failed: ${e.message}`);
+      }
+    }
   } catch (err) {
     logger.error(`@mention handler error:`, err.message);
     try {
@@ -2321,15 +2640,82 @@ async function handleVoiceTranscript(message) {
     const buffer = Buffer.from(await response.arrayBuffer());
     writeFileSync(tmpPath, buffer);
 
-    // Transcribe using the configured STT provider
-    const transcript = await transcribeWhisperOnly(tmpPath);
-
-    // Clean up temp file
-    try { unlinkSync(tmpPath); } catch {}
+    // Transcribe using the configured STT provider.
+    // Cleanup in finally so a whisper throw doesn't leave the .ogg file on disk.
+    let transcript;
+    try {
+      transcript = await transcribeWhisperOnly(tmpPath);
+    } finally {
+      try { unlinkSync(tmpPath); } catch {}
+    }
 
     if (transcript && transcript.trim().length > 0) {
       const echoReply = await message.reply({ content: `🎙️ *"${transcript.trim()}"*`, allowedMentions: { repliedUser: false } });
       logger.info(`[voice-transcript] Transcribed voice message from ${message.author.username}: "${transcript.trim().substring(0, 60)}"`);
+
+      // Speaker mode command (voice-message path) — OWNER ONLY.
+      const _vmSonosCmd = parseSonosModeCommand(transcript.trim());
+      if (_vmSonosCmd) {
+        if (!isChannelOwner(message.author.id)) {
+          logger.warn(`[sonos] voice-msg attempted by non-owner ${message.author.id} — denied`);
+          await message.reply('🔒 Speaker mode is owner-only.');
+          return;
+        }
+        const _vmChan = message.channel?.parentId || message.channelId;
+        if (_vmSonosCmd.command === 'on') {
+          audioQueue.clear();  // drop stale briefings so they don't blast the speaker
+          setSonosMode(_vmChan, _vmSonosCmd.target);
+          const targetLabel = _vmSonosCmd.target === 'up' ? 'bedroom' : _vmSonosCmd.target === 'all' ? 'all speakers' : 'kitchen';
+          await message.reply(`Speaker mode on for this channel — routing responses to ${targetLabel}.`);
+          return;
+        } else if (_vmSonosCmd.command === 'off') {
+          clearSonosMode(_vmChan);
+          await message.reply('Speaker mode off for this channel.');
+          return;
+        }
+      }
+
+      // MCP mode command (voice-message path) — OWNER ONLY (same security
+      // reasoning as the @mention handler above: MCP access grants tool
+      // privileges that should never be triggerable by other users).
+      const _vmMcpCmd = parseMcpModeCommand(transcript.trim());
+      if (_vmMcpCmd) {
+        if (!isChannelOwner(message.author.id)) {
+          logger.warn(`[mcp-mode] voice-msg attempted by non-owner ${message.author.id} (${message.author.tag}) — denied`);
+          await message.reply('🔒 MCP mode is owner-only.');
+          return;
+        }
+        const _vmMcpId = message.channel?.isThread?.() ? message.channelId : (message.channel?.parentId || message.channelId);
+        if (_vmMcpCmd.mode === 'off') {
+          setChannelMcpMode(_vmMcpId, 'off');
+          await message.reply('🔧 Full MCP **OFF** for this channel.');
+        } else if (_vmMcpCmd.mode === 'full' && _vmMcpCmd.servers) {
+          setChannelMcpMode(_vmMcpId, _vmMcpCmd.servers);
+          await message.reply(`🔧 MCP subset enabled: **${_vmMcpCmd.servers.join(', ')}**.`);
+        } else if (_vmMcpCmd.mode === 'full') {
+          setChannelMcpMode(_vmMcpId, 'full');
+          await message.reply('🔧 Full MCP **ON** for this channel. ~2-3s init per voice turn.');
+        }
+        return;
+      }
+
+      // Thread orchestration from voice transcript — OWNER ONLY (auto-enables
+      // full MCP on the new thread; same security reason as the @mention handler).
+      const _vmOrchParsed = parseOrchestrationCommand(transcript.trim());
+      if (_vmOrchParsed) {
+        if (!isChannelOwner(message.author.id)) {
+          logger.warn(`[thread-orch] voice-msg attempted by non-owner ${message.author.id} — denied`);
+          await message.reply('🔒 Thread orchestration is owner-only.');
+          return;
+        }
+        try {
+          await orchestrateThread(message, _vmOrchParsed, { gatewayUrl: GATEWAY_URL, gatewayToken: GATEWAY_TOKEN });
+        } catch (err) {
+          logger.error(`[voice-transcript] orchestrateThread threw: ${err.message}`);
+          try { await message.reply(`Thread orchestration failed: ${err.message}`); } catch {}
+        }
+        return;
+      }
 
       // If in a session channel, forward transcript as tmux keystrokes instead of LLM
       if (isSessionChannel(message.channelId) && isChannelOwner(message.author.id)) {
@@ -2342,6 +2728,14 @@ async function handleVoiceTranscript(message) {
         const text = transcript.trim();
         const vmTaskId = ++taskIdCounter;
         createTask(vmTaskId, text, message.author.id);
+
+        // Sonos context: name wavs per Discord channel/thread for traceability
+        setSonosCtx({
+          channelId: message.channel?.parentId || message.channelId,
+          threadId:  message.channel?.isThread?.() ? message.channelId : 'main',
+          taskId:    vmTaskId,
+          role:      'response',
+        });
 
         // Fetch recent Discord messages for context (channel or thread aware)
         let discordChatHistory = [];
@@ -2364,13 +2758,17 @@ async function handleVoiceTranscript(message) {
         const vmAttachCtx = await _buildAttachmentContext(message.attachments);
         const prompt = channelContext + text + vmAttachCtx;
 
-        // Verbose mode: open a live-stream thread on the transcript echo, same as @mention text handler
-        if (isVerboseModeEnabled()) {
+        // Verbose mode: stream into the thread only if already inside one.
+        // For parent-channel voice messages, reply directly — thread response is invisible.
+        if (isVerboseModeEnabled(message.channelId) && _vmIsThread) {
           try {
             const { createLiveStream } = await import('./live-stream.js');
             const { getTextModel } = await import('./brain.js');
+            const { getChannelModel } = await import('./channel-models.js');
             const discordToken = process.env.DISCORD_TOKEN || '';
-            const model = (() => { try { return getTextModel(); } catch { return 'claude'; } })();
+            const model = getChannelModel(message.channelId)
+                       || getChannelModel(message.channel?.parentId)
+                       || (() => { try { return getTextModel(); } catch { return 'claude'; } })();
 
             // Thread continuity: reuse an existing verbose thread for follow-ups
             // rather than spawning a new one for every voice question.
@@ -2378,6 +2776,7 @@ async function handleVoiceTranscript(message) {
             // or if already inside a thread (Discord disallows nested threads).
             const _vmVerboseKey = message.channelId;
             let verboseChannelId = _verboseThreads.get(_vmVerboseKey);
+            let _vmJustCreated = false;
             if (!verboseChannelId) {
               if (_vmIsThread) {
                 verboseChannelId = message.channelId;
@@ -2388,13 +2787,18 @@ async function handleVoiceTranscript(message) {
                 });
                 verboseChannelId = vmThread.id;
               }
-              _verboseThreads.set(_vmVerboseKey, verboseChannelId);
-              logger.info(`[voice-verbose] created verbose thread ${verboseChannelId}`);
+              _vmJustCreated = true;
             } else {
               logger.info(`[voice-verbose] reusing thread ${verboseChannelId}`);
             }
 
             const ls = await createLiveStream(verboseChannelId, discordToken, { model });
+            // Cache only after createLiveStream succeeds — same rationale as
+            // the @mention path above (prevents reusing broken thread IDs).
+            if (_vmJustCreated) {
+              _verboseThreads.set(_vmVerboseKey, verboseChannelId);
+              logger.info(`[voice-verbose] created verbose thread ${verboseChannelId}`);
+            }
             let fullText = '';
             try {
               await generateTextResponseStreaming(prompt, (chunk) => {
@@ -3488,9 +3892,23 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
           authenticatedSession = true;
           logger.info(`🔓 Session authenticated (passphrase override, confidence=${speakerInfo.confidence})`);
         } else {
-          // Speaker doesn't match on wake word - reject with throttled rebuff
+          // Before rebuffing, check if the utterance is a sleep phrase. If the
+          // owner (or anyone) says "that's all / go to sleep / never mind" and
+          // it gets caught here because speaker-verify was low-confidence (codec
+          // noise, TV bleed, distance from mic), we should silently accept the
+          // sleep and NOT play a rebuff that interrupts the user.
+          if (shouldSleep(cleanedTranscript)) {
+            logger.info(`🌙 Sleep phrase at wake-word-reject: "${cleanedTranscript}" — silent drop, not rebuffing`);
+            // Already in IDLE/ACTIVE before this wake-attempt; nothing to transition.
+            // Ambient classifier would pick it up anyway. Stay silent.
+            return;
+          }
+          // Speaker doesn't match on wake word - reject with throttled rebuff.
+          // Set SPEAKER_REBUFF_ENABLED=false in .env to disable the audible
+          // rebuff entirely (logs the rejection silently instead).
+          const rebuffEnabled = (process.env.SPEAKER_REBUFF_ENABLED ?? 'true').toLowerCase() !== 'false';
           const now = Date.now();
-          if (!handleSpeech._lastRebuff || now - handleSpeech._lastRebuff > REBUFF_COOLDOWN_MS) {
+          if (rebuffEnabled && (!handleSpeech._lastRebuff || now - handleSpeech._lastRebuff > REBUFF_COOLDOWN_MS)) {
             handleSpeech._lastRebuff = now;
             const rebuffs = [
               "I'm sorry, I only respond to my principal's voice.",
@@ -3503,8 +3921,10 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
               const audio = await synthesizeSpeech(rebuff);
               if (audio) { audioQueue.add(audio); }
             } catch {}
-          } else {
+          } else if (rebuffEnabled) {
             logger.info(`🔒 Wake word rejected (throttled): confidence=${speakerInfo.confidence}`);
+          } else {
+            logger.info(`🔒 Wake word rejected (rebuff disabled): confidence=${speakerInfo.confidence}`);
           }
           return;
         }
@@ -4388,9 +4808,21 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
               // else: keep accumulating - text doesn't look like a complete sentence yet
             }
             batchText += sentence + ' ';
-            // Also flush if batch already hit min and the BATCH ends on a sentence boundary
-            // (changed: check batchText ends with punctuation, not just sentence length)
-            if (batchText.length >= BATCH_FLUSH_MIN && /[.!?]["''")\]]*\s*$/.test(batchText.trim())) {
+            const trimmedBatch = batchText.trim();
+            const endsSentence = /[.!?]["''")\]]*\s*$/.test(trimmedBatch);
+            // Normal case: batch hit min and ends on a sentence boundary
+            if (batchText.length >= BATCH_FLUSH_MIN && endsSentence) {
+              flushToPipeline(batchText);
+              batchText = '';
+            }
+            // First-chunk fast path: if we haven't spoken ANYTHING yet for this task
+            // and we have a complete short sentence (≥10 chars with terminal punctuation),
+            // flush right away. Catches ack-style responses like "Sending it now." or
+            // "On it, sir." that would otherwise batch and wait minutes for the next
+            // sentence (brain tool-calls can take 30-60s) — user hears nothing in the
+            // meantime and thinks the bot is broken. With this, the ack speaks
+            // immediately and the longer follow-up streams in naturally.
+            else if (batchNum === 0 && endsSentence && batchText.length >= 10) {
               flushToPipeline(batchText);
               batchText = '';
             }
@@ -4751,7 +5183,34 @@ function prependSilence(audioPath, durationMs) {
 // playAudioEnhanced wraps the base speechPlayAudio from speech-output.js with
 // Bluetooth silence padding and server-mute logic needed by the voice bot.
 
-async function playAudioEnhanced(audioPath) {
+async function playAudioEnhanced(audioPath, overrideCtx = null) {
+  // Speaker mode: route the wav to a house Sonos instead of Discord voice.
+  // Single TTS generation, routed here — no redundant sonos-say round-trip.
+  // playWavOnSonos awaits real transport-state completion, so on return the
+  // post-speak attention window (via onDrained → flushPendingSpeaks) starts at
+  // actual wav end, not at TTS generation time.
+  // Prefer per-call ctx (passed via audioQueue metadata) over the module-global
+  // singleton — callers that enqueue audio with ctx avoid the concurrent-clobber
+  // race. overrideCtx may be null/undefined for callers not yet threading it.
+  const _playCtx = (overrideCtx && overrideCtx.channelId) ? overrideCtx : getSonosCtx();
+  if (isSonosModeEnabled(_playCtx.channelId)) {
+    // Mark bot as speaking so mic-interrupt detection (~line 3085) and
+    // post-speak attention window fire correctly. Sonos doesn't echo into
+    // the Discord mic, so we DON'T serverMuteOwner here — that's Discord-audio
+    // specific. Clear isSpeaking on both success and failure paths.
+    isSpeaking = true;
+    try {
+      const { playWavOnSonos } = await import('./sonos-play.js');
+      await playWavOnSonos(audioPath, getSonosTarget(_playCtx.channelId), _playCtx);
+      isSpeaking = false;
+      return; // ← inside try so failures below fall through to Discord playback
+    } catch (err) {
+      isSpeaking = false;
+      logger.warn(`[sonos-mode] playWavOnSonos failed, falling back to Discord: ${err.message}`);
+      // Intentionally NO return — drop through to normal Discord audio playback below.
+    }
+  }
+
   isSpeaking = true;
   // Mute owner if not already handled by audioQueue
   const standalonePlay = !audioQueue.playing;
@@ -4903,7 +5362,7 @@ process.on('SIGTERM', () => {
 const REQUIRED_ENV = [
   'DISCORD_TOKEN',
   'DISCORD_GUILD_ID',
-  'CLAWDBOT_GATEWAY_URL',
+  'JARVIS_GATEWAY_URL',
   'SPEAKER_VERIFY_URL',
 ];
 const missing = REQUIRED_ENV.filter(v => !process.env[v]);

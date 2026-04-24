@@ -301,10 +301,20 @@ async function _hmHttpCall(toolName, args) {
     }),
     signal: AbortSignal.timeout(HAIVEMIND_TIMEOUT_MS),
   });
+  // Previously: this function swallowed HTTP errors and JSON-RPC error envelopes,
+  // returning null. Callers then called _hmBreaker.recordSuccess() on actual
+  // failures — the circuit breaker never opened on a real outage and memory
+  // writes were silently dropped. Now we throw so the breaker records real failures.
+  if (!res.ok) {
+    throw new Error(`haivemind HTTP ${res.status}: ${await res.text().catch(() => '(body unavailable)')}`);
+  }
   const text = await res.text();
   const dataLine = text.split('\n').find(l => l.startsWith('data:'));
   if (!dataLine) return null;
   const envelope = JSON.parse(dataLine.slice(5).trim());
+  if (envelope?.error) {
+    throw new Error(`haivemind JSON-RPC error: ${envelope.error.message || JSON.stringify(envelope.error)}`);
+  }
   return envelope?.result?.content?.[0]?.text ?? null;
 }
 

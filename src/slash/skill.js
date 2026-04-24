@@ -11,9 +11,9 @@ import { homedir } from 'os';
 import { createLiveStream } from '../live-stream.js';
 import logger from '../logger.js';
 
-const GATEWAY_URL     = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL     = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
-const GATEWAY_TOKEN   = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN || '';
+const GATEWAY_TOKEN   = process.env.JARVIS_GATEWAY_TOKEN || '';
 const DISCORD_TOKEN   = process.env.DISCORD_TOKEN || '';
 const MODEL_DEFAULT   = process.env.DEFAULT_MODEL || 'claude';
 

@@ -2,7 +2,7 @@ import logger from './logger.js';
 import { VOICE_NAME } from './wakeword.js';
 import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory, getChannelContext, storeChannelMemory } from './session-manager.js';
 /**
- * Brain Module - Thin voice I/O layer to Clawdbot Gateway
+ * Brain Module - Thin voice I/O layer to Jarvis Gateway
  * 
  * Voice is just another input method. Same agent, same session,
  * same tools. We prepend a short [VOICE] tag so the agent knows
@@ -137,7 +137,7 @@ export function listPersonalities() {
   }
 }
 
-const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Speak endpoint — uses TAILSCALE_IP/ALERT_WEBHOOK_HOST so it works outside Tailscale too
 const _webhookHost = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || 'localhost';
 const _webhookPort = process.env.ALERT_WEBHOOK_PORT || 3335;
@@ -145,8 +145,8 @@ const SPEAK_URL = `http://${_webhookHost}:${_webhookPort}/speak`;
 const STOP_URL = `http://${_webhookHost}:${_webhookPort}/stop`;
 const REPLAY_URL = `http://${_webhookHost}:${_webhookPort}/replay`;
 const SPEAK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || '';
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
-const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;
+const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 let voiceModel = process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude'; // mutable — /model set updates at runtime
 export function getVoiceModel() { return voiceModel; }
@@ -621,7 +621,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           max_tokens: 8192,
           user: getActiveSessionUser(),
           stream: false,
-          model: voiceModel,
+          model: activeModel,
           ...THINKING_PARAM,
         }),
       }, signal);
@@ -695,7 +695,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         max_tokens: 8192,
         user: getActiveSessionUser(),
         stream: true,
-        model: voiceModel,
+        model: activeModel,
         ...THINKING_PARAM,
       }),
     }, signal);
@@ -1320,6 +1320,10 @@ Never skip this step. The voice session cannot see your filesystem — this is t
       body: JSON.stringify({
         message: hookMessage,
         sessionKey: getActiveSessionUser(),
+        // user = channelKey on the gateway side — same convention as /v1/chat/completions.
+        // Without this, /hooks/agent spawns a fresh Claude chat every voice action turn,
+        // so voice ACTION tasks have no memory of prior voice KNOWLEDGE turns (or earlier actions).
+        user: options.sessionUser || getActiveSessionUser(),
         wakeMode: 'now',
         model: options.model || voiceModel || undefined,  // Use passed model override, otherwise voice model
       }),

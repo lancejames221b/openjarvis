@@ -170,7 +170,7 @@ function authOk(req, token) {
   return h === `Bearer ${token}`;
 }
 
-export function startAdminApi() {
+export function startAdminApi({ discordClient } = {}) {
   const token = process.env.JARVIS_ADMIN_TOKEN;
   if (!token) {
     logger.info('[admin-api] JARVIS_ADMIN_TOKEN not set — admin API disabled');
@@ -191,6 +191,101 @@ export function startAdminApi() {
       // ── GET /admin/state ───────────────────────────────────────────────
       if (path === '/admin/state' && req.method === 'GET') {
         return sendJSON(res, 200, stateSnapshot());
+      }
+
+      // ── POST /admin/handoff/from-terminal ──────────────────────────────
+      // Called by the local `handoff --to-discord` script after it rsyncs
+      // its .jsonl up. Creates a new thread in the target channel, binds the
+      // chatId to that thread's channelKey (via gateway session-inject), marks
+      // the thread verbose, and posts a seed breadcrumb.
+      // Body: { channelId, chatId, directory?, model?, topic?, origin? }
+      if (path === '/admin/handoff/from-terminal' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        if (!body.channelId || !body.chatId) {
+          return sendJSON(res, 400, { error: 'channelId and chatId required' });
+        }
+        if (!discordClient) return sendJSON(res, 503, { error: 'discord client not available' });
+        try {
+          const ch = await discordClient.channels.fetch(body.channelId);
+          if (!ch || !ch.threads?.create) {
+            return sendJSON(res, 400, { error: 'target channel does not support threads' });
+          }
+          const topic = (body.topic || `Resumed from terminal (${body.origin || 'gamez'})`).slice(0, 90);
+          const thread = await ch.threads.create({
+            name: `🔗 ${topic}`,
+            autoArchiveDuration: 10080,
+          });
+          const channelKey = `agent:main:discord:channel:${body.channelId}:thread:${thread.id}`;
+
+          // Tell the gateway: "this chatId now belongs to that thread"
+          const gwUrl = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
+          const gwToken = process.env.JARVIS_GATEWAY_TOKEN || '';
+          const injectRes = await fetch(`${gwUrl}/v1/sessions/inject`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gwToken}` },
+            body: JSON.stringify({ channelKey, chatId: body.chatId }),
+          });
+          if (!injectRes.ok) {
+            logger.warn(`[admin-api] session inject failed: HTTP ${injectRes.status}`);
+          }
+
+          // Mark this thread verbose by default.
+          try {
+            const vm = await import('./verbose-mode.js');
+            vm.enableVerboseForThread(thread.id);
+          } catch (e) {
+            logger.warn(`[admin-api] enableVerboseForThread failed: ${e.message}`);
+          }
+
+          // Pin a per-thread model override so the next @mention in this thread
+          // uses the model the user handed off with (e.g., opus for long sessions)
+          // instead of the global default.
+          if (body.model) {
+            try {
+              const cm = await import('./channel-models.js');
+              // Pin for the thread AND the parent channel — belt and suspenders
+              cm.setChannelModel(thread.id, body.model);
+              cm.setChannelModel(body.channelId, body.model);
+            } catch (e) {
+              logger.warn(`[admin-api] setChannelModel failed: ${e.message}`);
+            }
+          }
+
+          // Post seed breadcrumb in the thread.
+          const seed = [
+            `🔗 **Continuing from terminal.**`,
+            body.directory ? `**Dir:** \`${body.directory}\`` : null,
+            body.model ? `**Model:** \`${body.model}\`` : null,
+            `**Session:** \`${body.chatId}\``,
+            '',
+            `@mention me here to pick up. Verbose mode is **on** for this thread.`,
+          ].filter(Boolean).join('\n');
+          await thread.send(seed).catch(() => {});
+
+          return sendJSON(res, 200, { ok: true, threadId: thread.id, channelKey });
+        } catch (err) {
+          logger.warn(`[admin-api] handoff from-terminal failed: ${err.message}`);
+          return sendJSON(res, 500, { error: err.message });
+        }
+      }
+
+      // ── POST /admin/handoff/rotation ───────────────────────────────────
+      // Called by jarvis-gateway when a channel's chatId rotates.
+      // Body: { channelId, newChatId, oldChatId?, model?, directory? }
+      if (path === '/admin/handoff/rotation' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        if (!body.channelId || !body.newChatId) {
+          return sendJSON(res, 400, { error: 'channelId and newChatId required' });
+        }
+        if (!discordClient) return sendJSON(res, 503, { error: 'discord client not available' });
+        try {
+          const { handleRotation } = await import('./handoff-thread.js');
+          await handleRotation(discordClient, body);
+          return sendJSON(res, 200, { ok: true });
+        } catch (err) {
+          logger.warn(`[admin-api] handoff rotation failed: ${err.message}`);
+          return sendJSON(res, 500, { error: err.message });
+        }
       }
 
       // ── POST /admin/persona ────────────────────────────────────────────

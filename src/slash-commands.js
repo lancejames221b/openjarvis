@@ -6,8 +6,9 @@
 
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
 import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
-import { isVerboseModeEnabled, setVerboseMode } from './verbose-mode.js';
+import { isVerboseModeEnabled, setVerboseMode, enableVerboseForThread, disableVerboseForThread, clearThreadVerboseOverride } from './verbose-mode.js';
 import { getVoiceModel, setVoiceModel } from './brain.js';
+import { getChannelModel, setChannelModel, clearChannelModel } from './channel-models.js';
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -47,7 +48,7 @@ import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
   .setName('spawn')
-  .setDescription('Spawn a dedicated cursor-agent session in a new thread')
+  .setDescription('Spawn a dedicated agent session in a new thread')
   .addStringOption(opt =>
     opt.setName('prompt').setDescription('Task or prompt for the agent').setRequired(true))
   .addAttachmentOption(opt =>
@@ -108,15 +109,67 @@ const MODEL_CMD = new SlashCommandBuilder()
             { name: 'opus-plan (deep reasoning)', value: 'opus-plan' },
             { name: 'haiku (fast)', value: 'haiku' },
             { name: 'haiku-low (fastest)', value: 'haiku-low' },
-          )))
+          ))
+      .addBooleanOption(opt =>
+        opt.setName('global').setDescription('Change global default instead of pinning to this thread/channel')))
+  .addSubcommand(sub => sub.setName('clear').setDescription('Clear per-thread/channel pin and fall back to global'))
   .addSubcommand(sub => sub.setName('status').setDescription('Show current active model'));
 
 const VERBOSE_CMD = new SlashCommandBuilder()
   .setName('verbose')
   .setDescription('Stream text channel responses to a live thread to watch activity in real-time')
-  .addSubcommand(sub => sub.setName('on').setDescription('Enable verbose mode'))
-  .addSubcommand(sub => sub.setName('off').setDescription('Disable verbose mode'))
+  .addSubcommand(sub =>
+    sub.setName('on').setDescription('Enable verbose mode')
+      .addBooleanOption(opt =>
+        opt.setName('global').setDescription('Change global default instead of this thread')))
+  .addSubcommand(sub =>
+    sub.setName('off').setDescription('Disable verbose mode')
+      .addBooleanOption(opt =>
+        opt.setName('global').setDescription('Change global default instead of this thread')))
+  .addSubcommand(sub => sub.setName('clear').setDescription('Remove thread override (fall back to global)'))
   .addSubcommand(sub => sub.setName('status').setDescription('Check current verbose mode state'));
+
+const MCP_CMD = new SlashCommandBuilder()
+  .setName('mcp')
+  .setDescription('Toggle full MCP capability per channel/thread (tools: notion, gcal, slack, etc.)')
+  .addSubcommand(sub => sub.setName('on').setDescription('Enable full MCP for this channel/thread (~2s init per turn, full tool access)'))
+  .addSubcommand(sub => sub.setName('off').setDescription('Back to fast mode (empty MCP, intent pre-fetch only)'))
+  .addSubcommand(sub => sub.setName('clear').setDescription('Remove override; fall back to channel/default'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show effective MCP mode + scope'));
+
+const SYNC_SKILLS_CMD = new SlashCommandBuilder()
+  .setName('sync-skills')
+  .setDescription('Rsync allowlisted skills from gamez to generic (owner only)');
+
+const ASK_CMD = new SlashCommandBuilder()
+  .setName('ask')
+  .setDescription('Toggle ask-only mode (read/think/discuss, no edits or shell) for this thread/channel')
+  .addSubcommand(sub => sub.setName('on').setDescription('Enable ask-only mode'))
+  .addSubcommand(sub => sub.setName('off').setDescription('Disable ask-only mode'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show ask-mode state for this channel/thread'));
+
+const INIT_CMD = new SlashCommandBuilder()
+  .setName('init')
+  .setDescription('Initialize or refresh Jarvis metadata (topic + registry)')
+  .addSubcommand(sub =>
+    sub.setName('this')
+      .setDescription('Write jarvis metadata block into the current channel\'s topic')
+      .addStringOption(opt => opt.setName('dir').setDescription('Working directory (default: $HOME/Dev/<channel-name>)').setRequired(false))
+      .addStringOption(opt => opt.setName('model').setDescription('Default model for this channel (default: sonnet)').setRequired(false))
+      .addStringOption(opt => opt.setName('summary').setDescription('What this channel is for').setRequired(false)))
+  .addSubcommand(sub =>
+    sub.setName('create')
+      .setDescription('Create a new channel and pre-initialize it')
+      .addStringOption(opt => opt.setName('name').setDescription('Channel name (lowercase-with-dashes)').setRequired(true))
+      .addStringOption(opt => opt.setName('dir').setDescription('Working directory (default: $HOME/Dev/<name>)').setRequired(false))
+      .addStringOption(opt => opt.setName('model').setDescription('Model for this channel').setRequired(false))
+      .addStringOption(opt => opt.setName('summary').setDescription('What this channel is for').setRequired(false))
+      .addChannelOption(opt => opt.setName('category').setDescription('Parent category').setRequired(false)))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show jarvis metadata for this channel'))
+  .addSubcommand(sub =>
+    sub.setName('all').setDescription('Initialize metadata for EVERY channel (uses LLM to infer summaries if empty)')
+      .addBooleanOption(opt => opt.setName('force').setDescription('Rewrite even channels that already have metadata').setRequired(false))
+      .addBooleanOption(opt => opt.setName('summarize').setDescription('Use LLM to summarize recent messages for channels without summary').setRequired(false)));
 
 const ACCESS_CMD = new SlashCommandBuilder()
   .setName('access')
@@ -256,9 +309,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -350,21 +403,51 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       return true;
     }
     const sub = interaction.options.getSubcommand();
+    const ch = interaction.channel;
+    const isThread = !!ch?.isThread?.();
+    const scopeId = isThread ? ch.id : ch?.id;
+    const parentId = isThread ? (ch.parentId || ch.id) : ch?.id;
+    const scopeLabel = isThread ? `thread` : `channel`;
+    const global = interaction.options.getBoolean?.('global') === true;
+
     if (sub === 'list') {
-      const current = getVoiceModel();
-      const lines = KNOWN_MODELS.map(m => `${m === current ? '▶' : '·'} **${m}**`).join('\n');
-      await interaction.reply({ content: `**Available models:**\n${lines}`, ephemeral: true });
+      const threadPin = scopeId ? getChannelModel(scopeId) : null;
+      const parentPin = parentId ? getChannelModel(parentId) : null;
+      const effective = threadPin || parentPin || getVoiceModel();
+      const lines = KNOWN_MODELS.map(m => `${m === effective ? '▶' : '·'} **${m}**`).join('\n');
+      const scope = threadPin ? `pinned to ${scopeLabel}` : parentPin ? 'pinned to parent channel' : 'global';
+      await interaction.reply({ content: `**Available models** (effective: \`${effective}\` — ${scope}):\n${lines}`, ephemeral: true });
     } else if (sub === 'set') {
       const name = interaction.options.getString('name');
       if (!KNOWN_MODELS.includes(name)) {
         await interaction.reply({ content: `Unknown model \`${name}\`. Choose: ${KNOWN_MODELS.join(', ')}`, ephemeral: true });
         return true;
       }
-      setVoiceModel(name);
-      _persistModel(name);
-      await interaction.reply({ content: `🔄 Voice model switched to **${name}**`, ephemeral: false });
+      if (global) {
+        setVoiceModel(name);
+        _persistModel(name);
+        await interaction.reply({ content: `🌐 **Global** model switched to **${name}**`, ephemeral: false });
+      } else if (scopeId) {
+        setChannelModel(scopeId, name);
+        await interaction.reply({ content: `🔄 Model for this ${scopeLabel} pinned to **${name}**`, ephemeral: false });
+      } else {
+        await interaction.reply({ content: 'No channel context — use `--global` to change the global model.', ephemeral: true });
+      }
+    } else if (sub === 'clear') {
+      if (scopeId) {
+        clearChannelModel(scopeId);
+        await interaction.reply({ content: `Model override cleared for this ${scopeLabel}. Falling back to channel/global.`, ephemeral: false });
+      }
     } else if (sub === 'status') {
-      await interaction.reply({ content: `Active model: **${getVoiceModel()}**`, ephemeral: true });
+      const threadPin = scopeId ? getChannelModel(scopeId) : null;
+      const parentPin = parentId && parentId !== scopeId ? getChannelModel(parentId) : null;
+      const gm = getVoiceModel();
+      const effective = threadPin || parentPin || gm;
+      const parts = [`**effective:** \`${effective}\``];
+      if (threadPin) parts.push(`thread pin: \`${threadPin}\``);
+      if (parentPin) parts.push(`channel pin: \`${parentPin}\``);
+      parts.push(`global: \`${gm}\``);
+      await interaction.reply({ content: parts.join(' | '), ephemeral: true });
     }
     return true;
   }
@@ -375,16 +458,317 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       return true;
     }
     const sub = interaction.options.getSubcommand();
+    const ch = interaction.channel;
+    const isThread = !!ch?.isThread?.();
+    const global = interaction.options.getBoolean?.('global') === true;
+
     if (sub === 'on') {
-      setVerboseMode(true);
-      await interaction.reply({ content: '📡 **Verbose mode ON** — text channel responses stream live to a thread.', ephemeral: false });
+      if (global || !isThread) {
+        setVerboseMode(true);
+        await interaction.reply({ content: global ? '🌐 **Global** verbose ON.' : '📡 **Verbose mode ON** — channel-level.', ephemeral: false });
+      } else {
+        enableVerboseForThread(ch.id);
+        await interaction.reply({ content: '📡 Verbose **ON** for this thread only.', ephemeral: false });
+      }
     } else if (sub === 'off') {
-      setVerboseMode(false);
-      await interaction.reply({ content: '🔇 **Verbose mode OFF** — normal replies.', ephemeral: false });
+      if (global || !isThread) {
+        setVerboseMode(false);
+        await interaction.reply({ content: global ? '🌐 **Global** verbose OFF.' : '🔇 Verbose OFF — channel-level.', ephemeral: false });
+      } else {
+        disableVerboseForThread(ch.id);
+        await interaction.reply({ content: '🔇 Verbose **OFF** for this thread only.', ephemeral: false });
+      }
+    } else if (sub === 'clear') {
+      if (isThread) {
+        clearThreadVerboseOverride(ch.id);
+        await interaction.reply({ content: 'Thread verbose override cleared — falling back to global.', ephemeral: false });
+      }
     } else if (sub === 'status') {
-      const on = isVerboseModeEnabled();
-      await interaction.reply({ content: on ? '📡 **Verbose mode is ON** — text responses stream to threads.' : '🔇 **Verbose mode is OFF**', ephemeral: true });
+      const effective = isVerboseModeEnabled(ch?.id);
+      await interaction.reply({
+        content: effective
+          ? `📡 Verbose is **ON** ${isThread ? '(for this thread)' : '(globally)'}.`
+          : `🔇 Verbose is **OFF** ${isThread ? '(for this thread)' : '(globally)'}.`,
+        ephemeral: true,
+      });
     }
+    return true;
+  }
+
+  if (interaction.commandName === 'ask') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const { setAskMode, isAskModeEnabled } = await import('./channel-ask-mode.js');
+    const sub = interaction.options.getSubcommand();
+    const ch = interaction.channel;
+    const isThread = !!ch?.isThread?.();
+    const scopeId = isThread ? ch.id : ch?.id;
+    const parentId = isThread ? (ch.parentId || ch.id) : ch?.id;
+
+    if (sub === 'on') {
+      setAskMode(scopeId, true);
+      await interaction.reply({ content: `🔒 Ask-only mode **ON** for this ${isThread ? 'thread' : 'channel'}. Read/think/discuss only — no edits, no shell.`, ephemeral: false });
+    } else if (sub === 'off') {
+      setAskMode(scopeId, false);
+      await interaction.reply({ content: `🔓 Ask-only mode **OFF** for this ${isThread ? 'thread' : 'channel'}. Full tool access.`, ephemeral: false });
+    } else if (sub === 'status') {
+      const onScope = isAskModeEnabled(scopeId);
+      const onParent = isAskModeEnabled(parentId);
+      const effective = onScope || onParent;
+      const parts = [`**effective:** ${effective ? '🔒 ON' : '🔓 OFF'}`];
+      if (isThread) parts.push(onScope ? 'thread: ON' : 'thread: OFF');
+      parts.push(onParent ? 'channel: ON' : 'channel: OFF');
+      await interaction.reply({ content: parts.join(' | '), ephemeral: true });
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'sync-skills') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const { handleSyncSkillsCommand } = await import('./slash/sync-skills.js');
+    await handleSyncSkillsCommand(interaction);
+    return true;
+  }
+
+  if (interaction.commandName === 'mcp') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const { setMcpMode, getMcpMode, clearMcpMode } = await import('./channel-mcp-mode.js');
+    const sub = interaction.options.getSubcommand();
+    const ch = interaction.channel;
+    const isThread = !!ch?.isThread?.();
+    const scopeId = ch?.id;
+    const parentId = isThread ? (ch.parentId || ch.id) : ch?.id;
+
+    if (sub === 'on') {
+      setMcpMode(scopeId, 'full');
+      await interaction.reply({ content: `🔧 Full MCP **ON** for this ${isThread ? 'thread' : 'channel'}. Curated tools (notion, gcal, slack, trello, linear, hAIveMind, google-maps) loaded per spawn. ~2-3s init cost per voice turn.`, ephemeral: false });
+    } else if (sub === 'off') {
+      setMcpMode(scopeId, 'off');
+      await interaction.reply({ content: `🔧 Full MCP **OFF** for this ${isThread ? 'thread' : 'channel'}. Fast path (intent pre-fetch only).`, ephemeral: false });
+    } else if (sub === 'clear') {
+      clearMcpMode(scopeId);
+      await interaction.reply({ content: `🔧 MCP override cleared — falling back to parent/default.`, ephemeral: false });
+    } else if (sub === 'status') {
+      const scopeMode = getMcpMode(scopeId);
+      const parentMode = getMcpMode(parentId);
+      const effective = scopeMode ?? parentMode ?? 'off (default)';
+      const describe = v => Array.isArray(v) ? `subset[${v.join(',')}]` : (v ?? '—');
+      const parts = [`**effective:** ${describe(effective)}`];
+      if (isThread) parts.push(`thread: ${describe(scopeMode)}`);
+      parts.push(`channel: ${describe(parentMode)}`);
+      await interaction.reply({ content: parts.join(' | '), ephemeral: true });
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'init') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const { setChannelMeta, getChannelMeta, loadRegistry } = await import('./channel-topic.js');
+    const sub = interaction.options.getSubcommand();
+    const ch = interaction.channel;
+
+    if (sub === 'status') {
+      const parent = ch?.isThread?.() ? (await ch.parent?.fetch?.().catch(() => null) || ch.parent) : ch;
+      if (!parent || !parent.topic !== undefined && parent.topic === null && parent.topic === undefined && !parent.setTopic) {
+        await interaction.reply({ content: 'Cannot read topic from this channel type.', ephemeral: true });
+        return true;
+      }
+      const meta = getChannelMeta(parent);
+      const reg = loadRegistry()[parent.id] || {};
+      const rows = [
+        `**channel:** #${parent.name} (${parent.id})`,
+        `**topic meta:** ${Object.keys(meta).length ? '`' + JSON.stringify(meta) + '`' : '_(none)_'}`,
+        `**registry:** ${Object.keys(reg).length ? '`' + JSON.stringify(reg) + '`' : '_(none)_'}`,
+      ];
+      await interaction.reply({ content: rows.join('\n'), ephemeral: true });
+      return true;
+    }
+
+    if (sub === 'this') {
+      await interaction.deferReply({ ephemeral: false });
+      const parent = ch?.isThread?.() ? (await ch.parent?.fetch?.().catch(() => null) || ch.parent) : ch;
+      if (!parent || !parent.setTopic) {
+        await interaction.editReply('This channel type does not support topics.');
+        return true;
+      }
+      const dir = interaction.options.getString('dir')
+        || (loadRegistry()[parent.id]?.directory)
+        || `${process.env.HOME}/Dev/${(parent.name || '').replace(/[^a-z0-9-]/gi, '-')}`;
+      const model = interaction.options.getString('model')
+        || loadRegistry()[parent.id]?.model
+        || 'claude-sonnet-4-6';
+      const summary = interaction.options.getString('summary')
+        || loadRegistry()[parent.id]?.summary
+        || '';
+
+      try {
+        const meta = { dir, model };
+        if (summary) meta.summary = summary;
+        await setChannelMeta(parent, meta);
+        // Also reflect in the registry with a directory key (registry uses 'directory' not 'dir')
+        const { loadRegistry: _lr, saveRegistry } = await import('./channel-topic.js');
+        const reg = _lr();
+        reg[parent.id] = { ...(reg[parent.id] || {}), name: parent.name, directory: dir, model };
+        if (summary) reg[parent.id].summary = summary;
+        saveRegistry(reg);
+
+        const reply = [
+          `✅ Initialized **#${parent.name}**`,
+          `**dir:** \`${dir}\``,
+          `**model:** \`${model}\``,
+          summary ? `**summary:** ${summary}` : null,
+        ].filter(Boolean).join('\n');
+        await interaction.editReply(reply);
+      } catch (err) {
+        await interaction.editReply(`/init failed: ${err.message}`);
+      }
+      return true;
+    }
+
+    if (sub === 'create') {
+      await interaction.deferReply({ ephemeral: false });
+      try {
+        const guild = interaction.guild;
+        if (!guild) throw new Error('no guild context');
+        const name = interaction.options.getString('name');
+        const category = interaction.options.getChannel('category');
+        const summary = interaction.options.getString('summary') || '';
+        const dir = interaction.options.getString('dir') || `$HOME/Dev/${name.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`;
+        const model = interaction.options.getString('model') || 'claude-sonnet-4-6';
+
+        const { ChannelType } = await import('discord.js');
+        const newChannel = await guild.channels.create({
+          name,
+          type: ChannelType.GuildText,
+          parent: category?.id || null,
+          topic: '', // will be set by setChannelMeta
+        });
+
+        const meta = { dir, model };
+        if (summary) meta.summary = summary;
+        await setChannelMeta(newChannel, meta);
+
+        const { loadRegistry: _lr, saveRegistry } = await import('./channel-topic.js');
+        const reg = _lr();
+        reg[newChannel.id] = { ...(reg[newChannel.id] || {}), name: newChannel.name, directory: dir, model };
+        if (summary) reg[newChannel.id].summary = summary;
+        saveRegistry(reg);
+
+        await interaction.editReply([
+          `✅ Created **<#${newChannel.id}>**`,
+          `**dir:** \`${dir}\``,
+          `**model:** \`${model}\``,
+          summary ? `**summary:** ${summary}` : null,
+        ].filter(Boolean).join('\n'));
+      } catch (err) {
+        await interaction.editReply(`/init create failed: ${err.message}`);
+      }
+      return true;
+    }
+
+    if (sub === 'all') {
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        const guild = interaction.guild;
+        if (!guild) throw new Error('no guild context');
+        const force = interaction.options.getBoolean?.('force') === true;
+        const doSummarize = interaction.options.getBoolean?.('summarize') === true;
+
+        const channels = await guild.channels.fetch();
+        const reg0 = loadRegistry();
+        const candidates = [];
+        for (const c of channels.values()) {
+          if (!c || !c.setTopic) continue;
+          // text/announcement channels only
+          if (c.type !== 0 && c.type !== 5) continue;
+          const entry = reg0[c.id] || {};
+          const alreadyInitialized = entry.directory && entry.model && (c.topic || '').includes('[jarvis]');
+          if (alreadyInitialized && !force) continue;
+          candidates.push(c);
+        }
+
+        await interaction.editReply(`Scanning ${candidates.length} channel(s)... this may take a minute.`);
+
+        let touched = 0;
+        let summarized = 0;
+        for (const c of candidates) {
+          try {
+            const name = c.name;
+            const entry = loadRegistry()[c.id] || {};
+            const dir = entry.directory || `$HOME/Dev/${(name || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`;
+            const model = entry.model || 'claude-sonnet-4-6';
+            let summary = entry.summary || '';
+
+            if (!summary && doSummarize) {
+              try {
+                const msgs = await c.messages.fetch({ limit: 10 }).catch(() => null);
+                const text = msgs && msgs.size > 0
+                  ? [...msgs.values()].reverse()
+                      .map(m => `${m.author?.username || '?'}: ${(m.content || '').slice(0, 200)}`)
+                      .join('\n')
+                  : '';
+                if (text) {
+                  const { default: fetch } = await import('node-fetch');
+                  const gwUrl = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
+                  const gwToken = process.env.JARVIS_GATEWAY_TOKEN || '';
+                  const prompt = `In ONE short sentence (under 20 words), summarize what this Discord channel "#${name}" is for, based on recent messages. No preamble, just the sentence.\n\n${text.slice(0, 3000)}`;
+                  const res = await fetch(`${gwUrl}/v1/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gwToken}` },
+                    body: JSON.stringify({
+                      model: 'haiku',
+                      messages: [{ role: 'user', content: prompt }],
+                      stream: false,
+                    }),
+                    signal: AbortSignal.timeout(20000),
+                  }).catch(() => null);
+                  if (res && res.ok) {
+                    const data = await res.json();
+                    const out = data?.choices?.[0]?.message?.content?.trim();
+                    if (out) {
+                      summary = out.replace(/^["']|["']$/g, '').slice(0, 180);
+                      summarized++;
+                    }
+                  }
+                }
+              } catch {}
+            }
+
+            const meta = { dir, model };
+            if (summary) meta.summary = summary;
+            await setChannelMeta(c, meta);
+
+            // Mirror to registry
+            const reg = loadRegistry();
+            reg[c.id] = { ...(reg[c.id] || {}), name: c.name, directory: dir, model };
+            if (summary) reg[c.id].summary = summary;
+            const { saveRegistry } = await import('./channel-topic.js');
+            saveRegistry(reg);
+
+            touched++;
+            await new Promise(r => setTimeout(r, 700)); // rate-limit gentle
+          } catch (err) {
+            logger.warn(`[init all] ${c.name}: ${err.message}`);
+          }
+        }
+        await interaction.followUp({ content: `✅ Initialized **${touched}** channel(s)${doSummarize ? ` (${summarized} summarized via LLM)` : ''}.`, ephemeral: true });
+      } catch (err) {
+        await interaction.editReply(`/init all failed: ${err.message}`);
+      }
+      return true;
+    }
+
     return true;
   }
 

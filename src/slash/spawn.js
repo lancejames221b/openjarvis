@@ -1,20 +1,22 @@
 /**
- * /spawn — Dedicated cursor-agent session in a Discord thread.
+ * /spawn — Dedicated agent session in a Discord thread.
  *
  * Creates a thread from the interaction's channel, pins a live view message,
- * streams cursor-agent output to it every 2 s, posts final result when done.
+ * streams agent output to it every 2 s, posts final result when done.
+ * Model is chosen by the `model` option or auto-selected from the prompt keywords.
  *
  * Thread lifetime = session lifetime. The thread persists as history.
  */
 
 import { createLiveStream } from '../live-stream.js';
+import { setMcpMode } from '../channel-mcp-mode.js';
 import { verboseSessions } from '../verbose-sessions.js';
 import { abortAllVoiceTasks } from '../voice-tasks.js';
 import logger from '../logger.js';
 
-const GATEWAY_URL      = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL      = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
 const COMPLETIONS_URL  = `${GATEWAY_URL}/v1/chat/completions`;
-const GATEWAY_TOKEN    = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN || '';
+const GATEWAY_TOKEN    = process.env.JARVIS_GATEWAY_TOKEN || '';
 const DISCORD_TOKEN    = process.env.DISCORD_TOKEN || '';
 const MODEL_DEFAULT    = process.env.DISPATCH_MODEL || process.env.DEFAULT_MODEL || 'claude';
 const MODEL_DEEP       = process.env.DISPATCH_MODEL_DEEP || MODEL_DEFAULT;
@@ -112,6 +114,13 @@ export async function handleSpawnCommand(interaction) {
   if (_activeSessions.has(threadId)) {
     await interaction.editReply(`Agent already running in <#${threadId}>. Use /stop first.`);
     return;
+  }
+
+  // Dedicated agent threads get full MCP — this is where the user explicitly
+  // asked for agent power. The normal voice back-and-forth (#jarvis-voice) stays
+  // on the fast empty-MCP path; heavy tool work routes through /spawn threads.
+  if (newThread) {
+    try { setMcpMode(threadId, 'full'); } catch (err) { logger.warn(`[spawn] setMcpMode failed: ${err.message}`); }
   }
 
   await interaction.editReply(
@@ -271,6 +280,9 @@ export async function runVoiceSpawn(task, textChannelId, botToken, model = null)
     logger.warn(`[spawn] runVoiceSpawn: thread ${threadId} already active, skipping duplicate`);
     return threadId;
   }
+
+  // Same rule as the slash path above — agent threads get full MCP.
+  try { setMcpMode(threadId, 'full'); } catch (err) { logger.warn(`[spawn] setMcpMode failed: ${err.message}`); }
 
   // Start live stream and fire off agent (background — does not block caller).
   // createLiveStream throws if Discord rejects the pin-message create call —

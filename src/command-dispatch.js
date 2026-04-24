@@ -19,6 +19,7 @@ import { classifyIntent as haikuClassify } from './haiku-intent.js';
 import { findProjectMapByName } from './slash/project-map.js';
 import { startSessionDirect, buildResumeCommand } from './slash/session.js';
 import { getBox, getCwd } from './slash/box-state.js';
+import { MCP_INTENT_HANDLERS, dispatchMcpIntent } from './mcp-intent-handlers.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 
@@ -387,7 +388,12 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
             const box = getBox();
             const cwd = getCwd();
             const command = buildResumeCommand(null);
-            startSessionDirect({ channelId, command, boxName: box?.name, cwd, label: 'continue' })
+            // Previously referenced bare `channelId` which is not a parameter of
+            // dispatchCommand — threw ReferenceError on every "continue" command,
+            // silently caught by the outer try/catch so the feature was dead.
+            const focus = getFocus();
+            const continueChannelId = focus?.channelId || null;
+            startSessionDirect({ channelId: continueChannelId, command, boxName: box?.name, cwd, label: 'continue' })
               .catch(err => logger.warn(`[dispatch] async continue failed: ${err.message}`));
             return { type: 'shortcut', speech: 'Continuing session.', silent: false, discordText: null };
           }
@@ -410,6 +416,37 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
           if (!cwd) cwd = getCwd() || null;
           const workspaceContext = cwd ? `[WORKSPACE: ${cwd}]` : null;
           return { type: 'brain', transcript: cleanedTranscript, workspaceContext };
+        }
+
+        // MCP-backed lookups (calendar / gmail / notion / slack). The handler
+        // calls mcporter directly and returns a text block; we prepend that to
+        // the prompt as workspaceContext so Claude answers from pre-fetched data
+        // without needing MCP tools inside its subprocess.
+        if (MCP_INTENT_HANDLERS[haikuResult.intent]) {
+          try {
+            const fetched = await dispatchMcpIntent(haikuResult.intent, haikuResult.params || {});
+            const workspaceContext = fetched
+              ? `${fetched}\n\n[You were asked a question answerable from the data above. Respond conversationally based only on that data. Do not invent details.]`
+              : null;
+            return { type: 'brain', transcript: cleanedTranscript, workspaceContext };
+          } catch (err) {
+            logger.warn(`[dispatch] MCP intent handler failed: ${err.message}`);
+            // Fall through to plain brain call
+            return { type: 'brain', transcript: cleanedTranscript };
+          }
+        }
+
+        // Auto-escalate to agent spawn when Haiku sees tool-heavy work
+        // (shell, SSH, file edits, browser, etc.) that the fast pre-fetch
+        // intents don't cover. The spawn creates a dedicated thread with
+        // full MCP via setMcpMode in slash/spawn.js, so Claude has tools;
+        // meanwhile Jarvis only TTS-acks "Spawning agent..." so voice stays
+        // responsive. Keeps the normal back-and-forth on the empty-MCP fast
+        // path while still handling arbitrary tool-use requests cleanly.
+        if (haikuResult.intent === 'needs_agent') {
+          const task = haikuResult.params?.task || cleanedTranscript;
+          logger.info(`[dispatch] needs_agent → voice_spawn: "${task.substring(0, 60)}"`);
+          return { type: 'voice_spawn', task };
         }
       }
     } catch (err) {

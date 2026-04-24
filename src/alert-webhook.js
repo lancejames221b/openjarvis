@@ -30,7 +30,7 @@ const ESCALATION_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour before escalation
 const ESCALATION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // Check every 5 minutes
 
 // ── Smart Reminder Escalation ────────────────────────────────────────
-// Tiers: 0=voice (immediate), 1=text (1min), 2=DM (15min), 3=clawdbot gateway (30min)
+// Tiers: 0=voice (immediate), 1=text (1min), 2=DM (15min), 3=Jarvis gateway (30min)
 const REMINDER_ESCALATION_TIERS = [
   { name: 'voice',    delayMs: 0 },
   { name: 'text',     delayMs: 60 * 1000 },        // 1 minute
@@ -223,8 +223,8 @@ async function executeReminderTier(id, reminder) {
       case 'gateway': {
         // Tier 3: Send through Jarvis gateway to reach whatever channel the owner is active on
         try {
-          const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-          const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+          const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
+          const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;
           
           const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
             method: 'POST',
@@ -252,7 +252,7 @@ async function executeReminderTier(id, reminder) {
           
           if (res.ok) {
             reminder.delivered = true;
-            logger.info(`🌐 Reminder #${id} delivered via Clawdbot gateway`);
+            logger.info(`🌐 Reminder #${id} delivered via Jarvis gateway`);
           } else {
             logger.error(`❌ Reminder #${id} gateway delivery failed: ${res.status}`);
           }
@@ -1148,8 +1148,8 @@ app.post('/handoff', async (req, res) => {
   
   // Inject handoff context into the gateway session so AI has full context
   try {
-    const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-    const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
+    const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;
     const SESSION_USER = process.env.SESSION_USER || 'jarvis-voice-user';
     const threadInfo = threadId ? `\nThread ID: ${threadId} (in channel ${channelId})` : (channelId ? `\nChannel ID: ${channelId}` : '');
     const postBackInfo = threadId 
@@ -1208,7 +1208,7 @@ export function hasPendingHandoffs() {
  * If delayMs is provided, reminder fires after that delay from now.
  * If neither, fires immediately.
  * 
- * Escalation path: voice → text (1m) → DM (15m) → Clawdbot gateway (30m)
+ * Escalation path: voice → text (1m) → DM (15m) → Jarvis gateway (30m)
  */
 app.post('/remind', async (req, res) => {
   const authHeader = req.headers.authorization;
@@ -1588,8 +1588,8 @@ app.post('/test-voice', async (req, res) => {
 
   try {
     // Sanity-check the gateway directly before calling brain
-    const gwUrl = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
-    const gwToken = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const gwUrl = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
+    const gwToken = process.env.JARVIS_GATEWAY_TOKEN;
     const pingRes = await fetch(`${gwUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {

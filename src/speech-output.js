@@ -6,7 +6,7 @@
  */
 
 import { createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior, VoiceConnectionStatus } from '@discordjs/voice';
-import { unlinkSync, copyFileSync } from 'fs';
+import { unlinkSync, copyFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { synthesizeSpeech, synthesizeChatterboxStream, splitIntoSentences, isTTSAvailable } from './tts.js';
@@ -116,20 +116,39 @@ export { audioQueue };
 // ── Audio Playback ───────────────────────────────────────────────────
 export function playAudio(filePath) {
   return new Promise((resolve, reject) => {
+    let timeoutHandle = null;
     try {
+      // Safety timeout sized to the audio's real duration + 3s slack. Before
+      // this fix, if AudioPlayer never emitted Idle/error (e.g. voice connection
+      // dropped mid-play, player disposed), the Promise pended forever, the
+      // queue deadlocked, and isSpeaking stayed true — silent catastrophic stall.
+      let maxDurationMs = 30_000; // fallback
+      try {
+        const size = statSync(filePath).size;
+        // WAV 24kHz mono 16-bit = 48kB/s; MP3 ~16kB/s. Use the smaller bytes/sec
+        // so the timeout is generous (overestimates duration).
+        maxDurationMs = Math.max(5_000, (size / 16000) * 1000 + 3_000);
+      } catch {}
+
       const resource = createAudioResource(filePath);
       player.play(resource);
-      
+
       const onIdle = () => { cleanup(); resolve(); };
       const onError = (err) => { cleanup(); reject(err); };
       const cleanup = () => {
+        if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
         player.off(AudioPlayerStatus.Idle, onIdle);
         player.off('error', onError);
       };
-      
+
       player.once(AudioPlayerStatus.Idle, onIdle);
       player.once('error', onError);
+      timeoutHandle = setTimeout(() => {
+        cleanup();
+        reject(new Error(`playAudio timed out after ${maxDurationMs}ms`));
+      }, maxDurationMs);
     } catch (err) {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       reject(err);
     }
   });
@@ -256,15 +275,19 @@ export async function speakPhrase(text) {
  * Used for greetings, mode change acks, etc.
  */
 export async function speakAndWait(text) {
+  let audio = null;
   try {
-    const audio = await synthesizeSpeech(text);
-    if (audio) {
-      await playAudio(audio);
-      try { unlinkSync(audio); } catch {}
-      return true;
-    }
-  } catch {}
-  return false;
+    audio = await synthesizeSpeech(text);
+    if (!audio) return false;
+    await playAudio(audio);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    // Unlink the wav on EVERY exit path — previously the unlink was after
+    // playAudio and only ran on success, leaking /tmp wavs on any throw.
+    if (audio) { try { unlinkSync(audio); } catch {} }
+  }
 }
 
 // ── Pre-cached Ack Phrases ───────────────────────────────────────────
