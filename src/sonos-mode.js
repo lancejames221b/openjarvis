@@ -18,6 +18,10 @@ import logger from './logger.js';
 /** @type {Map<string, { target: string }>} */
 const _byChannel = new Map();
 
+// Remembers the last explicitly-set target so voice "speaker on" with no room
+// specified reuses the most recently chosen room instead of defaulting to kitchen.
+let _lastTarget = 'down';
+
 export function isSonosModeEnabled(channelId) {
   return _byChannel.has(String(channelId || ''));
 }
@@ -26,10 +30,16 @@ export function getSonosTarget(channelId) {
   return _byChannel.get(String(channelId || ''))?.target || 'down';
 }
 
+/** The most recently used Sonos target — used as default when no room is specified. */
+export function getLastSonosTarget() {
+  return _lastTarget;
+}
+
 export function setSonosMode(channelId, target = 'down') {
   const key = String(channelId || '');
   if (!key) return;
   _byChannel.set(key, { target });
+  _lastTarget = target;
   logger.info(`[sonos-mode] enabled for ${key} → target: ${target}`);
 }
 

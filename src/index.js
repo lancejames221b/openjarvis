@@ -57,7 +57,7 @@ import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
-import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx, sonosScopeKey, VOICE_SCOPE } from './sonos-mode.js';
+import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx, resetSonosCtx, sonosScopeKey, VOICE_SCOPE, getLastSonosTarget } from './sonos-mode.js';
 import { isHandoffCommand, resolveHandoff, parseVerboseCommand, parseAskModeCommand, parseMcpModeCommand } from './handoff-resolver.js';
 import { setMcpMode as setChannelMcpMode, getMcpMode as getChannelMcpMode } from './channel-mcp-mode.js';
 import { postResumeCard } from './handoff-thread.js';
@@ -2345,6 +2345,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     } else if (_sonosCmd.command === 'off') {
       clearSonosMode(_sonosChan);
       clearSonosMode(VOICE_SCOPE);
+      resetSonosCtx();
       await message.reply('Speaker mode off for this channel.');
       return;
     }
@@ -2685,6 +2686,7 @@ async function handleVoiceTranscript(message) {
         } else if (_vmSonosCmd.command === 'off') {
           clearSonosMode(_vmChan);
           clearSonosMode(VOICE_SCOPE);
+          resetSonosCtx();
           await message.reply('Speaker mode off for this channel.');
           return;
         }
@@ -3891,18 +3893,22 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       if (_sonosQuick) {
         if (_sonosQuick.command === 'on') {
           audioQueue.clear();
-          setSonosMode(VOICE_SCOPE, _sonosQuick.target);
+          // If no room specified, reuse the last explicitly-chosen room rather than defaulting to kitchen
+          const _target = _sonosQuick.target || getLastSonosTarget();
+          setSonosMode(VOICE_SCOPE, _target);
           const _ctx = { channelId: VOICE_SCOPE, threadId: 'main', taskId: 'mode-on', role: 'ack' };
           setSonosCtx(_ctx);
-          const targetLabel = _sonosQuick.target === 'up' ? 'bedroom' : _sonosQuick.target === 'all' ? 'all speakers' : 'kitchen';
+          const targetLabel = _target === 'up' ? 'bedroom' : _target === 'all' ? 'all speakers' : 'kitchen';
           const ack = `Speaker mode on, routing to ${targetLabel}.`;
           postActivity(`🔊 ${ack}`);
           try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio, _ctx); } catch {}
         } else if (_sonosQuick.command === 'off') {
           audioQueue.clear();
           clearSonosMode(VOICE_SCOPE);
+          // Reset ctx so the off-ack plays through Discord voice, not the now-cleared Sonos target
+          resetSonosCtx();
           const ack = 'Speaker mode off.';
-          postActivity(`🔊 ${ack}`);
+          postActivity(`🔇 ${ack}`);
           try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio); } catch {}
         }
         markBotResponse(userId);

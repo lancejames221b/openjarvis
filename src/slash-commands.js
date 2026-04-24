@@ -524,13 +524,13 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
-    const { setSonosMode, clearSonosMode, isSonosModeEnabled, getSonosTarget, listSonosChannels, sonosScopeKey, VOICE_SCOPE } = await import('./sonos-mode.js');
+    const { setSonosMode, clearSonosMode, isSonosModeEnabled, getSonosTarget, listSonosChannels, sonosScopeKey, VOICE_SCOPE, getLastSonosTarget, resetSonosCtx } = await import('./sonos-mode.js');
     const sub = interaction.options.getSubcommand();
     const ch = interaction.channel;
     const scopeId = sonosScopeKey(ch);
 
     if (sub === 'on') {
-      const room = interaction.options.getString('room') || 'down';
+      const room = interaction.options.getString('room') || getLastSonosTarget();
       setSonosMode(scopeId, room);
       setSonosMode(VOICE_SCOPE, room);  // also route voice-call TTS to the same Sonos
       const label = room === 'up' ? 'bedroom' : room === 'all' ? 'everywhere' : 'kitchen';
@@ -538,6 +538,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
     } else if (sub === 'off') {
       clearSonosMode(scopeId);
       clearSonosMode(VOICE_SCOPE);
+      resetSonosCtx();
       await interaction.reply({ content: '🔇 Speaker mode **OFF** — back to Discord voice.' });
     } else if (sub === 'status') {
       const enabled = isSonosModeEnabled(scopeId);
