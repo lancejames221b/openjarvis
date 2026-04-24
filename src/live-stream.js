@@ -263,7 +263,21 @@ function _dedupSentences(text) {
 
 function _truncate(s) {
   if (s.length <= MAX_BODY_LEN) return s;
-  return '…' + s.slice(-(MAX_BODY_LEN - 1));
+  // Rolling window: keep the newest complete lines that fit, drop oldest.
+  // Prevents mid-entry cuts on tool-use blocks (🔧 Bash › … ↳ ✓ …).
+  const lines = s.split('\n');
+  const kept = [];
+  let len = 0;
+  const budget = MAX_BODY_LEN - 2; // reserve 2 chars for '…\n' prefix
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const add = lines[i].length + (kept.length > 0 ? 1 : 0); // +1 for \n between lines
+    if (len + add > budget) break;
+    kept.unshift(lines[i]);
+    len += add;
+  }
+  // Fallback: single line too long — char-truncate the tail
+  if (kept.length === 0) return '…' + s.slice(-(MAX_BODY_LEN - 1));
+  return '…\n' + kept.join('\n');
 }
 
 function _chunkText(text, max) {
