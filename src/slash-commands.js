@@ -281,6 +281,30 @@ const PLAN_CMD = new SlashCommandBuilder()
   .addSubcommand(sub => sub.setName('off').setDescription('Disable plan mode (back to default model)'))
   .addSubcommand(sub => sub.setName('status').setDescription('Show current plan mode state'));
 
+const ROOM_OPTION = opt =>
+  opt.setName('room')
+    .setDescription('Room/target: kitchen, bedroom, up, down, all (default: kitchen)')
+    .setRequired(false)
+    .addChoices(
+      { name: 'kitchen (down)', value: 'down' },
+      { name: 'bedroom (up)',   value: 'up' },
+      { name: 'everywhere',     value: 'all' },
+    );
+
+const SPEAKER_CMD = new SlashCommandBuilder()
+  .setName('speaker')
+  .setDescription('Route Jarvis voice output to a Sonos speaker')
+  .addSubcommand(sub => sub.setName('on').setDescription('Enable speaker mode').addStringOption(ROOM_OPTION))
+  .addSubcommand(sub => sub.setName('off').setDescription('Disable speaker mode — back to Discord voice'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show current speaker routing'));
+
+const SONOS_CMD = new SlashCommandBuilder()
+  .setName('sonos')
+  .setDescription('Alias for /speaker — route Jarvis audio to Sonos')
+  .addSubcommand(sub => sub.setName('on').setDescription('Enable Sonos mode').addStringOption(ROOM_OPTION))
+  .addSubcommand(sub => sub.setName('off').setDescription('Disable Sonos mode'))
+  .addSubcommand(sub => sub.setName('status').setDescription('Show current Sonos routing'));
+
 const VISUAL_CMD = new SlashCommandBuilder()
   .setName('visual')
   .setDescription('Toggle visual mode — responses go to text instead of voice')
@@ -309,9 +333,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -491,6 +515,39 @@ export async function handleSlashCommand(interaction, allowedUsers) {
           : `🔇 Verbose is **OFF** ${isThread ? '(for this thread)' : '(globally)'}.`,
         ephemeral: true,
       });
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'speaker' || interaction.commandName === 'sonos') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    const { setSonosMode, clearSonosMode, isSonosModeEnabled, getSonosTarget, listSonosChannels, sonosScopeKey, VOICE_SCOPE } = await import('./sonos-mode.js');
+    const sub = interaction.options.getSubcommand();
+    const ch = interaction.channel;
+    const scopeId = sonosScopeKey(ch);
+
+    if (sub === 'on') {
+      const room = interaction.options.getString('room') || 'down';
+      setSonosMode(scopeId, room);
+      setSonosMode(VOICE_SCOPE, room);  // also route voice-call TTS to the same Sonos
+      const label = room === 'up' ? 'bedroom' : room === 'all' ? 'everywhere' : 'kitchen';
+      await interaction.reply({ content: `🔊 Speaker mode **ON** → ${label}.` });
+    } else if (sub === 'off') {
+      clearSonosMode(scopeId);
+      clearSonosMode(VOICE_SCOPE);
+      await interaction.reply({ content: '🔇 Speaker mode **OFF** — back to Discord voice.' });
+    } else if (sub === 'status') {
+      const enabled = isSonosModeEnabled(scopeId);
+      if (enabled) {
+        const target = getSonosTarget(scopeId);
+        const label = target === 'up' ? 'bedroom' : target === 'all' ? 'everywhere' : 'kitchen';
+        await interaction.reply({ content: `🔊 Speaker mode is **ON** → ${label}.`, ephemeral: true });
+      } else {
+        await interaction.reply({ content: '🔇 Speaker mode is **OFF**.', ephemeral: true });
+      }
     }
     return true;
   }

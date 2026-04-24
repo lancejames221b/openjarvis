@@ -103,7 +103,7 @@ export async function handleNotionFetch(params = {}) {
 
   try {
     // Search first to find the page
-    const searchResult = await mcpCall('notion-oauth', 'notion-search', {
+    const searchResult = await mcpCall('notion', 'notion-search', {
       query: q,
       query_type: 'internal',
     });
@@ -112,7 +112,7 @@ export async function handleNotionFetch(params = {}) {
     // The search result is text; pull the first URL and pass to notion-fetch
     const urlMatch = searchResult?.match(/https:\/\/[a-z0-9.-]*notion\.so\/[^\s"]+/i);
     if (urlMatch) {
-      const fetchResult = await mcpCall('notion-oauth', 'notion-fetch', {
+      const fetchResult = await mcpCall('notion', 'notion-fetch', {
         urls: JSON.stringify([urlMatch[0]]),
       });
       return `[NOTION PAGE — ${q}]\n${_clip(fetchResult, 3000)}`;
@@ -136,7 +136,7 @@ export async function handleNotionMeeting(params = {}) {
     if (titleQuery) {
       args['filters'] = JSON.stringify({ title: { string_contains: titleQuery } });
     }
-    const result = await mcpCall('notion-oauth', 'notion-query-meeting-notes', args);
+    const result = await mcpCall('notion', 'notion-query-meeting-notes', args);
     return `[NOTION MEETING NOTES${titleQuery ? ' — "' + titleQuery + '"' : ' — recent'}]\n${_clip(result, 3000)}`;
   } catch (err) {
     logger.warn(`[mcp-intent] notion_meeting failed: ${err.message}`);

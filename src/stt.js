@@ -357,6 +357,10 @@ function detectHallucination(text) {
 
   // 4. Brand-name soup — transcript is mostly comma-separated proper nouns with no verbs
   //    Heuristic: if >70% of "words" are title-cased or known brands and there's no verb
+  //    Skip for mode-toggle commands — short title-case phrases like "Speaker Mode Ons,
+  //    Kitchens" would otherwise get dropped before the downstream parser sees them.
+  const MODE_TOGGLE_KEYWORDS = /\b(speaker|sonos|kitchen|bedroom|upstairs|downstairs|living\s?room|mcp|visual|mobile|wake|sleep|persona|focus|enroll)\b/i;
+  if (MODE_TOGGLE_KEYWORDS.test(trimmed)) return null;
   const words = trimmed.split(/[\s,]+/).filter(w => w.length > 1);
   if (words.length >= 3) {
     const KNOWN_BRANDS = new Set([
@@ -417,8 +421,9 @@ function postProcessTranscript(text) {
   processed = processed.replace(/\band\s+roll\s+(my\s+)?voice/gi, 'enroll my voice');
 
   // Name corrections — Whisper commonly mishears "Jarvis" as these
-  processed = processed.replace(/\b(travis|garvis|jarvas|jarvus|jarves|jonas|journals?|jar\s*vis|jervis|jarv[ie]ce|djarvis|charges|dervis)\b/gi, 'Jarvis');
-  // "Hey Jonas" / "Hey journals" → "Hey Jarvis"
+  // Note: "journals" and "charges" are common English words — keep them only in the "Hey X" prefix pattern below
+  processed = processed.replace(/\b(travis|garvis|jarvas|jarvus|jarves|jonas|jar\s*vis|jervis|jarv[ie]ce|djarvis|dervis)\b/gi, 'Jarvis');
+  // "Hey Jonas" / "Hey journals" / "Hey charges" → "Hey Jarvis"
   processed = processed.replace(/\bhey[,.]?\s+(jonas|journals?|jervis|charges)\b/gi, 'Hey Jarvis');
 
   // Context-aware corrections (common mishearings)

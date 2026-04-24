@@ -333,7 +333,7 @@ export async function preloadAckPhrases(synthesizeFn) {
 export function getRandomCachedAck() {
   if (ACK_CACHE.length === 0) return null;
   const src = ACK_CACHE[Math.floor(Math.random() * ACK_CACHE.length)];
-  const dest = join(tmpdir(), `ack_play_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+  const dest = join(tmpdir(), `jarvis-ack_play_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
   try {
     copyFileSync(src, dest);
     return dest;

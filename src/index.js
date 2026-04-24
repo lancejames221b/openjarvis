@@ -57,7 +57,7 @@ import { TtsPipeline } from './tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './speech-output.js';
-import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx } from './sonos-mode.js';
+import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx, sonosScopeKey, VOICE_SCOPE } from './sonos-mode.js';
 import { isHandoffCommand, resolveHandoff, parseVerboseCommand, parseAskModeCommand, parseMcpModeCommand } from './handoff-resolver.js';
 import { setMcpMode as setChannelMcpMode, getMcpMode as getChannelMcpMode } from './channel-mcp-mode.js';
 import { postResumeCard } from './handoff-thread.js';
@@ -118,7 +118,10 @@ async function checkGatewayHealth() {
 // These cause event-loop blocking when the audio queue tries to drain them.
 async function cleanupStaleTmpAudio() {
   try {
-    const files = (await fsPromises.readdir('/tmp')).filter(f => f.endsWith('.wav') || f.endsWith('.mp3'));
+    // Only delete files with the jarvis- prefix to avoid nuking other processes' audio files
+    const files = (await fsPromises.readdir('/tmp')).filter(f =>
+      (f.endsWith('.wav') || f.endsWith('.mp3')) && f.startsWith('jarvis-')
+    );
     let removed = 0;
     for (const f of files) {
       try {
@@ -177,7 +180,15 @@ const ACTIVITY_CHANNEL_ID = process.env.DISCORD_ACTIVITY_CHANNEL_ID || TEXT_CHAN
 const ACTIVITY_FEED_ENABLED = process.env.ACTIVITY_FEED_ENABLED !== 'false'; // Feature flag - default ON
 const VOICE_THREAD_REPORTS_ENABLED = process.env.VOICE_THREAD_REPORTS !== 'false'; // Thread reports in #hud - default ON, set VOICE_THREAD_REPORTS=false to disable
 import { getAllowedUserIds } from './allowed-users.js';
-const ALLOWED_USERS = getAllowedUserIds();
+// Live proxy — delegates to getAllowedUserIds() on every access so admin add/remove takes effect without restart
+const ALLOWED_USERS = new Proxy([], {
+  get(_, prop) {
+    const live = getAllowedUserIds();
+    if (typeof live[prop] === 'function') return live[prop].bind(live);
+    return live[prop];
+  },
+  has(_, prop) { return prop in getAllowedUserIds(); },
+});
 const MULTI_USER_ENABLED = process.env.MULTI_USER_ENABLED === 'true';
 
 // ── Per-Task Voice Model Trigger Table ───────────────────────────────
@@ -2189,7 +2200,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
 
   // Sonos context: name wavs per Discord channel/thread for traceability
   setSonosCtx({
-    channelId: message.channel?.parentId || message.channelId,
+    channelId: sonosScopeKey(message.channel),
     threadId:  message.channel?.isThread?.() ? message.channelId : 'main',
     taskId:    null,
     role:      'response',
@@ -2323,15 +2334,17 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       await message.reply('🔒 Speaker mode is owner-only.');
       return;
     }
-    const _sonosChan = message.channel?.parentId || message.channelId;
+    const _sonosChan = sonosScopeKey(message.channel);
     if (_sonosCmd.command === 'on') {
       audioQueue.clear();  // drop any pending briefings/alerts so they don't blast the speaker
       setSonosMode(_sonosChan, _sonosCmd.target);
+      setSonosMode(VOICE_SCOPE, _sonosCmd.target);  // also route voice-call TTS to the same Sonos
       const targetLabel = _sonosCmd.target === 'up' ? 'bedroom' : _sonosCmd.target === 'all' ? 'all speakers' : 'kitchen';
       await message.reply(`Speaker mode on for this channel — routing responses to ${targetLabel}.`);
       return;
     } else if (_sonosCmd.command === 'off') {
       clearSonosMode(_sonosChan);
+      clearSonosMode(VOICE_SCOPE);
       await message.reply('Speaker mode off for this channel.');
       return;
     }
@@ -2479,12 +2492,12 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     // Speaker mode: @mention text replies don't normally produce TTS. When
     // mode is on FOR THIS CHANNEL, synthesize so playAudioEnhanced routes it
     // to the Sonos. Truncate heavily — the speaker should be brief.
-    const _mentionChan = message.channel?.parentId || message.channelId;
+    const _mentionChan = sonosScopeKey(message.channel);
     if (isSonosModeEnabled(_mentionChan)) {
       try {
         const spoken = response.length > 500 ? response.slice(0, 500) + '...' : response;
         const audio = await synthesizeSpeech(spoken);
-        if (audio) audioQueue.add(audio);
+        if (audio) audioQueue.add(audio, { channelId: _mentionChan });
       } catch (e) {
         logger.warn(`[sonos-mode] @mention synth failed: ${e.message}`);
       }
@@ -2661,15 +2674,17 @@ async function handleVoiceTranscript(message) {
           await message.reply('🔒 Speaker mode is owner-only.');
           return;
         }
-        const _vmChan = message.channel?.parentId || message.channelId;
+        const _vmChan = sonosScopeKey(message.channel);
         if (_vmSonosCmd.command === 'on') {
           audioQueue.clear();  // drop stale briefings so they don't blast the speaker
           setSonosMode(_vmChan, _vmSonosCmd.target);
+          setSonosMode(VOICE_SCOPE, _vmSonosCmd.target);  // also route voice-call TTS
           const targetLabel = _vmSonosCmd.target === 'up' ? 'bedroom' : _vmSonosCmd.target === 'all' ? 'all speakers' : 'kitchen';
           await message.reply(`Speaker mode on for this channel — routing responses to ${targetLabel}.`);
           return;
         } else if (_vmSonosCmd.command === 'off') {
           clearSonosMode(_vmChan);
+          clearSonosMode(VOICE_SCOPE);
           await message.reply('Speaker mode off for this channel.');
           return;
         }
@@ -2731,7 +2746,7 @@ async function handleVoiceTranscript(message) {
 
         // Sonos context: name wavs per Discord channel/thread for traceability
         setSonosCtx({
-          channelId: message.channel?.parentId || message.channelId,
+          channelId: sonosScopeKey(message.channel),
           threadId:  message.channel?.isThread?.() ? message.channelId : 'main',
           taskId:    vmTaskId,
           role:      'response',
@@ -2840,6 +2855,16 @@ async function handleVoiceTranscript(message) {
             } else {
               const chunks = result.text.match(/[\s\S]{1,1999}/g) || [];
               for (const c of chunks) await message.reply(c);
+            }
+            const _vmSonosChan = sonosScopeKey(message.channel);
+            if (isSonosModeEnabled(_vmSonosChan)) {
+              try {
+                const spoken = result.text.length > 500 ? result.text.slice(0, 500) + '...' : result.text;
+                const audio = await synthesizeSpeech(spoken);
+                if (audio) audioQueue.add(audio, { channelId: _vmSonosChan });
+              } catch (e) {
+                logger.warn(`[sonos-mode] voice-transcript synth failed: ${e.message}`);
+              }
             }
           } else {
             ledgerMarkCompleted(vmTaskId);
@@ -3855,6 +3880,35 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     const preSleepCheck = rawTranscript.toLowerCase().replace(/[.,!?]/g, '').replace(_preSleepWakeRe, '').trim();
     if (await fsmHandleSleepCheck(preSleepCheck, 'voice-command-pre-wake', userId, _pendingUtterance, synthesizeSpeech, audioQueue)) return;
     // If fsmHandleSleepCheck returned false with autoSleepAfterTask set, fall through to dispatch
+
+    // ── Pre-wake-word speaker-mode check (owner-only, wake bypass) ──
+    // "Speaker on / speaker mode on kitchen / sonos off" fires without a wake word when
+    // a HIGH-confidence verified owner speaks it — same privilege tier as sleep commands.
+    // Without this bypass the command dies in the wake-word gate below when there is no
+    // "Jarvis," prefix and no open 30s conversation window.
+    if (isVerifiedOwner(spkr, 'high')) {
+      const _sonosQuick = parseSonosModeCommand(rawTranscript);
+      if (_sonosQuick) {
+        if (_sonosQuick.command === 'on') {
+          audioQueue.clear();
+          setSonosMode(VOICE_SCOPE, _sonosQuick.target);
+          const _ctx = { channelId: VOICE_SCOPE, threadId: 'main', taskId: 'mode-on', role: 'ack' };
+          setSonosCtx(_ctx);
+          const targetLabel = _sonosQuick.target === 'up' ? 'bedroom' : _sonosQuick.target === 'all' ? 'all speakers' : 'kitchen';
+          const ack = `Speaker mode on, routing to ${targetLabel}.`;
+          postActivity(`🔊 ${ack}`);
+          try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio, _ctx); } catch {}
+        } else if (_sonosQuick.command === 'off') {
+          audioQueue.clear();
+          clearSonosMode(VOICE_SCOPE);
+          const ack = 'Speaker mode off.';
+          postActivity(`🔊 ${ack}`);
+          try { const audio = await synthesizeSpeech(ack); if (audio) audioQueue.add(audio); } catch {}
+        }
+        markBotResponse(userId);
+        return;
+      }
+    }
 
     // Log sentiment if detected
     if (sentiment && sentiment.sentiment) {
@@ -5206,8 +5260,8 @@ async function playAudioEnhanced(audioPath, overrideCtx = null) {
       return; // ← inside try so failures below fall through to Discord playback
     } catch (err) {
       isSpeaking = false;
-      logger.warn(`[sonos-mode] playWavOnSonos failed, falling back to Discord: ${err.message}`);
-      // Intentionally NO return — drop through to normal Discord audio playback below.
+      logger.warn(`[sonos-mode] playWavOnSonos failed: ${err.message} — skipping audio (no Discord fallback in sonos mode)`);
+      return;
     }
   }
 

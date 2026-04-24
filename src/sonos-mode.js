@@ -72,6 +72,29 @@ export function resetSonosCtx() {
   _ctx = { channelId: 'system', threadId: 'main', taskId: null, role: 'response' };
 }
 
+// ── Scope key ─────────────────────────────────────────────────────────
+
+/**
+ * Canonical Sonos scope key for a Discord Channel.
+ * Threads → parent channel (conversation belongs to the channel, not the thread).
+ * Text/voice channels → the channel itself (NOT the Discord category; `channel.parentId`
+ * on a top-level text channel resolves to the category, which is too broad).
+ */
+export function sonosScopeKey(channel) {
+  if (!channel) return '';
+  if (channel.isThread?.()) return channel.parentId || channel.id;
+  return channel.id;
+}
+
+/**
+ * Scope key for live voice-mic sessions (user talking to the bot via Discord voice).
+ * When speaker mode is enabled from ANY path (slash command, text @mention, voice-msg,
+ * voice-mic command), the handler should ALSO set this scope so voice-call responses
+ * route to the same Sonos. Otherwise brain-task TTS for voice falls back to Discord
+ * audio (the user's phone) instead of the Sonos they just enabled.
+ */
+export const VOICE_SCOPE = process.env.DISCORD_VOICE_CHANNEL_ID || 'voice';
+
 // ── Location parsing ──────────────────────────────────────────────────
 
 /**
@@ -109,7 +132,7 @@ export function parseSonosModeCommand(text) {
   const onMatch = t.match(
     /\b(speaker\s+mode|sonos\s+mode)\b.*?\b(on|kitchen|bedroom|upstairs|downstairs|up|down|all|everywhere)\b/
   ) || t.match(
-    /\b(go\s+into\s+speaker\s+mode|enable\s+speaker\s+mode|put\s+on\s+speaker\s+mode|speaker\s+mode\s+on|sonos\s+mode\s+on)\b/
+    /\b(go\s+into\s+speaker\s+mode|enable\s+speaker\s+mode|put\s+on\s+speaker\s+mode|speaker\s+mode\s+on|sonos\s+mode\s+on|speakers?\s+on)\b/
   ) || t.match(
     /\bspeak\s+(responses?|replies?)\s+(on|to|through|via)\s+(sonos|speaker|kitchen|bedroom)\b/
   );
