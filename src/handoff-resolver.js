@@ -116,8 +116,12 @@ export function parseMcpModeCommand(text) {
  * @returns {{channelId, threadId?, chatId, model, directory, configDir?} | null}
  */
 export function resolveHandoff(message) {
-  const parentId = message.channel?.parentId || message.channelId;
   const isThread = !!message.channel?.isThread?.();
+  // For threads, parentId is the actual parent channel. For top-level channels,
+  // channel.parentId resolves to the Discord *category* — use channelId directly.
+  const parentId = isThread
+    ? (message.channel?.parentId || message.channelId)
+    : message.channelId;
   const threadId = isThread ? message.channelId : null;
 
   const sessions = readJson(SESSIONS_FILE);
