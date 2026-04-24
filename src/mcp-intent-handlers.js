@@ -112,8 +112,9 @@ export async function handleNotionFetch(params = {}) {
     // The search result is text; pull the first URL and pass to notion-fetch
     const urlMatch = searchResult?.match(/https:\/\/[a-z0-9.-]*notion\.so\/[^\s"]+/i);
     if (urlMatch) {
+      const notionUrl = urlMatch[0].replace(/[.,);\]\s]+$/, '');
       const fetchResult = await mcpCall('notion', 'notion-fetch', {
-        urls: JSON.stringify([urlMatch[0]]),
+        urls: JSON.stringify([notionUrl]),
       });
       return `[NOTION PAGE — ${q}]\n${_clip(fetchResult, 3000)}`;
     }

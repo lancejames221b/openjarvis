@@ -103,9 +103,10 @@ class AudioQueue {
     }
     this.playing = true;
     isSpeaking = true;
-    const { audioSource } = this.queue.shift();
+    const { audioSource, metadata } = this.queue.shift();
     try { await playAudio(audioSource); } catch (err) { logger.error('Queue playback error:', err.message); }
-    try { unlinkSync(audioSource); } catch {}
+    // Skip unlink for entries marked keep:true (e.g. ACK_CACHE originals — only copies should be deleted)
+    if (!metadata?.keep) { try { unlinkSync(audioSource); } catch {} }
     setImmediate(() => this.playNext());
   }
 }

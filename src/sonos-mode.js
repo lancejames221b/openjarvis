@@ -137,10 +137,11 @@ export function parseSonosModeCommand(text) {
     return { command: 'off', target: null };
   }
 
-  // On-matcher: target group is now REQUIRED (was optional, causing the off bug).
-  // "speaker mode" alone without a target falls through to null.
+  // On-matcher: room/action word must immediately follow "mode" (no gap allowed).
+  // "speaker mode is down right now" must NOT match — ".*?" was too greedy.
+  // Accepts optional connector (to/in/for the) before the room word.
   const onMatch = t.match(
-    /\b(speaker\s+mode|sonos\s+mode)\b.*?\b(on|kitchen|bedroom|upstairs|downstairs|up|down|all|everywhere)\b/
+    /\b(speaker\s+mode|sonos\s+mode)\s+(?:(?:to|in|for)\s+(?:the\s+)?)?(on|kitchen|bedroom|upstairs|downstairs|up|down|all|everywhere)\b/
   ) || t.match(
     /\b(go\s+into\s+speaker\s+mode|enable\s+speaker\s+mode|put\s+on\s+speaker\s+mode|speaker\s+mode\s+on|sonos\s+mode\s+on|speakers?\s+on)\b/
   ) || t.match(

@@ -364,8 +364,8 @@ function detectHallucination(text) {
   const words = trimmed.split(/[\s,]+/).filter(w => w.length > 1);
   if (words.length >= 3) {
     const KNOWN_BRANDS = new Set([
-      'jarvis', 'roku', 'plex', 'qbittorrent', 'discord',
-      'jarvis', 'jorvis', 'netflix', 'spotify', 'youtube', 'twitch',
+      'jarvis', 'jorvis', 'roku', 'plex', 'qbittorrent', 'discord',
+      'netflix', 'spotify', 'youtube', 'twitch',
       'hulu', 'amazon', 'alexa', 'siri', 'cortana', 'google',
     ]);
     const brandOrTitleCase = words.filter(w => {
@@ -466,17 +466,17 @@ function postProcessTranscript(text) {
  */
 async function transcribeWithMoonshine(wavPath) {
   try {
+    // Pass wavPath as argv[1] — avoids shell interpolation into Python source string.
     const pythonCode = `
-import json
-import sys
+import json, sys
 from moonshine_voice import load
 
 model = load('moonshine/medium-streaming', language='en')
-result = model.transcribe('${wavPath}')
+result = model.transcribe(sys.argv[1])
 print(json.dumps({'text': result.get('text', '')}))
 `;
 
-    const { stdout, stderr } = await execFileAsync('python3', ['-c', pythonCode], {
+    const { stdout, stderr } = await execFileAsync('python3', ['-c', pythonCode, wavPath], {
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -850,7 +850,9 @@ async function transcribeWithFasterWhisper(wavPath) {
 
 async function transcribeWithVosk(wavPath) {
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', `${VOSK_SCRIPT} ${wavPath}`], { timeout: 10000 });
+    // Invoke VOSK_PYTHON + script directly with wavPath as an argument — no shell, no interpolation.
+    const voskScriptPath = `${_repoRoot}src/vosk-stt.py`;
+    const { stdout, stderr } = await execFileAsync(VOSK_PYTHON, [voskScriptPath, wavPath], { timeout: 10000 });
 
     if (stderr) {
       logger.warn('Vosk stderr:', stderr);

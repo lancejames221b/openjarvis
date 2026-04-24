@@ -310,7 +310,7 @@ function startHealthMonitor() {
       const guild = client.isReady() ? client.guilds.cache.get(GUILD_ID) : null;
       if (guild && ALLOWED_USERS[0]) {
         const member = guild.members.cache.get(ALLOWED_USERS[0]);
-        if (member?.voice?.channelId && member.voice.serverMute && activeTasks.size === 0 && !audioQueue?.playing && !isSpeaking) {
+        if (member?.voice?.channelId && member.voice.serverMute && activeTasks.size === 0 && !audioQueue?.playing && !getIsSpeaking()) {
           logger.warn('🔧 Watchdog: detected stuck server mute with no active playback - clearing');
           await member.voice.setMute(false, 'Watchdog: clearing stuck server mute');
         }
@@ -479,7 +479,6 @@ player.setMaxListeners(20);
 // the same player that's subscribed to the voice connection
 setPlayer(player);
 
-let isSpeaking = false;
 let currentConnection = null;
 let currentVoiceChannelId = null;
 const bargeInEvents = new Set();
@@ -904,7 +903,7 @@ class AudioQueue {
     // If generation just finished and queue is empty, trigger unmute check
     if (!value && this.queue.length === 0 && !this.playing) {
       serverMuteOwner(false);
-      isSpeaking = false;
+      setIsSpeaking(false);
     }
   }
 
@@ -950,7 +949,7 @@ class AudioQueue {
           this._holdTimer = null;
           if (this.queue.length === 0 && !this._ttsGenerating) {
             this.playing = false;
-            isSpeaking = false;
+            setIsSpeaking(false);
             serverMuteOwner(false);
           } else {
             this.playNext(); // audio arrived during hold - continue seamlessly
@@ -959,7 +958,7 @@ class AudioQueue {
         return; // don't clear isSpeaking yet
       }
       this.playing = false;
-      isSpeaking = false;
+      setIsSpeaking(false);
       serverMuteOwner(false);
       return;
     }
@@ -971,7 +970,7 @@ class AudioQueue {
     if (isOthersPresent() && !ownerMuted && !WAKE_WORD_ENABLED) {
       logger.info(`🤫 Holding response - owner unmuted with others present (${this.queue.length} queued)`);
       this.playing = false;
-      isSpeaking = false;
+      setIsSpeaking(false);
       return; // Will resume when owner mutes (voiceStateUpdate fires playNext)
     }
 
@@ -985,7 +984,7 @@ class AudioQueue {
 
     const wasPlaying = this.playing;
     this.playing = true;
-    isSpeaking = true;
+    setIsSpeaking(true);
     if (!wasPlaying) {
       // Only mute the Discord mic when playback goes to Discord.
       // Sonos plays on a house speaker, not through the bot's Discord voice
@@ -3326,15 +3325,15 @@ async function joinChannel(voiceChannelId, options = {}) {
     if (!MULTI_USER_ENABLED && !ALLOWED_USERS.includes(userId)) return;
 
     // Barge-in detection - only primary users (ALLOWED_USERS) can barge-in
-    if (isSpeaking && ALLOWED_USERS.includes(userId)) {
+    if (getIsSpeaking() && ALLOWED_USERS.includes(userId)) {
       if (!bargeInTimers.has(userId)) {
         const timer = setTimeout(() => {
-          if (isSpeaking) {
+          if (getIsSpeaking()) {
             logger.info(`⚡ Barge-in - stopping playback`);
             bargeInEvents.add(userId);
             player.stop(true);
             audioQueue.clear();
-            isSpeaking = false;
+            setIsSpeaking(false);
           }
           bargeInTimers.delete(userId);
         }, BARGE_IN_THRESHOLD_MS);
@@ -3732,9 +3731,11 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       if (jarvisIdx > 20) {
         // Wake word is buried deep -- TV dialogue before it. Extract from wake word onward.
         const fromJarvis = rawTranscript.substring(jarvisIdx);
-        const sentenceEnd = fromJarvis.match(/[.!?]\s/g);
-        const extracted = sentenceEnd && sentenceEnd.length >= 2
-          ? fromJarvis.substring(0, fromJarvis.indexOf(sentenceEnd[1]) + sentenceEnd[1].length).trim()
+        // Use matchAll to get real boundary indexes — match() returns strings not positions,
+        // so indexOf(sentenceEnd[1]) always found the FIRST occurrence, not the second.
+        const sentenceMatches = [...fromJarvis.matchAll(/[.!?]\s/g)];
+        const extracted = sentenceMatches.length >= 2
+          ? fromJarvis.substring(0, sentenceMatches[1].index + sentenceMatches[1][0].length).trim()
           : fromJarvis.substring(0, 200).trim();
         logger.info(`🔧 TV noise extraction: ${rawTranscript.length} chars → ${extracted.length} chars: "${extracted.substring(0, 80)}"`);
         rawTranscript = extracted;
@@ -4527,11 +4528,9 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
     handleSpeech._recentTranscripts.set(transcriptKey, now);
-    // Clean old entries every 50 calls
-    if (handleSpeech._recentTranscripts.size > 50) {
-      for (const [k, t] of handleSpeech._recentTranscripts) {
-        if (now - t > 30000) handleSpeech._recentTranscripts.delete(k);
-      }
+    // Prune stale entries on every call — size>50 gate left entries stale during idle periods.
+    for (const [k, t] of handleSpeech._recentTranscripts) {
+      if (now - t > TRANSCRIPT_DEDUP_MS) handleSpeech._recentTranscripts.delete(k);
     }
 
     // Dispatch via utterance grouping (debounce rapid fragments into one task)
@@ -5159,7 +5158,7 @@ function cancelAllTasks() {
   }
   activeTasks.clear();
   audioQueue.clear();
-  isSpeaking = false;
+  setIsSpeaking(false);
   serverMuteOwner(false);
   logger.info(`🛑 Cancelled ${count} active tasks, cleared all queues`);
   if (count > 0) postActivity(`🛑 **Cancelled ${count} task${count > 1 ? 's' : ''}** (user interrupt)`);
@@ -5258,20 +5257,20 @@ async function playAudioEnhanced(audioPath, overrideCtx = null) {
     // post-speak attention window fire correctly. Sonos doesn't echo into
     // the Discord mic, so we DON'T serverMuteOwner here — that's Discord-audio
     // specific. Clear isSpeaking on both success and failure paths.
-    isSpeaking = true;
+    setIsSpeaking(true);
     try {
       const { playWavOnSonos } = await import('./sonos-play.js');
       await playWavOnSonos(audioPath, getSonosTarget(_playCtx.channelId), _playCtx);
-      isSpeaking = false;
+      setIsSpeaking(false);
       return; // ← inside try so failures below fall through to Discord playback
     } catch (err) {
-      isSpeaking = false;
+      setIsSpeaking(false);
       logger.warn(`[sonos-mode] playWavOnSonos failed: ${err.message} — skipping audio (no Discord fallback in sonos mode)`);
       return;
     }
   }
 
-  isSpeaking = true;
+  setIsSpeaking(true);
   // Mute owner if not already handled by audioQueue
   const standalonePlay = !audioQueue.playing;
   if (standalonePlay) {
@@ -5308,7 +5307,7 @@ async function playAudioEnhanced(audioPath, overrideCtx = null) {
       player.removeListener('error', onError);
       if (timeoutId) clearTimeout(timeoutId);
       if (checkInterval) clearInterval(checkInterval);
-      isSpeaking = false;
+      if (standalonePlay) setIsSpeaking(false);
       if (standalonePlay) serverMuteOwner(false);
       resolve();
     };
