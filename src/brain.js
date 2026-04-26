@@ -2,7 +2,7 @@ import logger from './logger.js';
 import { VOICE_NAME } from './wakeword.js';
 import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory, getChannelContext, storeChannelMemory } from './session-manager.js';
 /**
- * Brain Module - Thin voice I/O layer to Clawdbot Gateway
+ * Brain Module - Thin voice I/O layer to Jarvis Gateway
  * 
  * Voice is just another input method. Same agent, same session,
  * same tools. We prepend a short [VOICE] tag so the agent knows
@@ -137,7 +137,7 @@ export function listPersonalities() {
   }
 }
 
-const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
 // Speak endpoint — uses TAILSCALE_IP/ALERT_WEBHOOK_HOST so it works outside Tailscale too
 const _webhookHost = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || 'localhost';
 const _webhookPort = process.env.ALERT_WEBHOOK_PORT || 3335;
@@ -145,8 +145,8 @@ const SPEAK_URL = `http://${_webhookHost}:${_webhookPort}/speak`;
 const STOP_URL = `http://${_webhookHost}:${_webhookPort}/stop`;
 const REPLAY_URL = `http://${_webhookHost}:${_webhookPort}/replay`;
 const SPEAK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || '';
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
-const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || process.env.CLAWDBOT_HOOKS_TOKEN || GATEWAY_TOKEN;
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;
+const HOOKS_TOKEN = process.env.JARVIS_HOOKS_TOKEN || GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 let voiceModel = process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude'; // mutable — /model set updates at runtime
 export function getVoiceModel() { return voiceModel; }
@@ -382,6 +382,7 @@ import { isMobileModeEnabled } from './mobile-mode.js';
 import { isVisualModeEnabled } from './visual-mode.js';
 import { getActiveAlert, clearActiveAlert } from './alert-context.js';
 import { getFocusContextTag, getFullFocusContext } from './focus-state.js';
+import { getSkillsBlock } from './skills-loader.js';
 
 // Prompts vars resolved at call time so runtime env values are current
 // ON_SCREEN ack mode for "open X on my screen" commands
@@ -435,11 +436,12 @@ Cursor IDE (code editing):
 - Local project: ssh ${MAC_SSH_HOST} 'cursor /path/to/folder'
 - Remote project: ssh ${MAC_SSH_HOST} "cursor --folder-uri 'vscode-remote://ssh-remote+HOST/path'"
 - Key projects are loaded from config/projects.json — see cursor-projects.js
-- Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor`;
+- Match by context: if we're discussing a project, "bring up the code" means THAT project in Cursor` + getSkillsBlock();
   }
 
   let tag = resolvePrompt('voice-main.txt', vars);
   if (isMobileModeEnabled()) tag += '\n' + resolvePrompt('mobile-mode.txt', vars);
+  tag += getSkillsBlock();
   return tag;
 }
 
@@ -507,7 +509,14 @@ export function trimForVoice(text) {
     .replace(/\n/g, ' ')                     // single newlines to spaces
     .replace(/\s{2,}/g, ' ')                // collapse spaces
     .trim();
-  
+
+  // Strip lines that are raw code the model leaked without backtick fencing.
+  // Split on sentence-ish boundaries, drop any segment that looks like code.
+  const CODE_LINE_RE = /^\s*(import |from \w+ import |def |class |async def |curl |wget |python[23]? |node |npm |pip |docker |kubectl |git (?:clone|commit|push|pull)|for .* in .*:|if .*:|with open\(|print\(|console\.|System\.out|#include |<\?php)/i;
+  const segments = clean.split(/(?<=\.)\s+/);
+  const filtered = segments.filter(seg => !CODE_LINE_RE.test(seg.trimStart()));
+  clean = filtered.join(' ').replace(/\s{2,}/g, ' ').trim();
+
   return clean;
 }
 
@@ -619,7 +628,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
           max_tokens: 8192,
           user: getActiveSessionUser(),
           stream: false,
-          model: voiceModel,
+          model: activeModel,
           ...THINKING_PARAM,
         }),
       }, signal);
@@ -693,7 +702,7 @@ export async function generateResponseStreaming(userMessage, history = [], signa
         max_tokens: 8192,
         user: getActiveSessionUser(),
         stream: true,
-        model: voiceModel,
+        model: activeModel,
         ...THINKING_PARAM,
       }),
     }, signal);
@@ -1318,6 +1327,10 @@ Never skip this step. The voice session cannot see your filesystem — this is t
       body: JSON.stringify({
         message: hookMessage,
         sessionKey: getActiveSessionUser(),
+        // user = channelKey on the gateway side — same convention as /v1/chat/completions.
+        // Without this, /hooks/agent spawns a fresh Claude chat every voice action turn,
+        // so voice ACTION tasks have no memory of prior voice KNOWLEDGE turns (or earlier actions).
+        user: options.sessionUser || getActiveSessionUser(),
         wakeMode: 'now',
         model: options.model || voiceModel || undefined,  // Use passed model override, otherwise voice model
       }),
