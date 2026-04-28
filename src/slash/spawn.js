@@ -11,6 +11,7 @@
 import { createLiveStream } from '../live-stream.js';
 import { setMcpMode } from '../channel-mcp-mode.js';
 import { verboseSessions } from '../verbose-sessions.js';
+import { mentionSessions } from '../mention-sessions.js';
 import { abortAllVoiceTasks } from '../voice-tasks.js';
 import logger from '../logger.js';
 
@@ -153,23 +154,39 @@ export async function handleSpawnCommand(interaction) {
  */
 export async function handleStopCommand(interaction) {
   const channelId = interaction.channelId;
+  // Sessions are keyed by _parentChannelId — when /stop is issued from a thread,
+  // channelId is the thread ID but sessions are stored under the parent channel ID.
+  const channel = interaction.channel;
+  const lookupId = channel?.isThread?.() ? (channel.parentId || channelId) : channelId;
 
   // Check spawn session (thread-based agent)
-  const spawnSession = _activeSessions.get(channelId);
+  const spawnSession = _activeSessions.get(channelId) || _activeSessions.get(lookupId);
   if (spawnSession) {
     spawnSession.ac.abort();
     spawnSession.ls.stop();
     _activeSessions.delete(channelId);
+    _activeSessions.delete(lookupId);
     await interaction.reply({ content: 'Agent stopped.', ephemeral: false });
     return;
   }
 
-  // Check verbose text-channel stream
-  const verboseSession = verboseSessions.get(channelId);
+  // Check verbose text-channel stream (keyed by _parentChannelId)
+  const verboseSession = verboseSessions.get(lookupId) || verboseSessions.get(channelId);
   if (verboseSession) {
     verboseSession.ac.abort();
     verboseSession.ls.stop();
+    verboseSessions.delete(lookupId);
     verboseSessions.delete(channelId);
+    await interaction.reply({ content: 'Response stopped.', ephemeral: false });
+    return;
+  }
+
+  // Check non-verbose @mention response (keyed by _parentChannelId)
+  const mentionAc = mentionSessions.get(lookupId) || mentionSessions.get(channelId);
+  if (mentionAc) {
+    mentionAc.abort();
+    mentionSessions.delete(lookupId);
+    mentionSessions.delete(channelId);
     await interaction.reply({ content: 'Response stopped.', ephemeral: false });
     return;
   }
