@@ -16,8 +16,8 @@ import path from "node:path";
 
 const STATE_DIR = process.env.HOME + "/.local/state/jarvis-voice";
 const ACCOUNTS_PATH = process.env.CHANNEL_ACCOUNTS_PATH || `${STATE_DIR}/channel-accounts.json`;
-const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || "http://127.0.0.1:22100";
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN || "";
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || "http://127.0.0.1:22100";
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || "";
 
 const POLICY = `
 IMPORTANT — Per-Account Policy:

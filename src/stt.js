@@ -357,11 +357,15 @@ function detectHallucination(text) {
 
   // 4. Brand-name soup — transcript is mostly comma-separated proper nouns with no verbs
   //    Heuristic: if >70% of "words" are title-cased or known brands and there's no verb
+  //    Skip for mode-toggle commands — short title-case phrases like "Speaker Mode Ons,
+  //    Kitchens" would otherwise get dropped before the downstream parser sees them.
+  const MODE_TOGGLE_KEYWORDS = /\b(speaker|sonos|kitchen|bedroom|upstairs|downstairs|living\s?room|mcp|visual|mobile|wake|sleep|persona|focus|enroll)\b/i;
+  if (MODE_TOGGLE_KEYWORDS.test(trimmed)) return null;
   const words = trimmed.split(/[\s,]+/).filter(w => w.length > 1);
   if (words.length >= 3) {
     const KNOWN_BRANDS = new Set([
-      'jarvis', 'roku', 'plex', 'qbittorrent', 'discord',
-      'jarvis', 'jorvis', 'netflix', 'spotify', 'youtube', 'twitch',
+      'jarvis', 'jorvis', 'roku', 'plex', 'qbittorrent', 'discord',
+      'netflix', 'spotify', 'youtube', 'twitch',
       'hulu', 'amazon', 'alexa', 'siri', 'cortana', 'google',
     ]);
     const brandOrTitleCase = words.filter(w => {
@@ -417,8 +421,9 @@ function postProcessTranscript(text) {
   processed = processed.replace(/\band\s+roll\s+(my\s+)?voice/gi, 'enroll my voice');
 
   // Name corrections — Whisper commonly mishears "Jarvis" as these
-  processed = processed.replace(/\b(travis|garvis|jarvas|jarvus|jarves|jonas|journals?|jar\s*vis|jervis|jarv[ie]ce|djarvis|charges|dervis)\b/gi, 'Jarvis');
-  // "Hey Jonas" / "Hey journals" → "Hey Jarvis"
+  // Note: "journals" and "charges" are common English words — keep them only in the "Hey X" prefix pattern below
+  processed = processed.replace(/\b(travis|garvis|jarvas|jarvus|jarves|jonas|jar\s*vis|jervis|jarv[ie]ce|djarvis|dervis)\b/gi, 'Jarvis');
+  // "Hey Jonas" / "Hey journals" / "Hey charges" → "Hey Jarvis"
   processed = processed.replace(/\bhey[,.]?\s+(jonas|journals?|jervis|charges)\b/gi, 'Hey Jarvis');
 
   // Context-aware corrections (common mishearings)
@@ -461,17 +466,17 @@ function postProcessTranscript(text) {
  */
 async function transcribeWithMoonshine(wavPath) {
   try {
+    // Pass wavPath as argv[1] — avoids shell interpolation into Python source string.
     const pythonCode = `
-import json
-import sys
+import json, sys
 from moonshine_voice import load
 
 model = load('moonshine/medium-streaming', language='en')
-result = model.transcribe('${wavPath}')
+result = model.transcribe(sys.argv[1])
 print(json.dumps({'text': result.get('text', '')}))
 `;
 
-    const { stdout, stderr } = await execFileAsync('python3', ['-c', pythonCode], {
+    const { stdout, stderr } = await execFileAsync('python3', ['-c', pythonCode, wavPath], {
       timeout: 30000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -845,7 +850,9 @@ async function transcribeWithFasterWhisper(wavPath) {
 
 async function transcribeWithVosk(wavPath) {
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', `${VOSK_SCRIPT} ${wavPath}`], { timeout: 10000 });
+    // Invoke VOSK_PYTHON + script directly with wavPath as an argument — no shell, no interpolation.
+    const voskScriptPath = `${_repoRoot}src/vosk-stt.py`;
+    const { stdout, stderr } = await execFileAsync(VOSK_PYTHON, [voskScriptPath, wavPath], { timeout: 10000 });
 
     if (stderr) {
       logger.warn('Vosk stderr:', stderr);

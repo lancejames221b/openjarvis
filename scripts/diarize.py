@@ -81,7 +81,7 @@ def diarize_with_claude(segments: list[dict], num_speakers: int, context_hint: s
     """Send transcript to Claude via OpenClaw gateway, get back speaker labels."""
     import urllib.request
 
-    GATEWAY_URL = os.environ.get("CLAWDBOT_GATEWAY_URL", "http://127.0.0.1:22100")
+    GATEWAY_URL = os.environ.get("JARVIS_GATEWAY_URL", os.environ.get("CLAWDBOT_GATEWAY_URL", "http://127.0.0.1:22100"))
     completions_url = f"{GATEWAY_URL}/v1/chat/completions"
     model = os.environ.get("DIARIZE_MODEL", "openclaw")
 

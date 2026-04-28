@@ -36,8 +36,8 @@
 
 import logger from './logger.js';
 
-const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
 
 const CLASSIFIER_MODEL = process.env.HAIKU_AMBIENT_MODEL || 'unit/claude-haiku-4-5';
@@ -52,7 +52,7 @@ const AMBIENT_WINDOW_MS = parseInt(process.env.HAIKU_AMBIENT_WINDOW_MS || '60000
 
 // ── Logging ──────────────────────────────────────────────────────────────────
 
-const GATEWAY_BASE = process.env.JARVIS_GATEWAY_URL || process.env.CLAWDBOT_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
+const GATEWAY_BASE = process.env.JARVIS_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
 const DISCORD_POST_URL = `${GATEWAY_BASE}/discord/channels/${AMBIENT_LOG_CHANNEL}/messages`;
 
 /**

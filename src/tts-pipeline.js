@@ -1,4 +1,14 @@
 import logger from './logger.js';
+import { unlinkSync } from 'fs';
+
+// Best-effort unlink — the TTS pipeline produces many temp wavs; any code path
+// that drops an audio reference without handing it to audioQueue must unlink
+// it here to avoid /tmp leaks under long-running service.
+function _safeUnlink(path) {
+  if (!path) return;
+  try { unlinkSync(path); } catch {}
+}
+
 /**
  * TTS Pipeline - Properly throttled parallel generation with ordered playback
  * 
@@ -54,7 +64,10 @@ export class TtsPipeline {
       
       this.synthesize(sentence)
         .then(audio => {
-          if (this._cleared) return;
+          // If the pipeline was cleared mid-synthesis, unlink the orphaned
+          // wav so it doesn't leak. Previously the early-return dropped the
+          // path with no cleanup — every clear() leaked up to maxConcurrent wavs.
+          if (this._cleared) { _safeUnlink(audio); return; }
           this.completed.set(index, audio);
           this.activeCount--;
           this._playReady();
@@ -86,12 +99,15 @@ export class TtsPipeline {
       this.nextPlayIndex++;
     }
 
-    // Prune completed Map if it has grown too large (e.g. playback fell behind)
+    // Prune completed Map if it has grown too large (e.g. playback fell behind).
+    // Unlink each pruned wav before dropping it — the paths never reach
+    // audioQueue.add, so no later cleanup happens. Leak without this.
     const completedCap = MAX_QUEUE_SIZE * 2;
     if (this.completed.size > completedCap) {
       const sortedKeys = [...this.completed.keys()].sort((a, b) => a - b);
       const toRemove = sortedKeys.slice(0, this.completed.size - completedCap);
       for (const k of toRemove) {
+        _safeUnlink(this.completed.get(k));
         this.completed.delete(k);
       }
       logger.warn(`[tts] completed Map pruned ${toRemove.length} old entries (was over ${completedCap} cap)`);
@@ -117,11 +133,15 @@ export class TtsPipeline {
   }
   
   /**
-   * Cancel everything
+   * Cancel everything. Unlinks any already-generated wavs in `completed`
+   * so they don't leak in /tmp. In-flight synthesize() promises will resolve
+   * later — their .then guard checks `_cleared` and will also unlink before
+   * returning (see the generation pipeline below).
    */
   clear() {
     this._cleared = true;
     this.queue = [];
+    for (const audio of this.completed.values()) _safeUnlink(audio);
     this.completed.clear();
     this.activeCount = 0;
     if (this._drainResolve) {

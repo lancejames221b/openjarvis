@@ -16,51 +16,15 @@
  */
 
 import logger from './logger.js';
-import { readFileSync, writeFileSync, unlinkSync, readdirSync, mkdirSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-
-const __dirname_ls = dirname(fileURLToPath(import.meta.url));
-const STREAMS_DIR = join(__dirname_ls, '..', 'data', 'live-streams');
-try { mkdirSync(STREAMS_DIR, { recursive: true }); } catch {}
-
-function _streamStatePath(msgId) { return join(STREAMS_DIR, `${msgId}.json`); }
-function _trackStream(channelId, msgId, botToken) {
-  try { writeFileSync(_streamStatePath(msgId), JSON.stringify({ channelId, msgId, botToken, startedAt: Date.now() })); } catch {}
-}
-function _untrackStream(msgId) {
-  try { unlinkSync(_streamStatePath(msgId)); } catch {}
-}
-
-/** On startup, patch any live-stream messages left in "thinking" state by a prior crash. */
-export async function sweepOrphanedStreams() {
-  let files;
-  try { files = readdirSync(STREAMS_DIR).filter(f => f.endsWith('.json')); } catch { return; }
-  if (!files.length) return;
-  logger.info(`[live-stream] sweeping ${files.length} orphaned stream(s)`);
-  for (const f of files) {
-    try {
-      const { channelId, msgId, botToken } = JSON.parse(readFileSync(join(STREAMS_DIR, f), 'utf-8'));
-      await fetch(`https://discord.com/api/v10/channels/${channelId}/messages/${msgId}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: '**⚠️ interrupted** — bot restarted mid-stream.' }),
-        signal: AbortSignal.timeout(6_000),
-      });
-      _untrackStream(msgId);
-      logger.info(`[live-stream] patched orphan ${msgId} in ${channelId}`);
-    } catch (e) {
-      logger.warn(`[live-stream] sweep failed for ${f}: ${e.message}`);
-      try { unlinkSync(join(STREAMS_DIR, f)); } catch {}
-    }
-  }
-}
 
 const TICK_MS       = 2_000;
 const MAX_BODY_LEN  = 1_700;  // leave headroom for header
 const THINK_DOTS    = ['', '.', '..', '...'];
 
-const _MODELS_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'config', 'models.json');
+const _MODELS_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'models.json');
 function _loadModelsConfig() {
   try { return JSON.parse(readFileSync(_MODELS_FILE, 'utf-8')); } catch { return {}; }
 }
@@ -109,7 +73,6 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     const data = await res.json();
     if (!data?.id) throw new Error(`Discord returned no message id: ${JSON.stringify(data).slice(0, 200)}`);
     msgId = data.id;
-    _trackStream(channelId, msgId, botToken);
   } catch (err) {
     logger.warn(`[live-stream] Failed to create live message: ${err.message}`);
     throw err;
@@ -185,7 +148,6 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
         logger.warn(`[live-stream] failed to post final chunk: ${err.message}`);
       }
     }
-    _untrackStream(msgId);
   }
 
   async function finishEmpty(reason) {
@@ -195,7 +157,6 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     emptyReason = reason || 'empty';
     const header = _renderHeader({ state, startedAt, model, tokens, body: '', emptyReason, final: true });
     await _edit(header);
-    _untrackStream(msgId);
   }
 
   async function finishError(err) {
@@ -205,13 +166,11 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     errorMsg = String(err?.message || err);
     const header = _renderHeader({ state, startedAt, model, tokens, body: '', errorMsg, final: true });
     await _edit(header);
-    _untrackStream(msgId);
   }
 
   function stop() {
     done = true;
     clearInterval(ticker);
-    _untrackStream(msgId);
   }
 
   return { update, replace, finish, finishEmpty, finishError, stop };
@@ -263,21 +222,7 @@ function _dedupSentences(text) {
 
 function _truncate(s) {
   if (s.length <= MAX_BODY_LEN) return s;
-  // Rolling window: keep the newest complete lines that fit, drop oldest.
-  // Prevents mid-entry cuts on tool-use blocks (🔧 Bash › … ↳ ✓ …).
-  const lines = s.split('\n');
-  const kept = [];
-  let len = 0;
-  const budget = MAX_BODY_LEN - 2; // reserve 2 chars for '…\n' prefix
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const add = lines[i].length + (kept.length > 0 ? 1 : 0); // +1 for \n between lines
-    if (len + add > budget) break;
-    kept.unshift(lines[i]);
-    len += add;
-  }
-  // Fallback: single line too long — char-truncate the tail
-  if (kept.length === 0) return '…' + s.slice(-(MAX_BODY_LEN - 1));
-  return '…\n' + kept.join('\n');
+  return '…' + s.slice(-(MAX_BODY_LEN - 1));
 }
 
 function _chunkText(text, max) {

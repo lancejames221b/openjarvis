@@ -243,15 +243,27 @@ export function markFailed(taskId, error) {
 }
 
 /**
- * Get all tasks that look orphaned (dispatched/working but no result after threshold)
+ * Get all tasks that look orphaned (dispatched/working but no result after threshold).
+ *
+ * Grace delay: also requires updatedAt to be stale by GRACE_MS. A task that just
+ * got a streaming delta or state update is almost certainly still alive — the
+ * completion handler is probably milliseconds away from landing. Firing "Lost
+ * task" in that window caused false positives that posted right before or after
+ * the actual completion message.
  */
+const ORPHAN_GRACE_MS = parseInt(process.env.TASK_ORPHAN_GRACE_MS ?? '15000'); // 15s
+
 export function getOrphanedTasks() {
   const now = Date.now();
   return ledger.filter(t => {
-    if (t.state === TaskState.COMPLETED || t.state === TaskState.FAILED || 
+    if (t.state === TaskState.COMPLETED || t.state === TaskState.FAILED ||
         t.state === TaskState.ESCALATED || t.state === TaskState.ORPHANED) {
       return false;
     }
+    // Require stale updatedAt — even if createdAt is old, a recent update
+    // (streaming delta, state transition) means the task is actively progressing.
+    if (now - (t.updatedAt || t.createdAt) < ORPHAN_GRACE_MS) return false;
+
     // Tiered thresholds based on task state (Issue #5)
     const age = now - t.createdAt;
     switch (t.state) {
@@ -284,13 +296,25 @@ export function getPendingFollowups() {
 }
 
 /**
- * Mark orphaned tasks and return them for escalation
+ * Mark orphaned tasks and return them for escalation.
+ *
+ * Double-checks each candidate's state right before mutating, so a completion
+ * that landed between getOrphanedTasks() and the state write doesn't get
+ * stomped. Only candidates still in a non-terminal state get flipped to
+ * ORPHANED and returned to the caller for user notification.
  */
 export function processOrphans() {
-  const orphans = getOrphanedTasks();
-  for (const task of orphans) {
+  const candidates = getOrphanedTasks();
+  const orphans = [];
+  for (const task of candidates) {
+    // Re-check: task may have completed between filter and mutation
+    if (task.state === TaskState.COMPLETED || task.state === TaskState.FAILED ||
+        task.state === TaskState.ESCALATED || task.state === TaskState.ORPHANED) {
+      continue;
+    }
     task.state = TaskState.ORPHANED;
     task.updatedAt = Date.now();
+    orphans.push(task);
   }
   if (orphans.length > 0) saveLedger();
   return orphans;

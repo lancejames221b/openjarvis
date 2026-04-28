@@ -1,0 +1,36 @@
+{
+  "display": {
+    "claude":        "Sonnet 4.6",
+    "sonnet":        "Sonnet 4.6",
+    "opus":          "Opus 4.7",
+    "haiku":         "Haiku 4.5",
+    "claude-low":    "Sonnet 4.6 · low",
+    "claude-medium": "Sonnet 4.6 · medium",
+    "claude-high":   "Sonnet 4.6 · high",
+    "claude-max":    "Sonnet 4.6 · max",
+    "sonnet-low":    "Sonnet 4.6 · low",
+    "sonnet-medium": "Sonnet 4.6 · medium",
+    "sonnet-high":   "Sonnet 4.6 · high",
+    "sonnet-max":    "Sonnet 4.6 · max",
+    "opus-low":      "Opus 4.7 · low",
+    "opus-medium":   "Opus 4.7 · medium",
+    "opus-high":     "Opus 4.7 · high",
+    "opus-max":      "Opus 4.7 · max",
+    "opus-plan":     "Opus 4.7 · plan",
+    "haiku-low":     "Haiku 4.5 · low",
+    "claude-sonnet-4-6":         "Sonnet 4.6",
+    "claude-opus-4-7":           "Opus 4.7",
+    "claude-haiku-4-5-20251001": "Haiku 4.5"
+  },
+  "triggers": [
+    { "phrases": ["use opus plan", "use plan mode", "opus plan"],              "voiceAlias": "opus-plan" },
+    { "phrases": ["use opus max", "opus max"],                                  "voiceAlias": "opus-max" },
+    { "phrases": ["use opus high", "opus high"],                                "voiceAlias": "opus-high" },
+    { "phrases": ["use opus", "choose opus", "claude opus", "opus 4.6"],        "voiceAlias": "opus",        "agentEnvKey": "MODEL_OPUS" },
+    { "phrases": ["use sonnet max", "sonnet max", "use sonnet-max"],             "voiceAlias": "sonnet-max" },
+    { "phrases": ["use sonnet high", "sonnet high"],                             "voiceAlias": "sonnet-high" },
+    { "phrases": ["use sonnet", "choose sonnet", "claude sonnet"],               "voiceAlias": "sonnet",      "agentEnvKey": "MODEL_SONNET" },
+    { "phrases": ["use haiku", "choose haiku", "claude haiku"],                  "voiceAlias": "haiku" },
+    { "phrases": ["use gemini", "choose gemini", "gemini 3.1 pro", "gemini 3 pro"], "agentEnvKey": "MODEL_GEMINI" }
+  ]
+}

@@ -8,7 +8,7 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = Number(process.env.ZEROCLAW_COMPAT_PORT || 22103);
 const ZEROCLAW_BASE_URL = process.env.ZEROCLAW_BASE_URL || "http://127.0.0.1:22101";
-const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN || "";
+const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || "";
 // Shell aliases (like `claude --dangerously-skip-permissions`) don't survive spawn().
 // Use the actual binary path and pass flags explicitly.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || `${process.env.HOME}/.local/bin/claude`;
