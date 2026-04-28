@@ -897,10 +897,13 @@ app.post("/v1/chat/completions", requireAuth, async (req, res) => {
       releaseLock();
     }
 
-    // On a resumed session claude already has full history — only send the new user message.
-    // On a new session (no chatId yet) send the full collapsed context including system prompt.
+    // On a resumed session: re-inject the system prompt on every turn so Jarvis instructions
+    // survive compaction. Claude already has full conversation history via --resume.
+    // On a new session: send the full collapsed context (system + history + user message).
+    const _sysMsg = (req.body?.messages || []).find(m => m?.role === "system");
+    const _sysText = _sysMsg ? contentToText(_sysMsg.content) : "";
     const prompt = chatId
-      ? contentToText(lastUserMsg?.content || "")
+      ? (_sysText ? `${_sysText}\n\n${contentToText(lastUserMsg?.content || "")}` : contentToText(lastUserMsg?.content || ""))
       : collapseMessages(req.body?.messages || []);
 
     if (wantStream) {

@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "id": "070a558c",
+      "cron": "0 10 22 4 *",
+      "prompt": "Remind Lance: \"Review Alice's PRs today — 381 merge immediately, 374 request split into 4 PRs, 382 after 374 lands. Full notes in #hud.\" Post this reminder to #hud and speak it aloud.",
+      "createdAt": 1776805827787
+    },
+    {
+      "id": "06803943",
+      "cron": "3 13 25 4 *",
+      "prompt": "Send a reminder to Lance in Discord (#hud channel ID 1482037873426567229): \"**Reminder:** Go pick up Person's meds at Walgreens.\"",
+      "createdAt": 1776998946903
+    }
+  ]
+}

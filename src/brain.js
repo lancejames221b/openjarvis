@@ -509,7 +509,14 @@ export function trimForVoice(text) {
     .replace(/\n/g, ' ')                     // single newlines to spaces
     .replace(/\s{2,}/g, ' ')                // collapse spaces
     .trim();
-  
+
+  // Strip lines that are raw code the model leaked without backtick fencing.
+  // Split on sentence-ish boundaries, drop any segment that looks like code.
+  const CODE_LINE_RE = /^\s*(import |from \w+ import |def |class |async def |curl |wget |python[23]? |node |npm |pip |docker |kubectl |git (?:clone|commit|push|pull)|for .* in .*:|if .*:|with open\(|print\(|console\.|System\.out|#include |<\?php)/i;
+  const segments = clean.split(/(?<=\.)\s+/);
+  const filtered = segments.filter(seg => !CODE_LINE_RE.test(seg.trimStart()));
+  clean = filtered.join(' ').replace(/\s{2,}/g, ' ').trim();
+
   return clean;
 }
 

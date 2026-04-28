@@ -6,9 +6,10 @@
  * inference slows from 7s → 130s. Rotating the session key gives a fresh
  * context window. Memory is persisted so nothing is lost across restarts.
  *
- * Memory tiers (both run in parallel):
+ * Memory tiers (all run in parallel):
  *   1. data/memory.md  — local append-only log, primary source on cold start
- *   2. hAIveMind       — external tool (optional, feature-flagged)
+ *   2. Obsidian        — canonical vault at OBSIDIAN_VAULT (SSHFS mount of gamez)
+ *   3. hAIveMind       — semantic index over Obsidian ([OBS-MEM] entries)
  *
  * Rotation trigger: idle gap (default 30 min). Active conversations never
  * get interrupted — only fires on next turn after silence.
@@ -80,6 +81,12 @@ const _hmBreaker = {
 const MEMORY_FILE = process.env.VOICE_MEMORY_FILE
   || join(__dirname, '..', 'data', 'memory.md');
 const MEMORY_RECALL_ENTRIES = parseInt(process.env.VOICE_MEMORY_RECALL ?? '10');
+
+// ── Obsidian vault ────────────────────────────────────────────────────────────
+// Local vault on generic's storage1 drive — no SSHFS needed.
+const OBSIDIAN_VAULT = process.env.OBSIDIAN_VAULT
+  || '/media/generic/storage1/Obsidian/Claude';
+const OBSIDIAN_ENABLED = process.env.OBSIDIAN_ENABLED !== 'false';
 
 /** How long idle before rotating on next turn (ms). Override via .env */
 const IDLE_ROTATION_MS = parseInt(process.env.SESSION_ROTATION_IDLE_MS ?? '1800000'); // 30 min (was 5 min)
@@ -262,9 +269,19 @@ async function _storeSessionSummary(history) {
     logger.warn({ err: e.message }, 'memory file session write failed (non-fatal)');
   }
 
-  if (HAIVEMIND_ENABLED) {
-    await _haivemindStore(`VOICE-SESSION-END ${ts}: ${lines}`, 'voice-session');
-    logger.info('💾 Session summary stored to haivemind');
+  if (OBSIDIAN_ENABLED) {
+    try {
+      const date = ts.substring(0, 10);
+      const timeSlug = ts.substring(11, 16).replace(':', '-');
+      const relPath = `global/${date}-session-summary-${timeSlug}.md`;
+      const absPath = `${OBSIDIAN_VAULT}/${relPath}`;
+      const fm = `---\ntitle: Session Summary ${ts}\ncategory: global\nmachine: generic\ndate: ${date}\nsource: jarvis-session\nsensitive: false\nnotion_url: ""\n---\n\n${lines}\n`;
+      await mcpCall('obsidian', 'write_file', { path: absPath, content: fm });
+      logger.info('💾 Session summary written to Obsidian');
+      // obsidian-indexer picks up the file automatically — no explicit Qdrant call needed
+    } catch (e) {
+      logger.warn({ err: e.message }, 'obsidian session write failed (non-fatal)');
+    }
   }
 }
 
