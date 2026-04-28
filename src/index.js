@@ -42,6 +42,7 @@ import { isMobileModeEnabled } from './mobile-mode.js';
 import { isVisualModeEnabled, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { isVerboseModeEnabled } from './verbose-mode.js';
 import { verboseSessions } from './verbose-sessions.js';
+import { mentionSessions } from './mention-sessions.js';
 import { getCurrentTtsProvider, getCurrentWakeWord } from './tts-toggle.js';
 import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand, handleAutocomplete } from './slash-commands.js';
@@ -2504,6 +2505,8 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     }
   }
 
+  const _mentionAc = new AbortController();
+  mentionSessions.set(_parentChannelId, _mentionAc);
   try {
     const result = await generateTextResponse(finalPrompt, {
       channelId: _parentChannelId,
@@ -2511,6 +2514,13 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       discordChatHistory,
       skipChannelContext: true,
     });
+
+    mentionSessions.delete(_parentChannelId);
+
+    if (_mentionAc.signal.aborted) {
+      logger.info(`@mention: reply suppressed — /stop issued during fetch`);
+      return;
+    }
 
     if (!result.text || result.text.length < 2) {
       logger.info(`@mention: empty response (sub-agent likely spawned)`);
@@ -2559,6 +2569,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       }
     }
   } catch (err) {
+    mentionSessions.delete(_parentChannelId);
     logger.error(`@mention handler error:`, err.message);
     try {
       await message.reply("Having trouble processing that right now, sir.");
