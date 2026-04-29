@@ -2457,10 +2457,30 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       else if (unit.startsWith('m')) intervalMs = n * 60 * 1000;
       else if (unit.startsWith('h')) intervalMs = n * 60 * 60 * 1000;
     }
+    // "until X" — phrase-based termination
     const untilMatch = content.match(/until\s+(.+?)(?:\.|$)/i);
-    const terminationPhrase = untilMatch ? untilMatch[1].trim() : null;
+    let terminationPhrase = untilMatch ? untilMatch[1].trim() : null;
+
+    // "for the next N hours/minutes" — compute maxRuns from total duration
+    let maxRuns = 0;
+    const forMatch = content.match(/for\s+(?:the\s+next\s+)?(\d+)\s*(second|minute|hour|min|sec|s|m|h)s?/i);
+    if (forMatch) {
+      const n = parseInt(forMatch[1]);
+      const u = forMatch[2].toLowerCase();
+      let durationMs;
+      if (u.startsWith('s')) durationMs = n * 1000;
+      else if (u.startsWith('m')) durationMs = n * 60 * 1000;
+      else if (u.startsWith('h')) durationMs = n * 60 * 60 * 1000;
+      maxRuns = Math.max(1, Math.floor(durationMs / intervalMs));
+      // If "until phrase" was something like "until an hour", clear it — duration wins
+      if (terminationPhrase && /^\d+\s*(hour|minute|min|second|sec|h|m|s)/i.test(terminationPhrase)) {
+        terminationPhrase = null;
+      }
+    }
+
     const corePrompt = content
       .replace(/every\s+\d+\s*(second|minute|hour|min|sec|s|m|h)s?/gi, '')
+      .replace(/for\s+(?:the\s+next\s+)?\d+\s*(second|minute|hour|min|sec|s|m|h)s?/gi, '')
       .replace(/until\s+.+?(?:\.|$)/gi, '')
       .replace(/^(check|monitor|watch|run)\s+/i, '')
       .trim();
@@ -2470,10 +2490,11 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       channelId: message.channelId,
       userId: message.author.id,
       terminationPhrase,
-      maxRuns: 0,
+      maxRuns,
     });
     const humanInterval = intervalMs < 60000 ? `${intervalMs/1000}s` : `${intervalMs/60000}m`;
-    await message.reply(`✅ Scheduled — will run every ${humanInterval}${terminationPhrase ? ` until "${terminationPhrase}"` : ''}. ID: \`${sched.id}\``);
+    const suffix = terminationPhrase ? ` until "${terminationPhrase}"` : maxRuns > 0 ? ` (${maxRuns} runs)` : '';
+    await message.reply(`✅ Scheduled — will run every ${humanInterval}${suffix}. ID: \`${sched.id}\``);
     return;
   }
 
