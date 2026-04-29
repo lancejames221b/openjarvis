@@ -14,3 +14,8 @@ config-backups/
 
 # Local env backups
 .env.backups/
+
+# Runtime / build artifacts
+*.deb
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock
