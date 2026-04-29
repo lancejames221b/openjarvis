@@ -163,7 +163,7 @@ export function consumeRotatedHistory() {
  * Append a completed task to data/memory.md (local file, no external deps).
  * Also stores to haivemind if enabled. Fire-and-forget.
  */
-export async function storeTaskToHaivemind(taskId, userMessage, spokenResult) {
+export async function storeTaskToHaivemind(taskId, userMessage, spokenResult, structured = null) {
   const ts         = new Date().toISOString().substring(0, 16);
   const userSnip   = (userMessage   || '').substring(0, 120);
   const resultSnip = (spokenResult  || '').substring(0, 200);
@@ -173,8 +173,11 @@ export async function storeTaskToHaivemind(taskId, userMessage, spokenResult) {
 
   // Also push to haivemind if enabled
   if (HAIVEMIND_ENABLED) {
-    const content = `VOICE-TASK ${ts} task=${taskId}: request="${userSnip}" spoken="${resultSnip}"`;
-    await _haivemindStore(content, 'voice-session');
+    const prefix = structured?.prefix || 'VOICE-TASK';
+    const extra  = structured?.extra  ? ` ${structured.extra}` : '';
+    const cat    = structured?.category || 'voice-session';
+    const content = `${prefix} ${ts} task=${taskId}: request="${userSnip}"${extra} spoken="${resultSnip}"`;
+    await _haivemindStore(content, cat);
   }
 }
 

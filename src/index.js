@@ -21,7 +21,7 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateTextResponseStreaming, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateTextResponseStreaming, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, runTaskAgent, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './tts.js';
 import { OpusDecoder } from './opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './wakeword.js';
@@ -726,6 +726,7 @@ async function flushPendingUtterance() {
     const classification = classifyIntent({ transcript: merged, speechDurationMs: 0, conversationDepth: conv ? conv.history.length : 0, isFollowUp: false, previousResponseType: null });
     if (classification?.type) {
       brainOptions.intentType = classification.type;
+      brainOptions.budget = classification;
       _intentType = classification.type;
     }
   } catch (_) {}
@@ -4699,6 +4700,55 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
         logger.warn(`⚠️ Contextual ack failed: ${err.message}`);
         return null;
       });
+    }
+
+    // ── TASK_AGENT routing (isolated session, full MCP, no session accumulation) ─
+    // When TASK_AGENT_ENABLED=true, tool-heavy intents bypass the main voice session
+    // entirely. A fresh Claude session with full MCP tools handles the task and POSTs
+    // a 2-3 sentence spoken summary back via /speak. Main session stays lean.
+    if (process.env.TASK_AGENT_ENABLED === 'true' && brainOptions.budget?.taskAgent) {
+      logger.info(`🤖 Task #${taskId} intent=${intentType} → task agent (isolated session)`);
+
+      // Speak ack while task agent processes
+      if (contextualAckPromise) {
+        try {
+          const ackText = await contextualAckPromise;
+          if (ackText) {
+            if (isVisualModeEnabled()) {
+              const targetId = await resolveVisualChannel();
+              const ch = client.channels.cache.get(targetId);
+              if (ch?.sendTyping) ch.sendTyping().catch(() => {});
+            } else {
+              logger.info(`🎯 Task agent ack: "${ackText}"`);
+              const ackAudio = await synthesizeSpeech(ackText);
+              if (ackAudio) audioQueue.add(ackAudio);
+            }
+          }
+        } catch (e) {
+          logger.warn(`⚠️ Task agent ack failed: ${e.message}`);
+        }
+      }
+
+      busEmit('BRAIN', `route=task-agent intent=${intentType} task=#${taskId}`, { userId, taskId });
+      const taskResult = await runTaskAgent(transcript, { ...brainOptions, taskId, userId });
+
+      if (taskResult.dispatched) {
+        markWorking(taskId);
+        hudTaskUpdate(taskId, 'working');
+        postActivity(`🤖 **Task #${taskId}** routed to task agent (${intentType}) — awaiting /speak callback`);
+        logger.info(`🤖 Task #${taskId} dispatched to isolated task agent`);
+      } else {
+        markFailed(taskId, taskResult.error);
+        hudTaskUpdate(taskId, 'failed');
+        logger.error(`❌ Task #${taskId} task agent dispatch failed: ${taskResult.error}`);
+        const failMsg = "I'm having trouble dispatching that task right now, sir.";
+        try {
+          const audio = await synthesizeSpeech(failMsg);
+          if (audio) audioQueue.add(audio);
+        } catch (_) {}
+        postActivity(`❌ **Task #${taskId}** task agent dispatch failed: ${taskResult.error}`);
+      }
+      return;
     }
 
     // ── ACTION Intent → Webhook Dispatch (with tools) ─────────────────

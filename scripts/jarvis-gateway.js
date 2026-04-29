@@ -202,6 +202,8 @@ const ASK_MODE_ARGS = [
 const ASK_MODE_FILE = `${process.env.HOME}/.local/state/jarvis-voice/channel-ask-mode.json`;
 function _channelIsInAskMode(channelKey) {
   if (!channelKey) return false;
+  // Task agents are never in ask mode — they run autonomously
+  if (channelKey.startsWith("task-agent:")) return false;
   let state;
   try { state = JSON.parse(fs.readFileSync(ASK_MODE_FILE, "utf8")); } catch { return false; }
   // channelKey format: "agent:main:discord:channel:<id>[:thread:<tid>]"
@@ -224,6 +226,8 @@ const MCP_CONFIG_PATH = process.env.JARVIS_MCP_CONFIG_PATH ||
                         `${process.env.HOME}/.config/jarvis-voice/jarvis-mcp.json`;
 function _channelMcpMode(channelKey) {
   if (!channelKey) return { mode: "off" };
+  // Task agents always get full MCP — they need tools to complete their work
+  if (channelKey.startsWith("task-agent:")) return { mode: "full" };
   let state;
   try { state = JSON.parse(fs.readFileSync(MCP_MODE_FILE, "utf8")); } catch { return { mode: "off" }; }
   const m = channelKey.match(/discord:channel:(\d+)(?::thread:(\d+))?/);
@@ -1002,6 +1006,35 @@ app.post("/hooks/agent", requireAuth, async (req, res) => {
     }
 
     log("hooks_agent_done", { taskId, channelId, model: result.model });
+  });
+});
+
+// ── Task Agent — isolated session, full MCP, no session accumulation ──────────
+// Spawns a fresh Claude session (chatId=null) with MCP via "task-agent:" channelKey.
+// Brain layer calls this for tool-heavy intents to keep the main voice session lean.
+app.post("/v1/task/run", requireAuth, async (req, res) => {
+  metrics.hooksAgent++;
+  const prompt  = String(req.body?.prompt  || "");
+  const model   = req.body?.model ? String(req.body.model) : undefined;
+  const taskId  = req.body?.taskId ? String(req.body.taskId) : null;
+  if (!prompt) return res.status(400).json({ error: "prompt required" });
+  res.status(202).json({ accepted: true, taskId, backend: "jarvis-gateway/task-agent" });
+
+  queueMicrotask(async () => {
+    // Unique per-task key — always fresh session (chatId=null), always full MCP
+    const channelKey = `task-agent:${taskId || Date.now()}`;
+    let result;
+    try {
+      result = await callClaudeAgent(prompt, model, null, channelKey);
+    } catch (error) {
+      log("task_agent_error", { taskId, error: String(error.message || error) });
+      try { await postSpeakSummary("The task could not be completed.", taskId); } catch {}
+      return;
+    }
+    try { await postSpeakSummary(summarize(result.text), taskId); } catch (e) {
+      log("task_agent_speak_error", { taskId, error: String(e.message || e) });
+    }
+    log("task_agent_done", { taskId, model: result.model, chars: result.text?.length });
   });
 });
 

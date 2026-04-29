@@ -156,6 +156,7 @@ export function getTextModel() { return textModel; }
 export function setTextModel(m) { textModel = m; logger.info(`[model] text model → ${m}`); }
 const _dispatchModel = process.env.DISPATCH_MODEL || process.env.VOICE_MODEL || process.env.DEFAULT_MODEL || 'claude-sonnet-4-6';
 const HOOKS_AGENT_URL = `${GATEWAY_URL}/hooks/agent`;
+const TASK_RUN_URL    = `${GATEWAY_URL}/v1/task/run`;
 const VOICE_CALLBACK_CHANNEL = process.env.VOICE_CALLBACK_CHANNEL_ID || ''; // Set VOICE_CALLBACK_CHANNEL_ID in .env
 
 // ── Thinking param — driven by VOICE_DEFAULT_THINKING env var ───────────
@@ -1278,6 +1279,56 @@ export async function generateTextResponse(userMessage, options = {}) {
   } catch (err) {
     logger.error('Text gateway failed:', err.message);
     return { text: "Having trouble connecting to the gateway right now." };
+  }
+}
+
+function buildTaskAgentPrompt(userMessage, options = {}) {
+  const _now = new Date();
+  let contextTags = `[DATETIME: ${_now.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}] `;
+  if (options.speaker) contextTags += `[SPEAKER: ${options.speaker}] `;
+  if (options.sentiment?.sentiment && options.sentiment.sentiment !== 'neutral') {
+    contextTags += `[SENTIMENT: ${options.sentiment.sentiment}] `;
+  }
+  const focusCtx = getFullFocusContext() || getFocusContextTag();
+  if (focusCtx) contextTags += focusCtx + ' ';
+
+  const taskId = options.taskId || '';
+  return `${getVoiceTag()}
+
+${contextTags}${userMessage}
+
+TASK AGENT INSTRUCTIONS:
+- You are a disposable task agent with full tool access. Complete this task fully.
+- When done, POST a 2-3 sentence spoken summary via /speak:
+curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_SUMMARY","source":"task-agent","taskId":"${taskId}"}'
+- Store the result to hAIveMind for session recall:
+mcporter call haivemind.store_memory content="TASK-AGENT ${_now.toISOString().substring(0, 16)} task=${taskId}: request=\\"${userMessage.substring(0, 120).replace(/"/g, '\\"')}\\" result=\\"SUMMARY\\"" category="voice-session"
+- Keep the spoken summary to 2-3 sentences maximum.`;
+}
+
+export async function runTaskAgent(userMessage, options = {}) {
+  const prompt = buildTaskAgentPrompt(userMessage, options);
+  const model  = options.agentModel || options.model || voiceModel;
+  try {
+    const res = await fetch(TASK_RUN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+      },
+      body: JSON.stringify({ prompt, model, taskId: options.taskId }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      logger.error('Task agent dispatch failed:', res.status, body);
+      return { dispatched: false, error: `${res.status}: ${body}` };
+    }
+    logger.info('🤖 Dispatched to task agent (isolated session, full MCP)');
+    return { dispatched: true };
+  } catch (err) {
+    logger.error('Task agent dispatch error:', err.message);
+    return { dispatched: false, error: err.message };
   }
 }
 

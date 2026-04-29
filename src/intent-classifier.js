@@ -772,6 +772,13 @@ export function classifyIntent(signals) {
   });
 }
 
+// Intent types that should route to an isolated task agent (full MCP, fresh session)
+const TASK_AGENT_INTENTS = new Set([
+  'ACTION', 'EMAIL_ACTION', 'EMAIL_QUERY', 'EMAIL_DETAIL',
+  'CALENDAR', 'CALENDAR_ACTION', 'SUMMARIZE', 'LIST_QUERY',
+  'PLAN_CMD', 'STUDY_CMD', 'DEEP_DIVE',
+]);
+
 /**
  * Build a budget response object
  * @private
@@ -785,12 +792,13 @@ function buildBudget(type, options) {
     spillover: options.spillover || false,
     spilloverHint: options.spilloverHint || null,
     budgetInstruction: options.budgetInstruction,
+    taskAgent: TASK_AGENT_INTENTS.has(type),
   };
-  
+
   // Optional metadata for special handling (model switch, exec, etc.)
   if (options.meta) {
     result.meta = options.meta;
   }
-  
+
   return result;
 }
