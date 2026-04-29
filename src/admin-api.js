@@ -37,6 +37,7 @@ import {
 import { enrollmentState } from './auth.js';
 import { getAllowedUsers, addMember, removeMember } from './allowed-users.js';
 import { emit as busEmit, getRingBuffer, subscribe } from './event-bus.js';
+import { listSchedules, createSchedule, deleteSchedule, pauseSchedule, resumeSchedule } from './task-scheduler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -536,6 +537,44 @@ export function startAdminApi({ discordClient } = {}) {
         }, 30_000);
         req.on('close', () => { unsub(); clearInterval(hb); });
         return;
+      }
+
+      // ── Schedules ──────────────────────────────────────────────────────
+      if (path === '/admin/schedules' && req.method === 'GET') {
+        return sendJSON(res, 200, { schedules: listSchedules() });
+      }
+      if (path === '/admin/schedules' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        if (!body.prompt || !body.intervalMs || !body.channelId) {
+          return sendJSON(res, 400, { error: 'prompt, intervalMs, and channelId required' });
+        }
+        const s = createSchedule({
+          prompt: body.prompt,
+          intervalMs: body.intervalMs,
+          channelId: body.channelId,
+          userId: body.userId || 'admin',
+          terminationPhrase: body.terminationPhrase || null,
+          maxRuns: body.maxRuns || 0,
+        });
+        return sendJSON(res, 200, { ok: true, schedule: s });
+      }
+      const schedMatch = path.match(/^\/admin\/schedules\/([^\/]+)$/);
+      if (schedMatch) {
+        const id = decodeURIComponent(schedMatch[1]);
+        if (req.method === 'DELETE') {
+          deleteSchedule(id);
+          return sendJSON(res, 200, { ok: true });
+        }
+        if (req.method === 'PATCH') {
+          const body = await readJsonBody(req);
+          if (body.enabled === false) pauseSchedule(id);
+          else if (body.enabled === true) resumeSchedule(id);
+          if (body.intervalMs) {
+            const s = listSchedules().find(s => s.id === id);
+            if (s) { s.intervalMs = body.intervalMs; }
+          }
+          return sendJSON(res, 200, { ok: true });
+        }
       }
 
       // ── Fallback ───────────────────────────────────────────────────────

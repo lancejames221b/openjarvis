@@ -397,6 +397,39 @@ export function classifyIntent(signals) {
   const lower = transcript.toLowerCase();
   const wordCount = transcript.split(/\s+/).length;
   
+  // ── 0. SCHEDULER intents — must be checked before other patterns ────
+  if (/every\s+\d+\s*(second|minute|hour|min|sec|s|m|h)s?/i.test(lower) &&
+      /(check|monitor|watch|run|poll|ping|test)\b/i.test(lower)) {
+    return buildBudget('RECURRING_CHECK', {
+      maxSentences: 1,
+      maxSpokenSeconds: 3,
+      responseStyle: 'ack',
+      spillover: false,
+      budgetInstruction: 'SCHEDULER: User wants a recurring check. Parse interval and task, confirm the schedule in one sentence.',
+    });
+  }
+
+  if (/\b(list|show|what)\b.{0,30}\bschedules?\b/i.test(lower) ||
+      /\bschedules?\s+(are\s+)?(running|active|pending)\b/i.test(lower)) {
+    return buildBudget('LIST_SCHEDULES', {
+      maxSentences: 2,
+      maxSpokenSeconds: 5,
+      responseStyle: 'concise-answer',
+      spillover: false,
+      budgetInstruction: 'SCHEDULER: List active schedules.',
+    });
+  }
+
+  if (/\b(stop|cancel|remove|delete)\b.{0,30}\bschedule\b/i.test(lower)) {
+    return buildBudget('DELETE_SCHEDULE', {
+      maxSentences: 1,
+      maxSpokenSeconds: 3,
+      responseStyle: 'ack',
+      spillover: false,
+      budgetInstruction: 'SCHEDULER: Remove the specified schedule.',
+    });
+  }
+
   // ── 1. ADMIN_CMD - Model switching, exec, meta commands ─────────────
   // These are high-priority overrides — must be checked first
   

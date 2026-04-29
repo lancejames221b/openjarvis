@@ -30,6 +30,7 @@ import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFra
 import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, getTask, TaskState } from './task-ledger.js';
+import { initScheduler, createSchedule, listSchedules, deleteSchedule } from './task-scheduler.js';
 import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext, storeChannelMemory } from './session-manager.js';
 import { getTTSHealth } from './tts.js';
 import { getSTTHealth, checkSttHealth } from './stt.js';
@@ -1380,6 +1381,35 @@ client.once('ready', async () => {
     logger.warn(`📋 Ledger reconciliation failed: ${e.message}`);
   }
 
+  // Persistent scheduler — disk-backed, survives restarts
+  initScheduler(async (sched) => {
+    const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
+    const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || '';
+    try {
+      const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}` },
+        body: JSON.stringify({
+          model: 'claude',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: sched.prompt }]
+        })
+      });
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content || '';
+      if (sched.channelId && text) {
+        await postToTextChannel(`**[Schedule \`${sched.id}\`]** ${text}`, { forceChannelId: sched.channelId });
+      }
+      if (sched.terminationPhrase && text.toLowerCase().includes(sched.terminationPhrase.toLowerCase())) {
+        await postToTextChannel(`✅ Schedule \`${sched.id}\` condition met — stopped.`, { forceChannelId: sched.channelId });
+      }
+      return { text };
+    } catch (err) {
+      logger.warn(`[scheduler] dispatch error: ${err.message}`);
+      return { text: '' };
+    }
+  });
+
   // Wire up cross-path content deduplication (shared between messageCreate + /speak)
   setDedupCallback(_isDuplicateContent);
 
@@ -2406,6 +2436,71 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       await message.reply('Speaker mode off for this channel.');
       return;
     }
+  }
+
+  // ── Scheduler intent dispatch (RECURRING_CHECK / LIST_SCHEDULES / DELETE_SCHEDULE) ──
+  const _lowerContent = content.toLowerCase();
+  const _isRecurringCheck =
+    /every\s+\d+\s*(second|minute|hour|min|sec|s|m|h)s?/i.test(content) &&
+    /(check|monitor|watch|run|poll|ping|test)\b/i.test(content);
+  const _isListSchedules = /\b(list|show|what)\b.{0,30}\bschedules?\b/i.test(content) ||
+    /\bschedules?\s+(are\s+)?(running|active|pending)\b/i.test(content);
+  const _isDeleteSchedule = /\b(stop|cancel|remove|delete)\b.{0,30}\bschedule\b/i.test(content);
+
+  if (_isRecurringCheck) {
+    const intervalMatch = content.match(/every\s+(\d+)\s*(second|minute|hour|min|sec|s|m|h)s?/i);
+    let intervalMs = 5 * 60 * 1000;
+    if (intervalMatch) {
+      const n = parseInt(intervalMatch[1]);
+      const unit = intervalMatch[2].toLowerCase();
+      if (unit.startsWith('s')) intervalMs = n * 1000;
+      else if (unit.startsWith('m')) intervalMs = n * 60 * 1000;
+      else if (unit.startsWith('h')) intervalMs = n * 60 * 60 * 1000;
+    }
+    const untilMatch = content.match(/until\s+(.+?)(?:\.|$)/i);
+    const terminationPhrase = untilMatch ? untilMatch[1].trim() : null;
+    const corePrompt = content
+      .replace(/every\s+\d+\s*(second|minute|hour|min|sec|s|m|h)s?/gi, '')
+      .replace(/until\s+.+?(?:\.|$)/gi, '')
+      .replace(/^(check|monitor|watch|run)\s+/i, '')
+      .trim();
+    const sched = createSchedule({
+      prompt: corePrompt || content,
+      intervalMs,
+      channelId: message.channelId,
+      userId: message.author.id,
+      terminationPhrase,
+      maxRuns: 0,
+    });
+    const humanInterval = intervalMs < 60000 ? `${intervalMs/1000}s` : `${intervalMs/60000}m`;
+    await message.reply(`✅ Scheduled — will run every ${humanInterval}${terminationPhrase ? ` until "${terminationPhrase}"` : ''}. ID: \`${sched.id}\``);
+    return;
+  }
+
+  if (_isListSchedules) {
+    const all = listSchedules();
+    if (all.length === 0) {
+      await message.reply('No active schedules.');
+    } else {
+      const lines = all.map(s => `• \`${s.id}\` — every ${s.intervalMs/60000}m — "${s.prompt.substring(0,60)}..." (runs: ${s.runCount})`);
+      await message.reply(lines.join('\n'));
+    }
+    return;
+  }
+
+  if (_isDeleteSchedule) {
+    const idMatch = content.match(/\bsched_\S+/);
+    if (idMatch) {
+      deleteSchedule(idMatch[0]);
+      await message.reply(`✅ Schedule \`${idMatch[0]}\` removed.`);
+    } else if (/all\s+schedule/i.test(content)) {
+      const all = listSchedules();
+      all.forEach(s => deleteSchedule(s.id));
+      await message.reply(`✅ Removed ${all.length} schedule(s).`);
+    } else {
+      await message.reply('Which schedule? Say the ID (e.g. `sched_xxx`) or "stop all schedules".');
+    }
+    return;
   }
 
   // Show typing indicator while we process
