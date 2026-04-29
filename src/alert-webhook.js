@@ -758,7 +758,7 @@ app.post('/stop', async (req, res) => {
   if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
   try {
     // Import and stop speech output if available
-    const { stopSpeaking } = await import('./speech-output.js').catch(() => ({}));
+    const { stopSpeaking } = await import('./voice/speech-output.js').catch(() => ({}));
     if (typeof stopSpeaking === 'function') {
       await stopSpeaking();
       logger.info('🛑 /stop: TTS halted via button');
@@ -968,7 +968,7 @@ app.post('/replay', async (req, res) => {
   const authHeader = req.headers.authorization;
   if (authHeader !== `Bearer ${WEBHOOK_TOKEN}`) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { replayLast } = await import('./speech-output.js').catch(() => ({}));
+    const { replayLast } = await import('./voice/speech-output.js').catch(() => ({}));
     if (typeof replayLast === 'function') {
       await replayLast();
       logger.info('▶ /replay: replaying last phrase via button');
@@ -1604,7 +1604,7 @@ app.post('/test-voice', async (req, res) => {
     logger.info(`🧪 direct gateway ping: status=${pingRes.status} ok=${pingRes.ok} body=${JSON.stringify(pingData).substring(0, 120)}`);
 
     const { generateResponse } = await import('./brain.js');
-    const { speakText } = await import('./speech-output.js');
+    const { speakText } = await import('./voice/speech-output.js');
 
     logger.info(`🧪 /test-voice inject: "${message.substring(0, 80)}"`);
     const startMs = Date.now();

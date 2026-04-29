@@ -1,4 +1,4 @@
-import logger from './logger.js';
+import logger from '../logger.js';
 import { unlinkSync } from 'fs';
 
 // Best-effort unlink — the TTS pipeline produces many temp wavs; any code path

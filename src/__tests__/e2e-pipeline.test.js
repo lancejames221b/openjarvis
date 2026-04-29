@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ── Mocks ────────────────────────────────────────────────────────────
 vi.mock('../logger.js', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
-vi.mock('../stt.js', () => ({
+vi.mock('../voice/stt.js', () => ({
   transcribeAudio: vi.fn(async () => ({
     text: 'Jarvis, what time is it',
     confidence: 0.95,
@@ -36,7 +36,7 @@ vi.mock('../brain.js', () => ({
   getActivePersona: vi.fn(() => ({ name: 'jarvis' })),
 }));
 
-vi.mock('../tts.js', () => ({
+vi.mock('../voice/tts.js', () => ({
   synthesizeSpeech: vi.fn(async () => Buffer.from('fake-audio')),
   isTTSAvailable: vi.fn(() => true),
 }));
@@ -64,7 +64,7 @@ vi.mock('../visual-mode.js', () => ({
   setVisualTargetChannel: vi.fn(() => true),
 }));
 
-vi.mock('../tts-toggle.js', () => ({
+vi.mock('../voice/tts-toggle.js', () => ({
   isTtsToggleCommand: vi.fn(() => null),
   setTtsProvider: vi.fn(() => ({ ok: true, provider: 'edge' })),
 }));
@@ -95,9 +95,9 @@ vi.mock('../haiku-intent.js', () => ({
 }));
 
 // ── Real imports (after mocks) ────────────────────────────────────
-import { checkWakeWord } from '../wakeword.js';
+import { checkWakeWord } from '../voice/wakeword.js';
 import { dispatchCommand } from '../command-dispatch.js';
-import { synthesizeSpeech } from '../tts.js';
+import { synthesizeSpeech } from '../voice/tts.js';
 import { generateResponseStreaming } from '../brain.js';
 import * as visualMode from '../visual-mode.js';
 import * as focusState from '../focus-state.js';

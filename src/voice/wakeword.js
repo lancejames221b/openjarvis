@@ -6,7 +6,7 @@
  */
 
 import 'dotenv/config';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 // ── Feature Flag: VOICE_WAKE_WORD_ENABLED ─────────────────────────────────────
 // Clean on/off toggle for wake word detection.

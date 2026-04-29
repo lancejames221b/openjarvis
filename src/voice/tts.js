@@ -15,12 +15,12 @@ import { existsSync, mkdirSync } from 'fs';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { Readable } from 'stream';
-import { formatNumbersForSpeech } from './number-formatter.js';
-import logger from './logger.js';
+import { formatNumbersForSpeech } from '../number-formatter.js';
+import logger from '../logger.js';
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TMP_DIR = join(__dirname, '..', 'tmp');
+const TMP_DIR = join(__dirname, '../..', 'tmp');
 if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
 
 const STREAMING_TTS_ENABLED = process.env.STREAMING_TTS_ENABLED !== 'false'; // Default true

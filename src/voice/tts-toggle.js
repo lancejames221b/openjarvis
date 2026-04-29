@@ -20,10 +20,10 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ENV_FILE = `${__dirname}/../.env`;
+const ENV_FILE = `${__dirname}/../../.env`;
 
 // ── Provider display metadata ─────────────────────────────────────────────────
 // Wake words are read from .env at call time (JVOICE_WAKE_<PROVIDER>=<word>).

@@ -10,8 +10,8 @@ import { unlinkSync, copyFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { synthesizeSpeech, synthesizeChatterboxStream, splitIntoSentences, isTTSAvailable } from './tts.js';
-import { generateTldr } from './tldr-mode.js';
-import logger from './logger.js';
+import { generateTldr } from '../tldr-mode.js';
+import logger from '../logger.js';
 
 // ── Audio Player ─────────────────────────────────────────────────────
 // Default player -- replaced by index.js via setPlayer() to share the

@@ -7,7 +7,7 @@
 
 import { Transform } from 'stream';
 import prism from 'prism-media';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 export class OpusDecoder extends Transform {
   constructor() {

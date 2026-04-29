@@ -9,7 +9,7 @@ import { tryShortcut } from './shortcut-engine.js';
 import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from './tldr-mode.js';
 import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
 import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from './visual-mode.js';
-import { isTtsToggleCommand, setTtsProvider } from './tts-toggle.js';
+import { isTtsToggleCommand, setTtsProvider } from './voice/tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain.js';
 import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from './focus-state.js';

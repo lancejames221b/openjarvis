@@ -25,7 +25,7 @@ vi.mock('../visual-mode.js', () => ({
   setVisualTargetChannel: vi.fn(() => true),
 }));
 
-vi.mock('../tts-toggle.js', () => ({
+vi.mock('../voice/tts-toggle.js', () => ({
   isTtsToggleCommand: vi.fn(() => null),
   setTtsProvider: vi.fn(() => ({ ok: true, provider: 'edge' })),
 }));
@@ -69,7 +69,7 @@ import { dispatchCommand, isInterruptCommand } from '../command-dispatch.js';
 import * as tldrMode from '../tldr-mode.js';
 import * as mobileMode from '../mobile-mode.js';
 import * as visualMode from '../visual-mode.js';
-import * as ttsToggle from '../tts-toggle.js';
+import * as ttsToggle from '../voice/tts-toggle.js';
 import * as intentClassifier from '../intent-classifier.js';
 import * as brain from '../brain.js';
 import * as focusState from '../focus-state.js';

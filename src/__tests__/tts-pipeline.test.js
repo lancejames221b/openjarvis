@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TtsPipeline } from '../tts-pipeline.js';
+import { TtsPipeline } from '../voice/tts-pipeline.js';
 
 // Simple mock audio queue that records what was added
 function makeMockAudioQueue() {

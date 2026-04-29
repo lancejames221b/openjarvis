@@ -18,7 +18,7 @@ vi.mock('../logger.js', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock('../wakeword.js', () => ({ VOICE_NAME: 'Jarvis' }));
+vi.mock('../voice/wakeword.js', () => ({ VOICE_NAME: 'Jarvis' }));
 
 vi.mock('../session-manager.js', () => ({
   getActiveSessionUser: vi.fn(() => 'test-user'),
@@ -36,7 +36,7 @@ vi.mock('../focus-state.js', () => ({
   getFocusContextTag: vi.fn(() => null),
   getFullFocusContext: vi.fn(() => null),
 }));
-vi.mock('../tts-toggle.js', () => ({ getCurrentTtsProvider: vi.fn(() => 'edge') }));
+vi.mock('../voice/tts-toggle.js', () => ({ getCurrentTtsProvider: vi.fn(() => 'edge') }));
 
 // Mock fs — personality loader uses readFileSync / writeFileSync / readdirSync
 vi.mock('fs', async () => {

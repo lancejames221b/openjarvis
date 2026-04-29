@@ -6,12 +6,12 @@
  */
 
 import {
-import logger from './logger.js';
   joinVoiceChannel,
   VoiceConnectionStatus,
   entersState,
   EndBehaviorType,
 } from '@discordjs/voice';
+import logger from '../logger.js';
 
 // ── Reconnect Backoff State ──────────────────────────────────────────
 const reconnectState = {

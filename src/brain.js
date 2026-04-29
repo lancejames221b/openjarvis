@@ -1,5 +1,5 @@
 import logger from './logger.js';
-import { VOICE_NAME } from './wakeword.js';
+import { VOICE_NAME } from './voice/wakeword.js';
 import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory, getChannelContext, storeChannelMemory } from './session-manager.js';
 /**
  * Brain Module - Thin voice I/O layer to Jarvis Gateway
