@@ -17,8 +17,8 @@ const ENV_DEFAULTS = {
   HAIKU_AMBIENT_LOG_DECISIONS: 'false', // silence Discord logging in tests
   HAIKU_AMBIENT_TIMEOUT_MS: '2000',
   HAIKU_AMBIENT_PHASE: '3', // full phase by default — individual tests override
-  CLAWDBOT_GATEWAY_URL: 'http://localhost:22100',
-  CLAWDBOT_GATEWAY_TOKEN: 'test-token',
+  JARVIS_GATEWAY_URL: 'http://localhost:22100',
+  JARVIS_GATEWAY_TOKEN: 'test-token',
 };
 
 // Apply env before module load
@@ -222,9 +222,8 @@ describe('haiku-ambient classifyAmbient()', () => {
     });
 
     it('no gateway token → UNCERTAIN', async () => {
-      const savedToken = process.env.JARVIS_GATEWAY_TOKEN || process.env.CLAWDBOT_GATEWAY_TOKEN;
+      const savedToken = process.env.JARVIS_GATEWAY_TOKEN;
       delete process.env.JARVIS_GATEWAY_TOKEN;
-      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
       const mockFn = vi.fn();
       vi.stubGlobal('fetch', mockFn);
       const { classifyAmbient } = await import('../haiku-ambient.js?t=notoken1');

@@ -10,7 +10,7 @@
 # Prerequisites:
 #   - Docker 24+ with Compose v2
 #   - NVIDIA Container Toolkit for GPU mode: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
-#   - .env file with DISCORD_TOKEN, CLAWDBOT_GATEWAY_URL, etc.
+#   - .env file with DISCORD_TOKEN, JARVIS_GATEWAY_URL, etc.
 #   - models/jarvis/*.onnx (Piper voice models) — see INSTALL.md for download link
 #
 # Service ports (internal, not exposed to host by default):

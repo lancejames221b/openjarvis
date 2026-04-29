@@ -2,7 +2,7 @@
 
 ## Before you start
 
-Jarvis Voice is the voice layer for [OpenClaw](https://openclaw.ai). The core pipeline is intentionally tight and opinionated — changes to the voice path (VAD, speaker verify, STT, TTS, FSM state) need a clear rationale. Other areas (new STT providers, Docker improvements, docs, platform support) are very welcome.
+Jarvis is a self-hosted Discord voice and text AI assistant. The core pipeline is intentionally tight and opinionated — changes to the voice path (VAD, speaker verify, STT, TTS, FSM state) need a clear rationale. Other areas (new STT providers, Docker improvements, docs, platform support) are very welcome.
 
 ## What's in scope
 

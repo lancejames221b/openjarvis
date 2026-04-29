@@ -426,7 +426,7 @@ export function classifyIntent(signals) {
   }
   
   // Admin commands: "admin [x]", "config [x]", "restart [service]"
-  if (lower.match(/^admin\s/) || lower.match(/\b(gateway config|clawdbot config|restart gateway|restart service|check status|system status|health check|update clawdbot)\b/)) {
+  if (lower.match(/^admin\s/) || lower.match(/\b(gateway config|jarvis config|restart gateway|restart service|check status|system status|health check|update jarvis)\b/)) {
     return buildBudget('ADMIN_CMD', {
       maxSentences: 2,
       maxSpokenSeconds: 5,

@@ -1,6 +1,6 @@
 /**
  * handoff-resolver — gather the pieces needed for a resume card:
- * chatId from zeroclaw-sessions.json, directory+model from channel-registry.json,
+ * chatId from jarvis-sessions.json, directory+model from channel-registry.json,
  * with safe fallbacks when data is missing.
  */
 
@@ -9,7 +9,7 @@ import { join } from 'path';
 import logger from './logger.js';
 
 const STATE_DIR  = process.env.JARVIS_STATE_DIR || `${process.env.HOME}/.local/state/jarvis-voice`;
-const SESSIONS_FILE = join(STATE_DIR, 'zeroclaw-sessions.json');
+const SESSIONS_FILE = join(STATE_DIR, 'jarvis-sessions.json');
 const REGISTRY = process.env.JARVIS_CHANNEL_REGISTRY || `${process.env.HOME}/dev/contexts/channel-registry.json`;
 
 function readJson(path) {

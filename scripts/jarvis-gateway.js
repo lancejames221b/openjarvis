@@ -6,8 +6,8 @@ import { spawn } from "node:child_process";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const PORT = Number(process.env.ZEROCLAW_COMPAT_PORT || 22103);
-const ZEROCLAW_BASE_URL = process.env.ZEROCLAW_BASE_URL || "http://127.0.0.1:22101";
+const PORT = Number(process.env.JARVIS_GATEWAY_PORT || process.env.ZEROCLAW_COMPAT_PORT || 22100);
+const ZEROCLAW_BASE_URL = process.env.JARVIS_BACKEND_URL || process.env.ZEROCLAW_BASE_URL || "http://127.0.0.1:22101";
 const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || "";
 // Shell aliases (like `claude --dangerously-skip-permissions`) don't survive spawn().
 // Use the actual binary path and pass flags explicitly.
@@ -53,11 +53,11 @@ const DEFAULT_REPORT_CHANNEL = process.env.DISCORD_REPORT_CHANNEL_ID || process.
 const ALERT_WEBHOOK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || "";
 const ALERT_WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || "3335";
 const ALERT_WEBHOOK_HOST = process.env.TAILSCALE_IP || process.env.ALERT_WEBHOOK_HOST || "127.0.0.1";
-const SPEAK_URL = process.env.ZEROCLAW_COMPAT_SPEAK_URL || `http://${ALERT_WEBHOOK_HOST}:${ALERT_WEBHOOK_PORT}/speak`;
+const SPEAK_URL = process.env.JARVIS_SPEAK_URL || process.env.ZEROCLAW_COMPAT_SPEAK_URL || `http://${ALERT_WEBHOOK_HOST}:${ALERT_WEBHOOK_PORT}/speak`;
 // Persist sessions to ~/.local/state so chatIds survive service restarts and reboots.
 // /tmp is wiped on reboot; every restart meant fresh cursor-agent contexts.
 const _defaultSessionDir = `${process.env.HOME}/.local/state/jarvis-voice`;
-const SESSION_STORE_PATH = process.env.SESSION_STORE_PATH || `${_defaultSessionDir}/zeroclaw-sessions.json`;
+const SESSION_STORE_PATH = process.env.SESSION_STORE_PATH || `${_defaultSessionDir}/jarvis-sessions.json`;
 const CHANNEL_ACCOUNTS_PATH = process.env.CHANNEL_ACCOUNTS_PATH || `${_defaultSessionDir}/channel-accounts.json`;
 // Ensure the state directory exists (harmless if already present)
 try { fs.mkdirSync(_defaultSessionDir, { recursive: true }); } catch {}

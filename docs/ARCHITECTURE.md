@@ -29,8 +29,8 @@ On unmute, `voiceStateUpdate` fires the debrief sequence:
 
 Module: `src/mute-queue.js` — pure in-memory queue with TTL pruning and priority-aware eviction.
 
-## Self-Optimization Rules (OpenClaw safe)
-- **Config patches only** — never edit openclaw.json directly; always `gateway config.patch`  
+## Self-Optimization Rules
+- **Config patches only** — never edit config files directly; always modify via env vars or admin API  
 - **`allowRequestSessionKey`** — keep `false` unless you know the routing implications  
 - **Brain.js has 3 identical `const voiceMessage` lines** — always `grep -n` before editing  
 - **`node --check src/index.js` before every commit** — non-negotiable  

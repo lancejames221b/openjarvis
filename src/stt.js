@@ -406,8 +406,8 @@ function postProcessTranscript(text) {
   processed = processed.replace(/\bhai\s*vemind\b/gi, 'haivemind');
   processed = processed.replace(/\bhive\s*line\b/gi, 'haivemind');
   processed = processed.replace(/\bhivemind\b/gi, 'haivemind');
-  processed = processed.replace(/\bclawd ?bot\b/gi, 'Clawdbot');
-  processed = processed.replace(/\bcloud bot\b/gi, 'Clawdbot');
+  processed = processed.replace(/\bclawd ?bot\b/gi, 'Jarvis');
+  processed = processed.replace(/\bcloud bot\b/gi, 'Jarvis');
   processed = processed.replace(/\bm c p\b/gi, 'MCP');
   processed = processed.replace(/\bdeep ?gram\b/gi, 'Deepgram');
   processed = processed.replace(/\brad ?air\b/gi, 'Radare2');

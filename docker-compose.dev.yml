@@ -14,9 +14,8 @@ services:
       # CLI binaries and host tools
       - ~/.local:/home/generic/.local:ro
       - ~/.npm-global:/home/generic/.npm-global:ro
-      # OpenClaw, Cursor, and AI contexts - RW to allow agents to save state, skills, and audio notes
+      # Cursor and AI contexts - RW to allow agents to save state, skills, and audio notes
       - ~/.cursor:/home/generic/.cursor
-      - ~/.openclaw:/home/generic/.openclaw
       - ~/.claude:/home/generic/.claude
       - ~/.haivemind:/home/generic/.haivemind
       # MCP Servers, Memory, and OAuth tokens - RW to allow auth refreshes and database updates

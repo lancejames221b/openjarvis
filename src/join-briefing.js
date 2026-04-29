@@ -3,7 +3,7 @@
  *
  * On voice join, gathers:
  *   1. Trello: "3 Commits" cards + current task
- *   2. Calendar events (next 2 hours) via OpenClaw gateway
+ *   2. Calendar events (next 2 hours) via Jarvis gateway
  *   3. Current focus channel
  *
  * Synthesizes a ~20-second spoken briefing and plays it after the "online" greeting.

@@ -78,23 +78,14 @@ def parse_srt(srt: str) -> list[dict]:
     return segments
 
 def diarize_with_claude(segments: list[dict], num_speakers: int, context_hint: str) -> list[dict]:
-    """Send transcript to Claude via OpenClaw gateway, get back speaker labels."""
+    """Send transcript to Claude via Jarvis gateway, get back speaker labels."""
     import urllib.request
 
-    GATEWAY_URL = os.environ.get("JARVIS_GATEWAY_URL", os.environ.get("CLAWDBOT_GATEWAY_URL", "http://127.0.0.1:22100"))
+    GATEWAY_URL = os.environ.get("JARVIS_GATEWAY_URL", "http://127.0.0.1:22100")
     completions_url = f"{GATEWAY_URL}/v1/chat/completions"
-    model = os.environ.get("DIARIZE_MODEL", "openclaw")
+    model = os.environ.get("DIARIZE_MODEL", "claude")
 
-    # Read gateway token from openclaw.json if not set
-    gateway_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
-    if not gateway_token:
-        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
-        try:
-            with open(config_path) as f:
-                cfg = json.load(f)
-            gateway_token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
-        except Exception:
-            pass
+    gateway_token = os.environ.get("JARVIS_GATEWAY_TOKEN", "")
 
     # Build transcript for Claude
     transcript_lines = []
@@ -135,8 +126,7 @@ Rules:
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {gateway_token}",
-            "x-openclaw-scopes": "operator.write"
+            "Authorization": f"Bearer {gateway_token}"
         },
         method="POST"
     )
