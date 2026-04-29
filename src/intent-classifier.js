@@ -188,8 +188,12 @@ const SLEEP_PATTERNS = [
 // These are too short to be sleep patterns alone, but combined they signal end of conversation.
 // e.g., "sounds good jarvis", "thanks jarvis talk to you later", "sounds good thank you"
 const SIGNOFF_COMPOUND = /\b(sounds?\s*good|thanks?(\s*you)?|cheers|appreciate\s*it|perfect)\b/i;
-// SIGNOFF_CLOSER built dynamically — includes current wake word from env
-const _signoffWakePattern = _wakeVariants.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+// SIGNOFF_CLOSER built dynamically — includes current wake word from env.
+// Also include the base name (last word of wake phrase) so "sounds good jarvis" works
+// even when VOICE_WAKE_WORD="hey jarvis" (which makes _wakeVariants miss bare "jarvis").
+const _wakeBaseName = _wakeWord.split(/\s+/).pop();
+const _signoffWakeVariants = [...new Set([..._wakeVariants, _wakeBaseName])];
+const _signoffWakePattern = _signoffWakeVariants.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 const SIGNOFF_CLOSER = new RegExp(`\\b(${_signoffWakePattern}|talk\\s*to\\s*you|later|bye|good\\s*night|see\\s*you|take\\s*care|thats?\\s*(all|it)|peace|im\\s*(done|out|good)|have\\s*a\\s*good)`, 'i');
 
 // ── Env-configurable extra sleep/wake words ──────────────────────────────────
