@@ -1385,18 +1385,32 @@ client.once('ready', async () => {
   initScheduler(async (sched) => {
     const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
     const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN || '';
+    let text = '';
     try {
-      const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}` },
-        body: JSON.stringify({
-          model: 'claude',
-          max_tokens: 1024,
-          messages: [{ role: 'user', content: sched.prompt }]
-        })
-      });
-      const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content || '';
+      if (sched.mode === 'shell' && sched.shellCmd) {
+        // Programmatic — run shell command directly, no LLM involved
+        const { execSync } = await import('child_process');
+        try {
+          text = execSync(sched.shellCmd, { timeout: 15000, encoding: 'utf8' }).trim();
+          if (!text) text = '(no output)';
+        } catch (e) {
+          text = `⚠️ Command failed: ${e.message.split('\n')[0]}`;
+        }
+      } else {
+        // LLM mode — use sched.model (default: haiku)
+        const model = sched.model || 'haiku';
+        const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GATEWAY_TOKEN}` },
+          body: JSON.stringify({
+            model,
+            max_tokens: 512,
+            messages: [{ role: 'user', content: sched.prompt }]
+          })
+        });
+        const data = await res.json();
+        text = data?.choices?.[0]?.message?.content || '';
+      }
       if (sched.channelId && text) {
         await postToTextChannel(`**[Schedule \`${sched.id}\`]** ${text}`, { forceChannelId: sched.channelId });
       }
@@ -2438,6 +2452,53 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     }
   }
 
+  // ── Scheduler mode inference — shell vs LLM (haiku) ──────────────────────────────────
+  function _inferScheduleMode(prompt) {
+    const p = prompt.toLowerCase();
+
+    // HTTP health / endpoint check
+    const urlMatch = prompt.match(/https?:\/\/[^\s]+/) ||
+      prompt.match(/\b(\w[\w.-]+):(\d{2,5})\b/);
+    if (urlMatch) {
+      const url = urlMatch[0].includes('://') ? urlMatch[0] : `http://${urlMatch[0]}`;
+      const cleanUrl = url.replace(/[.,;!?]$/, '');
+      return { mode: 'shell', shellCmd: `curl -sf --max-time 10 ${cleanUrl} -o /dev/null && echo "up" || echo "down"` };
+    }
+    if (/\b(is\s+)?(serving|up|running|healthy|live|responding|available)\b/.test(p) &&
+        /\b(server|service|api|endpoint|port\s+\d+)\b/.test(p)) {
+      // Generic "is the X server up" — extract host:port if present
+      const hpMatch = prompt.match(/\b([\w.-]+):(\d{2,5})\b/);
+      if (hpMatch) {
+        return { mode: 'shell', shellCmd: `curl -sf --max-time 10 http://${hpMatch[0]}/health -o /dev/null && echo "up" || echo "down"` };
+      }
+    }
+
+    // Port reachability
+    const portMatch = prompt.match(/port\s+(\d+)\s+(?:on\s+)?([\w.-]+)/i) ||
+      prompt.match(/([\w.-]+)\s+port\s+(\d+)/i);
+    if (portMatch) {
+      const [host, port] = portMatch[1] > portMatch[2] ? [portMatch[2], portMatch[1]] : [portMatch[1], portMatch[2]];
+      return { mode: 'shell', shellCmd: `nc -z -w5 ${host} ${port} && echo "port ${port} open" || echo "port ${port} closed"` };
+    }
+
+    // Disk / memory / CPU — pure system commands
+    if (/\b(disk|storage|df)\b/.test(p)) return { mode: 'shell', shellCmd: 'df -h | grep -v tmpfs' };
+    if (/\b(memory|ram|free)\b/.test(p)) return { mode: 'shell', shellCmd: 'free -h' };
+    if (/\b(cpu|load|uptime)\b/.test(p)) return { mode: 'shell', shellCmd: 'uptime' };
+    if (/\b(processes?|top\s+processes?|who)\b/.test(p)) return { mode: 'shell', shellCmd: 'ps aux --sort=-%cpu | head -10' };
+
+    // Process running check
+    const procMatch = prompt.match(/\bis\s+([\w-]+)\s+(process\s+)?running\b/i) ||
+      prompt.match(/\b([\w-]+)\s+(process\s+)?running\b/i);
+    if (procMatch) {
+      const proc = procMatch[1];
+      return { mode: 'shell', shellCmd: `pgrep -x ${proc} && echo "${proc} running" || echo "${proc} not found"` };
+    }
+
+    // Default: needs LLM (haiku)
+    return { mode: 'llm', shellCmd: null };
+  }
+
   // ── Scheduler intent dispatch (RECURRING_CHECK / LIST_SCHEDULES / DELETE_SCHEDULE) ──
   const _lowerContent = content.toLowerCase();
   const _isRecurringCheck =
@@ -2482,8 +2543,12 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       .replace(/every\s+\d+\s*(second|minute|hour|min|sec|s|m|h)s?/gi, '')
       .replace(/for\s+(?:the\s+next\s+)?\d+\s*(second|minute|hour|min|sec|s|m|h)s?/gi, '')
       .replace(/until\s+.+?(?:\.|$)/gi, '')
-      .replace(/^(check|monitor|watch|run)\s+/i, '')
+      .replace(/^(check|monitor|watch|run|ping|poll)\s+/i, '')
       .trim();
+
+    // Auto-detect whether this can run as a shell command (no LLM needed)
+    const { mode: _schedMode, shellCmd: _shellCmd } = _inferScheduleMode(corePrompt || content);
+
     const sched = createSchedule({
       prompt: corePrompt || content,
       intervalMs,
@@ -2491,10 +2556,14 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
       userId: message.author.id,
       terminationPhrase,
       maxRuns,
+      mode: _schedMode,
+      model: 'haiku',   // LLM schedules always use haiku
+      shellCmd: _shellCmd,
     });
     const humanInterval = intervalMs < 60000 ? `${intervalMs/1000}s` : `${intervalMs/60000}m`;
     const suffix = terminationPhrase ? ` until "${terminationPhrase}"` : maxRuns > 0 ? ` (${maxRuns} runs)` : '';
-    await message.reply(`✅ Scheduled — will run every ${humanInterval}${suffix}. ID: \`${sched.id}\``);
+    const modeTag = _schedMode === 'shell' ? ' ⚡ shell' : ' 🤖 haiku';
+    await message.reply(`✅ Scheduled — will run every ${humanInterval}${suffix}${modeTag}. ID: \`${sched.id}\``);
     return;
   }
 

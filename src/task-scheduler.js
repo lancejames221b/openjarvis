@@ -66,11 +66,14 @@ export function initScheduler(dispatchFn) {
   logger.info(`[scheduler] started — ${schedules.length} schedule(s) loaded, tick every ${tickMs}ms`);
 }
 
-export function createSchedule({ prompt, intervalMs, channelId, userId, terminationPhrase, maxRuns }) {
+export function createSchedule({ prompt, intervalMs, channelId, userId, terminationPhrase, maxRuns, mode, model, shellCmd }) {
   const id = `sched_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const entry = {
     id,
     prompt,
+    mode: mode || 'llm',           // 'shell' | 'llm'
+    model: model || 'haiku',       // gateway model alias for llm mode
+    shellCmd: shellCmd || null,    // shell command string for shell mode
     intervalMs,
     nextRunAt: Date.now() + intervalMs,
     channelId,
