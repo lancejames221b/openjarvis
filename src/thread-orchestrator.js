@@ -4,7 +4,7 @@
  * Trigger: natural-language requests like
  *   "create a thread for the PR review, check Slack and hivemind for Alice's ones"
  *   "start a thread to review ENG-895"
- *   "open a research thread on ProjectX proxies"
+ *   "open a research thread on project proxies"
  *
  * Flow:
  *   1. Parse intent → topic, threadName, contextSources (slack/haivemind), personHint
@@ -89,7 +89,7 @@ export function parseOrchestrationCommand(text) {
   // Default: always check hivemind, it's cheap and often relevant
   if (contextSources.length === 0) contextSources.push('haivemind');
 
-  // Person hint: "Alice's ones", "Lance's PRs", "from Junho"
+  // Person hint: "Alice's ones", "Bob's PRs", "from <person>"
   let personHint = null;
   const posMatch = originalText.match(/\b([A-Z][a-z]{2,})'s\s+(ones|prs?|pull\s+requests?|messages|stuff|work)\b/);
   if (posMatch) personHint = posMatch[1];

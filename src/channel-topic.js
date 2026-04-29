@@ -7,7 +7,7 @@
  *
  *   <user's existing topic>
  *
- *   [jarvis] dir=$HOME/Dev/ewitness | model=claude-opus-4-7 | session=9c9d...
+ *   [jarvis] dir=/home/user/Dev/myproject | model=claude-opus-4-7 | session=9c9d...
  *
  * Parser is tolerant — extra pipes and equals inside the dir path are fine
  * because we split on ' | ' and 'key=' prefix.

@@ -150,7 +150,7 @@ async function _silentOpenSurfaces() {
   const focus = getFocus();
   if (focus && focus.channelId) {
     // Discord channel URL
-    const guildId = process.env.GUILD_ID || 'GUILD_ID';
+    const guildId = process.env.GUILD_ID || '';
     urls.push(`https://discord.com/channels/${guildId}/${focus.channelId}`);
   }
 

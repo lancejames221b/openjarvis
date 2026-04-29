@@ -26,7 +26,7 @@ const SERVICES = {
   piper: process.env.PIPER_URL || 'http://localhost:59125',
   whisper: process.env.WHISPER_URL || 'http://localhost:8765',
   gateway: process.env.JARVIS_GATEWAY_URL || 'http://localhost:31338',
-  bot: process.env.JARVIS_ADMIN_URL || 'http://TAILSCALE_HOST:3101',
+  bot: process.env.JARVIS_ADMIN_URL || 'http://localhost:3101',
 };
 const ADMIN_TOKEN = process.env.JARVIS_ADMIN_TOKEN || '';
 
@@ -164,7 +164,7 @@ async function buildState() {
       })
     : [
         { name: 'jarvis', source: 'Paul Bettany · YT ref', active: true },
-        { name: 'owner', source: 'Lance · 11min sample' },
+        { name: 'owner', source: 'Owner · reference sample' },
         { name: 'snoop', source: 'Doggystyle era' },
         { name: 'c3po', source: 'Anthony Daniels' },
       ];

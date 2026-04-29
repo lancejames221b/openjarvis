@@ -84,8 +84,7 @@ const MEMORY_RECALL_ENTRIES = parseInt(process.env.VOICE_MEMORY_RECALL ?? '10');
 
 // ── Obsidian vault ────────────────────────────────────────────────────────────
 // Local vault on generic's storage1 drive — no SSHFS needed.
-const OBSIDIAN_VAULT = process.env.OBSIDIAN_VAULT
-  || '/media/generic/storage1/Obsidian/Claude';
+const OBSIDIAN_VAULT = process.env.OBSIDIAN_VAULT || '';
 const OBSIDIAN_ENABLED = process.env.OBSIDIAN_ENABLED !== 'false';
 
 /** How long idle before rotating on next turn (ms). Override via .env */

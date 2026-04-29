@@ -106,7 +106,7 @@ function tmuxRun(cmds, { sessionName, timeout = 8000 } = {}) {
 }
 
 async function get1pMasterPassword() {
-  const raw = mcporterSearch('mac sudo password lance', 3);
+  const raw = mcporterSearch('mac sudo password owner', 3);
   // Extract value from haivemind result — look for a password-looking line
   const match = raw.match(/password[:\s]+([^\s\n"]{6,})/i);
   return match ? match[1] : null;
@@ -137,7 +137,9 @@ async function storeIn1Password(name, value, update = false) {
       // Try edit first, fall back to create
       execSync(`tmux -S ${sock} send-keys -t ${session}:0.0 -- ${JSON.stringify(`op item edit "${title}" --vault "${OP_VAULT}" "credential[password]=${value}" 2>&1`)} Enter`, { stdio: 'pipe' });
     } else {
-      execSync(`tmux -S ${sock} send-keys -t ${session}:0.0 -- ${JSON.stringify(`op item create --category "API Credential" --title "${title}" --vault "${OP_VAULT}" "credential[password]=${value}" "username[text]=owner@example.com" 2>&1`)} Enter`, { stdio: 'pipe' });
+      const opUsername = process.env.OP_DEFAULT_USERNAME || '';
+      const usernameField = opUsername ? ` "username[text]=${opUsername}"` : '';
+      execSync(`tmux -S ${sock} send-keys -t ${session}:0.0 -- ${JSON.stringify(`op item create --category "API Credential" --title "${title}" --vault "${OP_VAULT}" "credential[password]=${value}"${usernameField} 2>&1`)} Enter`, { stdio: 'pipe' });
     }
     execSync('sleep 5', { stdio: 'pipe' });
 

@@ -107,7 +107,7 @@ INTENTS:
     Params: { pageQuery: "<search keywords>", title: "<exact title if mentioned, else null>" }
 
 11. notion_meeting — user wants meeting notes from Notion
-    Triggers: "today's meeting notes", "the Junho 1:1 notes", "latest meeting with <person>",
+    Triggers: "today's meeting notes", "the weekly 1:1 notes", "latest meeting with <person>",
               "meeting notes from <day>", "what did we decide in <meeting>"
     Params: { titleQuery: "<keywords or null>", days: <number, default 14> }
 
@@ -136,9 +136,9 @@ INTENTS:
     NOT triggers (stay on not_command):
       - "what's the weather" (chat)
       - "what's on my calendar tomorrow" (covered by calendar_query)
-      - "any emails from Junho" (covered by gmail_check)
+      - "any emails from <person>" (covered by gmail_check)
       - "pull up the Notion page about X" (covered by notion_fetch)
-      - "what did Alicesay in slack about auth" (covered by slack_search)
+      - "what did <person> say in slack about auth" (covered by slack_search)
       - "what do you think about X" (pure conversation)
       - "explain how Y works" (pure explanation — brain call is fine)
 

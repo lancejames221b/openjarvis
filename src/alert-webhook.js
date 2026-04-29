@@ -363,8 +363,8 @@ app.post('/alert', async (req, res) => {
     const src = alert.source ? ` (${alert.source})` : '';
     
     if (alert.source === 'incoming-call') {
-      postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`, { forceChannelId: process.env.HUD_CHANNEL_ID || 'HUD_CHANNEL_ID' });
-      postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`, { forceChannelId: 'HUD_CHANNEL_ID_2' });
+      postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`, { forceChannelId: process.env.HUD_CHANNEL_ID });
+      if (process.env.HUD_CHANNEL_ID_2) postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`, { forceChannelId: process.env.HUD_CHANNEL_ID_2 });
     } else {
       postToTextCallback(`[${badge}] Alert${src}: ${alert.message}`);
     }
@@ -671,8 +671,8 @@ app.post('/speak', async (req, res) => {
     // When voice is active, text is just a quiet log (no @ping, no bold notification)
     if (ALERTS_ALSO_POST_TEXT && postToTextCallback) {
       if (source === 'incoming-call') {
-        postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: process.env.HUD_CHANNEL_ID || 'HUD_CHANNEL_ID' });
-        postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: 'HUD_CHANNEL_ID_2' });
+        postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: process.env.HUD_CHANNEL_ID });
+        if (process.env.HUD_CHANNEL_ID_2) postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: process.env.HUD_CHANNEL_ID_2 });
       } else {
         postToTextCallback(`📝 *(voiced)* ${source || 'result'}: ${message.substring(0, 300)}`);
       }
@@ -685,8 +685,8 @@ app.post('/speak', async (req, res) => {
       const sourceBadge = source ? `**${source}**` : '**Voice Result**';
       
       if (source === 'incoming-call') {
-        postToTextCallback(`🗣️ ${sourceBadge}: ${message}`, { forceChannelId: process.env.HUD_CHANNEL_ID || 'HUD_CHANNEL_ID' });
-        postToTextCallback(`🗣️ ${sourceBadge}: ${message}`, { forceChannelId: 'HUD_CHANNEL_ID_2' });
+        postToTextCallback(`🗣️ ${sourceBadge}: ${message}`, { forceChannelId: process.env.HUD_CHANNEL_ID || '' });
+        if (process.env.HUD_CHANNEL_ID_2) postToTextCallback(`🗣️ ${sourceBadge}: ${message}`, { forceChannelId: process.env.HUD_CHANNEL_ID_2 });
       } else {
         postToTextCallback(`🗣️ ${sourceBadge}: ${message}`);
       }

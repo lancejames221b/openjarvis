@@ -18,7 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const STATE_FILE = join(ROOT, 'data', 'hud-state.json');
 const BOX_FILE   = join(ROOT, 'data', 'box-state.json');
-const WEBHOOK = process.env.JARVIS_WEBHOOK_URL || 'http://TAILSCALE_HOST:3335';
+const WEBHOOK = process.env.JARVIS_WEBHOOK_URL || 'http://localhost:3335';
 
 // ── ANSI helpers ──────────────────────────────────────────────────────
 const R = '\x1b[0m';

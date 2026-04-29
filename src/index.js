@@ -366,7 +366,7 @@ setInterval(() => {
       for (const task of newOrphans) {
         const age = ((Date.now() - task.createdAt) / 1000).toFixed(0);
         logger.warn(`📋 Orphaned task #${task.taskId}: "${task.transcript}" - no result after ${age}s`);
-        postToTextChannel(`⚠️ **Lost task #${task.taskId}** (no result after ${age}s): "${task.transcript.substring(0, 60)}"`, { forceChannelId: process.env.VOICE_TRANSCRIPT_CHANNEL_ID || 'HUD_CHANNEL_ID' });
+        postToTextChannel(`⚠️ **Lost task #${task.taskId}** (no result after ${age}s): "${task.transcript.substring(0, 60)}"`, { forceChannelId: process.env.VOICE_TRANSCRIPT_CHANNEL_ID });
         markEscalated(task.taskId);
       }
       if (newOrphans.length > 0) {
@@ -1365,7 +1365,7 @@ client.once('ready', async () => {
       const msg = `⚠️ I restarted and lost track of **${orphans.length}** voice command(s) from before:\n${lines.join('\n')}\nThe gateway likely completed the work, but I wasn't alive to deliver results.`;
 
       // Post to Discord text channel
-      postToTextChannel(msg, { forceChannelId: process.env.VOICE_TRANSCRIPT_CHANNEL_ID || 'HUD_CHANNEL_ID' });
+      postToTextChannel(msg, { forceChannelId: process.env.VOICE_TRANSCRIPT_CHANNEL_ID });
       logger.info(`📋 Orphan escalation: ${orphans.length} tasks notified to user`);
 
       // Mark all as escalated so they don't re-fire

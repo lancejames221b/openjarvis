@@ -1669,7 +1669,7 @@
         <div class="modal-step" id="ms-1">
           <div class="modal-step-label">01 · Identity</div>
           <input class="ii" id="mb-name" placeholder="Display name" style="width:100%;margin-bottom:8px" />
-          <input class="ii" id="mb-id" placeholder="Discord user ID  (e.g. OWNER_USER_ID)" style="width:100%" />
+          <input class="ii" id="mb-id" placeholder="Discord user ID (17-19 digit number)" style="width:100%" />
           <div class="modal-hint">Right-click a user in Discord → Copy User ID (enable Developer Mode first)</div>
           <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
             <button class="btn btn-xs" id="mb-cancel-1">Cancel</button>
@@ -1735,13 +1735,13 @@
 
     const fallback = {
       speaker: {
-        enrolled_users: ["OWNER_USER_ID"],
-        total_reference_embeddings: 665,
+        enrolled_users: [],
+        total_reference_embeddings: 0,
         threshold: 0.45,
         status: "healthy",
       },
       users: [
-        { id: "OWNER_USER_ID", name: "Lance", refs: 665, primary: true },
+        { id: "OWNER_USER_ID", name: "Owner", refs: 0, primary: true },
       ],
       models: {
         voice: "claude-sonnet-4-6",
@@ -1763,14 +1763,14 @@
       ],
       voices: [
         { name: "jarvis", source: "Paul Bettany / YT ref", refs: 3, active: true },
-        { name: "owner", source: "Lance · 11min sample", refs: 1 },
+        { name: "owner", source: "Owner · reference sample", refs: 1 },
         { name: "snoop", source: "Doggystyle era", refs: 1 },
         { name: "c3po", source: "Anthony Daniels", refs: 1 },
       ],
       routes: [
         { channel: "#jarvis-voice", id: "1482...567229", account: "default" },
         { channel: "#hud", id: "1482...567229", account: "default" },
-        { channel: "#dev-lance", id: "1469...305581", account: "owner" },
+        { channel: "#dev", id: "...", account: "owner" },
         { channel: "#eng", id: "1471...112094", account: "unit221b" },
       ],
       shortcuts: [

@@ -44,7 +44,7 @@ const CLASSIFIER_MODEL = process.env.HAIKU_AMBIENT_MODEL || 'unit/claude-haiku-4
 const CLASSIFIER_TIMEOUT_MS = parseInt(process.env.HAIKU_AMBIENT_TIMEOUT_MS || '2000');
 const AMBIENT_ENABLED = process.env.HAIKU_AMBIENT_CLASSIFIER_ENABLED === 'true';
 const AMBIENT_LOG_DECISIONS = process.env.HAIKU_AMBIENT_LOG_DECISIONS !== 'false'; // default true
-const AMBIENT_LOG_CHANNEL = process.env.HAIKU_AMBIENT_LOG_CHANNEL || 'HUD_CHANNEL_ID';
+const AMBIENT_LOG_CHANNEL = process.env.HAIKU_AMBIENT_LOG_CHANNEL || '';
 const AMBIENT_PHASE = parseInt(process.env.HAIKU_AMBIENT_PHASE || '1');
 // How long after the last wake word the ambient classifier is still active.
 // Default: 60s. Set to 0 to disable window-gating (always-on, not recommended).

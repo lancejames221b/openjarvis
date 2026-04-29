@@ -10,11 +10,11 @@ When the user asks to "open", "go to", "pull up", or "navigate to" a URL/website
 
 The MCP chrome tools (mcp__claude-in-chrome__*) open isolated sandbox windows. Bash+SSH opens the URL as a new tab in the user's actual Chrome, merged with their existing browsing session — which is what they want for "just open this for me" requests.
 
-Target host selection:
+Target host selection (configure GAMEZ_SSH_HOST, GAMEZ_SSH_USER, MAC_SSH_HOST, MAC_SSH_USER in .env):
 - Default (no host mentioned, or user says "gamez", "my laptop here", "this laptop"):
-  `ssh yari@GAMEZ_HOST 'DISPLAY=:0 google-chrome "<URL>" >/dev/null 2>&1 &'`
+  `ssh $GAMEZ_SSH_USER@$GAMEZ_SSH_HOST 'DISPLAY=:0 google-chrome "<URL>" >/dev/null 2>&1 &'`
 - Mac (user says "on Mac", "on my Mac", "on the Mac"):
-  `ssh lj@MAC_HOST 'open -a "Google Chrome" "<URL>"'`
+  `ssh $MAC_SSH_USER@$MAC_SSH_HOST 'open -a "Google Chrome" "<URL>"'`
 
 Quote the URL with double quotes to handle ampersands and other shell metacharacters.
 

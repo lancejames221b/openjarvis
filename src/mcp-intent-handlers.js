@@ -18,8 +18,7 @@
 import { mcpCall } from './mcp-access.js';
 import logger from './logger.js';
 
-// Lance's Google Workspace email (matches the user's auto-memory rule)
-const USER_EMAIL = process.env.GOOGLE_WORKSPACE_EMAIL || 'owner@example.com';
+const USER_EMAIL = process.env.GOOGLE_WORKSPACE_EMAIL || '';
 
 /**
  * Truncate a string to a max length with an ellipsis marker.

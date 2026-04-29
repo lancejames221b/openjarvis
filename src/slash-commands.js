@@ -702,7 +702,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
         const name = interaction.options.getString('name');
         const category = interaction.options.getChannel('category');
         const summary = interaction.options.getString('summary') || '';
-        const dir = interaction.options.getString('dir') || `$HOME/Dev/${name.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`;
+        const dir = interaction.options.getString('dir') || `~/Dev/${name.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`;
         const model = interaction.options.getString('model') || 'claude-sonnet-4-6';
 
         const { ChannelType } = await import('discord.js');
@@ -764,7 +764,8 @@ export async function handleSlashCommand(interaction, allowedUsers) {
           try {
             const name = c.name;
             const entry = loadRegistry()[c.id] || {};
-            const dir = entry.directory || `$HOME/Dev/${(name || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`;
+            const devRoot = process.env.DEV_ROOT || `${process.env.HOME}/Dev`;
+            const dir = entry.directory || `${devRoot}/${(name || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`;
             const model = entry.model || 'claude-sonnet-4-6';
             let summary = entry.summary || '';
 

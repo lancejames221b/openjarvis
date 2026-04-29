@@ -21,9 +21,9 @@ import logger from './logger.js';
 
 // ── Config ────────────────────────────────────────────────────────────
 
-const BEDROOM_IP = process.env.SONOS_BEDROOM_IP || 'SONOS_BEDROOM_IP';
-const KITCHEN_IP = process.env.SONOS_KITCHEN_IP || 'SONOS_KITCHEN_IP';
-const LAN_HOST   = process.env.JARVIS_LAN_HOST  || 'JARVIS_LAN_HOST';
+const BEDROOM_IP = process.env.SONOS_BEDROOM_IP || '';
+const KITCHEN_IP = process.env.SONOS_KITCHEN_IP || '';
+const LAN_HOST   = process.env.JARVIS_LAN_HOST  || '';
 const HTTP_PORT  = parseInt(process.env.SONOS_HTTP_PORT || '8768');
 const SERVE_DIR  = '/tmp/jarvis-sonos';
 const MANIFEST   = join(SERVE_DIR, 'latest-manifest.json');
