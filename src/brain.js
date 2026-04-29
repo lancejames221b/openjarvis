@@ -1295,7 +1295,9 @@ function buildTaskAgentPrompt(userMessage, options = {}) {
   const focusCtx = getFullFocusContext() || getFocusContextTag();
   if (focusCtx) contextTags += focusCtx + ' ';
 
-  const taskId = options.taskId || '';
+  const taskId = String(options.taskId || '').replace(/'/g, '');
+  // Single-quote-safe snippet for shell embedding — apostrophes in speech break mcporter arg parsing
+  const safeSnip = userMessage.substring(0, 120).replace(/"/g, '\\"').replace(/'/g, "\\'");
   return `${getVoiceTag()}
 
 ${contextTags}${userMessage}
@@ -1305,7 +1307,7 @@ TASK AGENT INSTRUCTIONS:
 - When done, POST a 2-3 sentence spoken summary via /speak:
 curl -s -X POST ${SPEAK_URL} -H "Authorization: Bearer ${SPEAK_TOKEN}" -H "Content-Type: application/json" -d '{"message":"YOUR_SUMMARY","source":"task-agent","taskId":"${taskId}"}'
 - Store the result to hAIveMind for session recall:
-mcporter call haivemind.store_memory content="TASK-AGENT ${_now.toISOString().substring(0, 16)} task=${taskId}: request=\\"${userMessage.substring(0, 120).replace(/"/g, '\\"')}\\" result=\\"SUMMARY\\"" category="voice-session"
+mcporter call haivemind.store_memory content="TASK-AGENT ${_now.toISOString().substring(0, 16)} task=${taskId}: request=\\"${safeSnip}\\" result=\\"SUMMARY\\"" category="voice-session"
 - Keep the spoken summary to 2-3 sentences maximum.`;
 }
 

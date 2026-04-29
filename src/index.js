@@ -4702,6 +4702,9 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
       });
     }
 
+    // Declare intentType early — used by both task-agent and webhook blocks below
+    const intentType = brainOptions.intentType || 'QUERY';
+
     // ── TASK_AGENT routing (isolated session, full MCP, no session accumulation) ─
     // When TASK_AGENT_ENABLED=true, tool-heavy intents bypass the main voice session
     // entirely. A fresh Claude session with full MCP tools handles the task and POSTs
@@ -4757,7 +4760,6 @@ async function processBrainTask(taskId, userId, transcript, history, signal, bra
     // with tools. The result comes back via /speak callback. This is the ONLY path
     // that can actually execute actions.
     const actionIntents = new Set(['ACTION', 'EMAIL_ACTION', 'CALENDAR_ACTION']);
-    const intentType = brainOptions.intentType || 'QUERY';
     if (actionIntents.has(intentType)) {
       logger.info(`🚀 Task #${taskId} intent=${intentType} → webhook dispatch (full tools)`);
 
