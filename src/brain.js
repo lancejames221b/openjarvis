@@ -1238,12 +1238,15 @@ export async function generateTextResponse(userMessage, options = {}) {
     } catch (_) {}
   }
 
+  const _nowText = new Date();
+  const datetimeTag = `[DATETIME: ${_nowText.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}] `;
+
   const prior = Array.isArray(options.discordChatHistory) ? options.discordChatHistory : [];
   const messages = [{ role: 'system', content: textTag }];
   if (prior.length) {
     messages.push(...prior);
   }
-  messages.push({ role: 'user', content: `${channelCtx}${userMessage}` });
+  messages.push({ role: 'user', content: `${datetimeTag}${channelCtx}${userMessage}` });
 
   try {
     const res = await resilientFetch(COMPLETIONS_URL, {
@@ -1416,12 +1419,15 @@ export async function generateTextResponseStreaming(userMessage, onChunk, option
     } catch (_) {}
   }
 
+  const _nowTextStream = new Date();
+  const datetimeTagStream = `[DATETIME: ${_nowTextStream.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}] `;
+
   const priorStream = Array.isArray(options.discordChatHistory) ? options.discordChatHistory : [];
   const messages = [{ role: "system", content: textTag }];
   if (priorStream.length) {
     messages.push(...priorStream);
   }
-  messages.push({ role: "user", content: `${channelCtx}${userMessage}` });
+  messages.push({ role: "user", content: `${datetimeTagStream}${channelCtx}${userMessage}` });
 
   let fullText = "";
   let reader = null;
