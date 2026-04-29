@@ -1,6 +1,6 @@
-import logger from './logger.js';
-import { VOICE_NAME } from './voice/wakeword.js';
-import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory, getChannelContext, storeChannelMemory } from './session-manager.js';
+import logger from '../logger.js';
+import { VOICE_NAME } from '../voice/wakeword.js';
+import { getActiveSessionUser, touchActivity, maybeRotateSession, storeTaskToHaivemind, getHaivemindContext, consumeNewSessionFlag, consumeRotatedHistory, getChannelContext, storeChannelMemory } from '../session-manager.js';
 /**
  * Brain Module - Thin voice I/O layer to Jarvis Gateway
  * 
@@ -21,8 +21,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, '../prompts');
-const PERSONALITIES_DIR = join(__dirname, '../personalities');
+const PROMPTS_DIR = join(__dirname, '../../prompts');
+const PERSONALITIES_DIR = join(__dirname, '../../personalities');
 
 function loadPrompt(filename) {
   try {
@@ -75,7 +75,7 @@ function loadPersonality(name) {
 
 // Active persona — loaded from persisted state file, then VOICE_PERSONA env var, then 'jarvis'
 // Persists last-set persona across restarts so runtime switches survive service bounces.
-const PERSONA_STATE_FILE = join(__dirname, '..', 'data', 'persona-state.json');
+const PERSONA_STATE_FILE = join(__dirname, '../..', 'data', 'persona-state.json');
 
 function loadPersistedPersonaName() {
   try {
@@ -379,11 +379,11 @@ export function isChannelCircuitOpen(channelKey) {
 
 // Voice tag prepended to messages so the agent formats for TTS
 // Key: use tools exactly as you would in text chat. The ONLY difference is output format.
-import { isMobileModeEnabled } from './mobile-mode.js';
-import { isVisualModeEnabled } from './visual-mode.js';
-import { getActiveAlert, clearActiveAlert } from './alert-context.js';
-import { getFocusContextTag, getFullFocusContext } from './focus-state.js';
-import { getSkillsBlock } from './skills-loader.js';
+import { isMobileModeEnabled } from '../mobile-mode.js';
+import { isVisualModeEnabled } from '../visual-mode.js';
+import { getActiveAlert, clearActiveAlert } from '../alert-context.js';
+import { getFocusContextTag, getFullFocusContext } from '../focus-state.js';
+import { getSkillsBlock } from '../skills-loader.js';
 
 // Prompts vars resolved at call time so runtime env values are current
 // ON_SCREEN ack mode for "open X on my screen" commands

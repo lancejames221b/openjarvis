@@ -3,7 +3,7 @@
  * Test the intent classifier with various inputs
  */
 
-import { classifyIntent } from './src/intent-classifier.js';
+import { classifyIntent } from './src/brain/intent-classifier.js';
 
 const testCases = [
   // CHAT

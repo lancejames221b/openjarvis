@@ -27,7 +27,7 @@ import {
   setVoiceModel,
   getTextModel,
   setTextModel,
-} from './brain.js';
+} from './brain/brain.js';
 import {
   listVoiceShortcuts,
   addVoiceShortcut,

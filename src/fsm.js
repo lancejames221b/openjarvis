@@ -6,7 +6,7 @@
 
 import { getState, transition } from './bot-state.js';
 import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from './voice/wakeword.js';
-import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from './intent-classifier.js';
+import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from './brain/intent-classifier.js';
 import { isVisualModeEnabled } from './visual-mode.js';
 import logger from './logger.js';
 

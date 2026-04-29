@@ -8,7 +8,7 @@
  * 3. EMAIL_DETAIL follow-up detection
  */
 
-import { classifyIntent } from './src/intent-classifier.js';
+import { classifyIntent } from './src/brain/intent-classifier.js';
 import { shouldDelegate } from './src/agent-delegate.js';
 
 console.log('🧪 Voice Email Summary Feature Test\n');

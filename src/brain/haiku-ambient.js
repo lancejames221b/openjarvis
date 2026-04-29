@@ -34,7 +34,7 @@
  *   Phase 3 — full (all five outcomes active)
  */
 
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
 const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;

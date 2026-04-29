@@ -69,7 +69,7 @@ import {
   getActivePersona,
   listPersonalities,
   generateResponse,
-} from '../brain.js';
+} from '../brain/brain.js';
 
 import { readFileSync, readdirSync } from 'fs';
 

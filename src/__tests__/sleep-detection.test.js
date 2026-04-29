@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldSleep } from '../intent-classifier.js';
+import { shouldSleep } from '../brain/intent-classifier.js';
 
 describe('Sleep/goodbye detection — shouldSleep()', () => {
   describe('explicit sleep commands', () => {

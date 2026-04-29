@@ -944,7 +944,7 @@ app.get('/personas', async (req, res) => {
   }
 
   try {
-    const { listPersonalities, getActivePersona } = await import('./brain.js');
+    const { listPersonalities, getActivePersona } = await import('./brain/brain.js');
     const all = listPersonalities();
     const active = getActivePersona();
     return res.json({
@@ -1603,7 +1603,7 @@ app.post('/test-voice', async (req, res) => {
     const pingData = await pingRes.json();
     logger.info(`🧪 direct gateway ping: status=${pingRes.status} ok=${pingRes.ok} body=${JSON.stringify(pingData).substring(0, 120)}`);
 
-    const { generateResponse } = await import('./brain.js');
+    const { generateResponse } = await import('./brain/brain.js');
     const { speakText } = await import('./voice/speech-output.js');
 
     logger.info(`🧪 /test-voice inject: "${message.substring(0, 80)}"`);

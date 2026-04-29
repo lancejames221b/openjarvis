@@ -1,4 +1,4 @@
-import logger from './logger.js';
+import logger from '../logger.js';
 import 'dotenv/config';
 
 // ── Wake word config (read from env, never hardcoded) ────────────────────────

@@ -11,7 +11,7 @@ import {
   isTruncatedFragment,
   hasTaskContent,
   classifyIntent,
-} from '../intent-classifier.js';
+} from '../brain/intent-classifier.js';
 
 describe('intent-classifier.js', () => {
 

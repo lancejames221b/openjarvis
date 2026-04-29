@@ -25,7 +25,7 @@ vi.mock('../voice/stt.js', () => ({
   getSTTHealth: vi.fn(() => 'whisper'),
 }));
 
-vi.mock('../brain.js', () => ({
+vi.mock('../brain/brain.js', () => ({
   generateResponseStreaming: vi.fn(async (msg, history, signal, onSentence) => {
     onSentence('It is 2:30 PM.', false);
     return 'It is 2:30 PM.';
@@ -69,7 +69,7 @@ vi.mock('../voice/tts-toggle.js', () => ({
   setTtsProvider: vi.fn(() => ({ ok: true, provider: 'edge' })),
 }));
 
-vi.mock('../intent-classifier.js', () => ({
+vi.mock('../brain/intent-classifier.js', () => ({
   shouldDismiss: vi.fn(() => ({ dismiss: false })),
   isSideTalk: vi.fn(() => false),
 }));
@@ -90,7 +90,7 @@ vi.mock('../fuzzy-dispatch.js', () => ({
   fuzzyMatch: vi.fn(() => ({ matched: false })),
 }));
 
-vi.mock('../haiku-intent.js', () => ({
+vi.mock('../brain/haiku-intent.js', () => ({
   classifyIntent: vi.fn(async () => null),
 }));
 
@@ -98,10 +98,10 @@ vi.mock('../haiku-intent.js', () => ({
 import { checkWakeWord } from '../voice/wakeword.js';
 import { dispatchCommand } from '../command-dispatch.js';
 import { synthesizeSpeech } from '../voice/tts.js';
-import { generateResponseStreaming } from '../brain.js';
+import { generateResponseStreaming } from '../brain/brain.js';
 import * as visualMode from '../visual-mode.js';
 import * as focusState from '../focus-state.js';
-import * as intentClassifier from '../intent-classifier.js';
+import * as intentClassifier from '../brain/intent-classifier.js';
 
 // ── Test config ──────────────────────────────────────────────────
 const ADMIN_ID = 'user-admin-001';

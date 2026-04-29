@@ -30,12 +30,12 @@ vi.mock('../voice/tts-toggle.js', () => ({
   setTtsProvider: vi.fn(() => ({ ok: true, provider: 'edge' })),
 }));
 
-vi.mock('../intent-classifier.js', () => ({
+vi.mock('../brain/intent-classifier.js', () => ({
   shouldDismiss: vi.fn(() => ({ dismiss: false })),
   isSideTalk: vi.fn(() => false),
 }));
 
-vi.mock('../brain.js', () => ({
+vi.mock('../brain/brain.js', () => ({
   switchPersona: vi.fn((name) => ({ name, voice: 'edge', wakeWords: [] })),
   listPersonalities: vi.fn(() => ['jarvis', 'snoop', 'alfred']),
   getActivePersona: vi.fn(() => ({ name: 'jarvis' })),
@@ -60,7 +60,7 @@ vi.mock('../fuzzy-dispatch.js', () => ({
   fuzzyMatch: vi.fn(() => ({ matched: false })),
 }));
 
-vi.mock('../haiku-intent.js', () => ({
+vi.mock('../brain/haiku-intent.js', () => ({
   classifyIntent: vi.fn(async () => null),
 }));
 
@@ -70,13 +70,13 @@ import * as tldrMode from '../tldr-mode.js';
 import * as mobileMode from '../mobile-mode.js';
 import * as visualMode from '../visual-mode.js';
 import * as ttsToggle from '../voice/tts-toggle.js';
-import * as intentClassifier from '../intent-classifier.js';
-import * as brain from '../brain.js';
+import * as intentClassifier from '../brain/intent-classifier.js';
+import * as brain from '../brain/brain.js';
 import * as focusState from '../focus-state.js';
 import * as channelRouter from '../channel-router.js';
 import * as shortcutEngine from '../shortcut-engine.js';
 import * as fuzzyDispatch from '../fuzzy-dispatch.js';
-import * as haikuIntent from '../haiku-intent.js';
+import * as haikuIntent from '../brain/haiku-intent.js';
 
 // ── Test helpers ────────────────────────────────────────────────────
 const ADMIN_ID = 'user-admin';

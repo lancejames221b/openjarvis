@@ -21,13 +21,13 @@ import { createWriteStream, mkdirSync, existsSync, unlinkSync, readFileSync, wri
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { transcribeAudio, transcribeWhisperOnly } from './voice/stt.js';
-import { generateResponse, generateResponseStreaming, generateTextResponse, generateTextResponseStreaming, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, runTaskAgent, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain.js';
+import { generateResponse, generateResponseStreaming, generateTextResponse, generateTextResponseStreaming, generateAck, generateContextualAck, generateContextualInterim, trimForVoice, isGatewayCircuitOpen, dispatchViaWebhook, runTaskAgent, setCircuitBreakerNotifyCallback, getActivePersona, switchPersona, switchPersonaFull, setSwitchPersonaFullImpl } from './brain/brain.js';
 import { synthesizeSpeech, splitIntoSentences, isTTSAvailable, switchChatterboxVoice } from './voice/tts.js';
 import { OpusDecoder } from './voice/opus-decoder.js';
 import { checkWakeWord, markBotResponse, endConversationWindow, setOthersPresent, isOthersPresent, isContinuationPhrase, isFollowUpExpected, hasRecentContext, getEffectiveWindowMs, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, VOICE_NAME, setPersonaWakeWords } from './voice/wakeword.js';
 import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, clearAlerts } from './alert-queue.js';
-import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './intent-classifier.js';
-import { classifyAmbient, isAmbientClassifierEnabled } from './haiku-ambient.js';
+import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './brain/intent-classifier.js';
+import { classifyAmbient, isAmbientClassifierEnabled } from './brain/haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
 import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, getTask, TaskState } from './task-ledger.js';
 import { initScheduler, createSchedule, listSchedules, deleteSchedule } from './task-scheduler.js';
@@ -2628,7 +2628,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
   if (isVerboseModeEnabled(message.channelId) && _isThread) {
     try {
       const { createLiveStream } = await import('./live-stream.js');
-      const { getTextModel } = await import('./brain.js');
+      const { getTextModel } = await import('./brain/brain.js');
       const { getChannelModel } = await import('./channel-models.js');
       const discordToken = process.env.DISCORD_TOKEN || '';
       // Per-thread/channel override wins over global model.
@@ -3049,7 +3049,7 @@ async function handleVoiceTranscript(message) {
         if (isVerboseModeEnabled(message.channelId) && _vmIsThread) {
           try {
             const { createLiveStream } = await import('./live-stream.js');
-            const { getTextModel } = await import('./brain.js');
+            const { getTextModel } = await import('./brain/brain.js');
             const { getChannelModel } = await import('./channel-models.js');
             const discordToken = process.env.DISCORD_TOKEN || '';
             const model = getChannelModel(message.channelId)

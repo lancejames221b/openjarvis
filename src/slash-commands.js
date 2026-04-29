@@ -7,7 +7,7 @@
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
 import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
 import { isVerboseModeEnabled, setVerboseMode, enableVerboseForThread, disableVerboseForThread, clearThreadVerboseOverride } from './verbose-mode.js';
-import { getVoiceModel, setVoiceModel } from './brain.js';
+import { getVoiceModel, setVoiceModel } from './brain/brain.js';
 import { getChannelModel, setChannelModel, clearChannelModel } from './channel-models.js';
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
