@@ -77,7 +77,13 @@ let channelAccounts = loadChannelAccounts();
 
 function resolveProfile(channelKey) {
   if (!channelKey) return channelAccounts.profiles?.default ?? null;
-  const profileName = channelAccounts.channels?.[channelKey] || "default";
+  // Try exact match first; then strip thread suffix so thread sessions inherit channel profile.
+  let profileName = channelAccounts.channels?.[channelKey];
+  if (!profileName) {
+    const parentKey = channelKey.replace(/:thread:\d+$/, "");
+    if (parentKey !== channelKey) profileName = channelAccounts.channels?.[parentKey];
+  }
+  profileName = profileName || "default";
   return channelAccounts.profiles?.[profileName] ?? channelAccounts.profiles?.default ?? null;
 }
 

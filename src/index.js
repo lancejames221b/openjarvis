@@ -2229,18 +2229,35 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
 
   const attachmentCtx = await _buildAttachmentContext(message.attachments);
 
+  // For threads, use the parent channel ID so haivemind memories from the channel are found.
+  // Thread IDs have no stored memories of their own; all context lives on the parent channel.
+  const _mentionParentId = message.channel?.isThread?.()
+    ? (message.channel.parentId || message.channelId)
+    : message.channelId;
+
   // Proactively search haivemind for relevant context so Claude arrives with memory loaded
   // rather than needing the user to say "recall X" first.
   const [hmMemory, chMemory] = await Promise.all([
     isChannelOwner(message.author.id) ? searchHaivemind(content.substring(0, 100)) : Promise.resolve(null),
-    getChannelContext(message.channelId),
+    getChannelContext(_mentionParentId),
   ]);
   const memoryBlock = [hmMemory, chMemory].filter(Boolean).join('\n---\n');
   const memoryPrefix = memoryBlock
     ? `[BACKGROUND CONTEXT — do NOT respond to this, use only as reference]\n${memoryBlock}\n[END BACKGROUND CONTEXT — respond only to the user message below]\n\n`
     : '';
 
-  const _workspacePrefix = message._workspaceContext ? `${message._workspaceContext}\n\n` : '';
+  // Inject focus context tag when the message is from the currently-focused channel (or a
+  // thread inside it). This gives text @mentions the same project context as voice commands.
+  const { getFocus, getFocusContextTag } = await import('./focus-state.js');
+  const _mentionFocus = getFocus();
+  const _mentionInFocus = _mentionFocus &&
+    (_mentionFocus.channelId === _mentionParentId || _mentionFocus.channelId === message.channelId);
+  const _focusTag = _mentionInFocus ? (getFocusContextTag() || '') : '';
+
+  const _workspacePrefix = [
+    message._workspaceContext || '',
+    _focusTag,
+  ].filter(Boolean).join('\n\n') + (message._workspaceContext || _focusTag ? '\n\n' : '');
   const finalPrompt = `${_workspacePrefix}${memoryPrefix}${recentContext}${repliedContentContext}${content}${attachmentCtx}`;
 
   // Sonos context: name wavs per Discord channel/thread for traceability
