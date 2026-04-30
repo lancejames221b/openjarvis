@@ -37,6 +37,11 @@ export const TaskState = {
   ESCALATED: 'escalated',       // Orphan escalated to user
 };
 
+// States from which no further state transitions are permitted via updateTask.
+// ORPHANED is intentionally excluded — processOrphans() bypasses updateTask,
+// and orphaned tasks can still be escalated via markEscalated() → updateTask.
+const TERMINAL_STATES = new Set([TaskState.COMPLETED, TaskState.FAILED, TaskState.ESCALATED]);
+
 // Tiered orphan thresholds based on task state (Issue #5)
 // DISPATCHED = gateway never acked → something is wrong fast
 // STREAM_DONE = ack spoken but no result → standard timeout
@@ -141,6 +146,10 @@ export function updateTask(taskId, updates) {
   const task = ledger.find(t => t.taskId === taskId);
   if (!task) {
     logger.warn(`📋 Ledger: Task #${taskId} not found for update`);
+    return null;
+  }
+  if (updates.state !== undefined && TERMINAL_STATES.has(task.state)) {
+    logger.warn(`📋 Ledger: Task #${taskId} in terminal state ${task.state} — rejecting transition to ${updates.state}`);
     return null;
   }
   Object.assign(task, updates, { updatedAt: Date.now() });
