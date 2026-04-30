@@ -82,7 +82,7 @@ vi.mock('../state/focus-state.js', () => ({
   listChannels: vi.fn(() => []),
 }));
 
-vi.mock('../channel-router.js', () => ({
+vi.mock('../discord/channel-router.js', () => ({
   detectChannelCommand: vi.fn(() => ({ action: null, target: null, raw: '' })),
 }));
 

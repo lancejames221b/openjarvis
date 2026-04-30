@@ -12,10 +12,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ACCESS_FILE = join(__dirname, '..', 'data', 'channel-access.json');
+const ACCESS_FILE = join(__dirname, '..', '..', 'data', 'channel-access.json');
 
 // The one true owner — explicit env var or first ALLOWED_USERS entry.
 const OWNER_USER_ID = process.env.OWNER_USER_ID ||
@@ -37,7 +37,7 @@ function _load() {
 
 function _save() {
   try {
-    mkdirSync(join(__dirname, '..', 'data'), { recursive: true });
+    mkdirSync(join(__dirname, '..', '..', 'data'), { recursive: true });
     const obj = Object.fromEntries([..._grants.entries()].map(([ch, users]) => [ch, [...users]]));
     writeFileSync(ACCESS_FILE, JSON.stringify(obj, null, 2), 'utf-8');
   } catch (err) {

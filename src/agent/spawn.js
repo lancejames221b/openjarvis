@@ -9,7 +9,7 @@
  */
 
 import { createLiveStream } from '../live-stream.js';
-import { setMcpMode } from '../channel-mcp-mode.js';
+import { setMcpMode } from '../discord/channel-mcp-mode.js';
 import { verboseSessions } from '../verbose-sessions.js';
 import { mentionSessions } from '../mention-sessions.js';
 import { abortAllVoiceTasks } from '../voice-tasks.js';

@@ -11,7 +11,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { joinVoiceChannel } from '@discordjs/voice';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -159,7 +159,7 @@ export function loadDirective(directivePath) {
   
   try {
     // Resolve path relative to repo root
-    const repoRoot = join(__dirname, '..', '..');
+    const repoRoot = join(__dirname, '..', '..', '..');
     const fullPath = join(repoRoot, directivePath);
     
     const content = readFileSync(fullPath, 'utf8');

@@ -21,9 +21,9 @@
 
 import { mcpCall } from './mcp-access.js';
 import { searchHaivemind } from './agent/session-manager.js';
-import { setAskMode } from './channel-ask-mode.js';
+import { setAskMode } from './discord/channel-ask-mode.js';
 import { enableVerboseForThread } from './verbose-mode.js';
-import { setMcpMode } from './channel-mcp-mode.js';
+import { setMcpMode } from './discord/channel-mcp-mode.js';
 import logger from './logger.js';
 
 // Concurrency dedup: if two orchestration triggers arrive for the same channel

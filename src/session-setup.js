@@ -19,7 +19,7 @@
  */
 
 import { getBox, getBoxByName, getCwd } from './slash/box-state.js';
-import { isOwner } from './channel-access.js';
+import { isOwner } from './discord/channel-access.js';
 import { setProjectMap, deleteProjectMap, findProjectMapByName } from './slash/project-map.js';
 import { startSessionDirect, buildResumeCommand } from './slash/session.js';
 import logger from './logger.js';

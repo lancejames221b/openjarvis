@@ -52,7 +52,7 @@ vi.mock('../state/focus-state.js', () => ({
   ]),
 }));
 
-vi.mock('../channel-router.js', () => ({
+vi.mock('../discord/channel-router.js', () => ({
   detectChannelCommand: vi.fn(() => ({ action: null, target: null, raw: '' })),
 }));
 
@@ -73,7 +73,7 @@ import * as ttsToggle from '../voice/tts-toggle.js';
 import * as intentClassifier from '../brain/intent-classifier.js';
 import * as brain from '../brain/brain.js';
 import * as focusState from '../state/focus-state.js';
-import * as channelRouter from '../channel-router.js';
+import * as channelRouter from '../discord/channel-router.js';
 import * as shortcutEngine from '../shortcut-engine.js';
 import * as fuzzyDispatch from '../fuzzy-dispatch.js';
 import * as haikuIntent from '../brain/haiku-intent.js';

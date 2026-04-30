@@ -243,7 +243,7 @@ export function startAdminApi({ discordClient } = {}) {
           // instead of the global default.
           if (body.model) {
             try {
-              const cm = await import('./channel-models.js');
+              const cm = await import('./discord/channel-models.js');
               // Pin for the thread AND the parent channel — belt and suspenders
               cm.setChannelModel(thread.id, body.model);
               cm.setChannelModel(body.channelId, body.model);

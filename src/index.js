@@ -49,7 +49,7 @@ import { isVerifiedOwner, passesAuthGate, enrollmentState } from './auth.js';
 import { registerSlashCommands, handleSlashCommand, handleAutocomplete } from './slash-commands.js';
 import { handleSessionMessage, isSessionChannel } from './slash/session.js';
 import { handleSessionSetup } from './session-setup.js';
-import { canAccessChannel, isOwner as isChannelOwner, OWNER_USER_ID } from './channel-access.js';
+import { canAccessChannel, isOwner as isChannelOwner, OWNER_USER_ID } from './discord/channel-access.js';
 import { setMcpAuthNotify } from './mcp-access.js';
 import { voiceTasks } from './voice-tasks.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './state/fsm.js';
@@ -61,11 +61,11 @@ import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriori
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './voice/speech-output.js';
 import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx, resetSonosCtx, sonosScopeKey, VOICE_SCOPE, getLastSonosTarget } from './sonos-mode.js';
 import { isHandoffCommand, resolveHandoff, parseVerboseCommand, parseAskModeCommand, parseMcpModeCommand, parseCrossChannelHandoff } from './handoff-resolver.js';
-import { setMcpMode as setChannelMcpMode, getMcpMode as getChannelMcpMode } from './channel-mcp-mode.js';
+import { setMcpMode as setChannelMcpMode, getMcpMode as getChannelMcpMode } from './discord/channel-mcp-mode.js';
 import { postResumeCard } from './handoff-thread.js';
 import { enableVerboseForThread, disableVerboseForThread, hasThreadVerboseOverride } from './verbose-mode.js';
 import { parseOrchestrationCommand, orchestrateThread } from './thread-orchestrator.js';
-import { setAskMode } from './channel-ask-mode.js';
+import { setAskMode } from './discord/channel-ask-mode.js';
 import { activate as muteQueueActivate, deactivate as muteQueueDeactivate, isActive as isMuteQueueActive, addEntry as muteQueueAdd, hasEntries as muteQueueHasEntries, getSummary as muteQueueSummary, getDebriefText as muteQueueDebrief, getContextBlock as muteQueueContext, clear as muteQueueClear, getCount as muteQueueCount } from './mute-queue.js';
 import logger from './logger.js';
 import { emit as busEmit } from './event-bus.js';
@@ -2629,7 +2629,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
     try {
       const { createLiveStream } = await import('./live-stream.js');
       const { getTextModel } = await import('./brain/brain.js');
-      const { getChannelModel } = await import('./channel-models.js');
+      const { getChannelModel } = await import('./discord/channel-models.js');
       const discordToken = process.env.DISCORD_TOKEN || '';
       // Per-thread/channel override wins over global model.
       const model = getChannelModel(message.channelId)
@@ -3050,7 +3050,7 @@ async function handleVoiceTranscript(message) {
           try {
             const { createLiveStream } = await import('./live-stream.js');
             const { getTextModel } = await import('./brain/brain.js');
-            const { getChannelModel } = await import('./channel-models.js');
+            const { getChannelModel } = await import('./discord/channel-models.js');
             const discordToken = process.env.DISCORD_TOKEN || '';
             const model = getChannelModel(message.channelId)
                        || getChannelModel(message.channel?.parentId)

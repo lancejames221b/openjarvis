@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const STATE_DIR  = process.env.JARVIS_STATE_DIR || `${process.env.HOME}/.local/state/jarvis-voice`;
 const STATE_FILE = join(STATE_DIR, 'channel-models.json');

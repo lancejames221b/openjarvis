@@ -16,7 +16,7 @@ import {
   detectChannelCommand,
   resolveChannel,
   loadDirective,
-} from '../channel-router.js';
+} from '../discord/channel-router.js';
 
 // ── Sample registry ──────────────────────────────────────────────────
 const SAMPLE_REGISTRY = {
