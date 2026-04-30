@@ -20,7 +20,7 @@ const {
   listActiveWorktrees,
   WORKTREE_PATHS_FILE,
   _resetRegistryCache,
-} = await import('../worktree-manager.js');
+} = await import('../agent/worktree-manager.js');
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 

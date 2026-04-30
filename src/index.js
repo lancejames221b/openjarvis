@@ -29,9 +29,9 @@ import { queueAlert, hasPendingAlerts, getPendingAlerts, getAlertsByPriority, cl
 import { isHallucination, shouldSleep, shouldDismiss, isSideTalk, isTruncatedFragment, classifyIntent, hasTaskContent, setFollowUpExpectedCallback } from './brain/intent-classifier.js';
 import { classifyAmbient, isAmbientClassifierEnabled } from './brain/haiku-ambient.js';
 import { startAlertWebhook, initAlertWebhook, setCurrentVoiceChannelId, setSpeakCallback, setMarkBotResponseCallback, setPostActivityCallback, setPostToTextCallback, hasPendingHandoffs, getPendingHandoffs, clearHandoffs, updateHealthState, endAllSessionPins, setDedupCallback, setDidTaskSpeakInlineCallback, setPersonaSwitchCallback, setPersonaCreateCallback, recordInlineSpoken, setCancelAllTasksCallback, setHandleFakeSttCallback } from './alert-webhook.js';
-import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, getTask, TaskState } from './task-ledger.js';
+import { createTask, markStreaming, markStreamDone, markWorking, markCompleted as ledgerMarkCompleted, markFailed, markEscalated, isJustAck, reconcileOnStartup, getOrphanedTasks, getPendingFollowups, processOrphans, getTask, TaskState } from './agent/task-ledger.js';
 import { initScheduler, createSchedule, listSchedules, deleteSchedule } from './task-scheduler.js';
-import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext, storeChannelMemory } from './session-manager.js';
+import { storeTaskToHaivemind, getHaivemindContext, searchHaivemind, getChannelContext, storeChannelMemory } from './agent/session-manager.js';
 import { getTTSHealth } from './voice/tts.js';
 import { getSTTHealth, checkSttHealth } from './voice/stt.js';
 import { StreamingSTTSession } from './voice/stt-streaming.js';
@@ -4717,7 +4717,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       const targetChannel = VOICE_REPORT_CHANNEL_ID || TEXT_CHANNEL_ID;
       const discordToken = process.env.DISCORD_TOKEN || '';
       try {
-        const { runVoiceSpawn } = await import('./slash/spawn.js');
+        const { runVoiceSpawn } = await import('./agent/spawn.js');
         await runVoiceSpawn(dispatchResult.task, targetChannel, discordToken, dispatchResult.model || null);
       } catch (err) {
         logger.error(`[voice_spawn] failed: ${err.message}`);

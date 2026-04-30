@@ -36,7 +36,7 @@ function _persistModel(alias) {
   } catch { /* non-fatal */ }
 }
 import { setFocusByName } from './focus-state.js';
-import { handleSpawnCommand, handleStopCommand } from './slash/spawn.js';
+import { handleSpawnCommand, handleStopCommand } from './agent/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';

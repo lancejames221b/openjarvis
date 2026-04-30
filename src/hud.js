@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
-import { getActiveTasks, getLedgerStats, getTask } from './task-ledger.js';
+import { getActiveTasks, getLedgerStats, getTask } from './agent/task-ledger.js';
 import { getFocus } from './focus-state.js';
 import { isVisualModeEnabled, getVisualTargetChannel } from './visual-mode.js';
 import { getState } from './bot-state.js';

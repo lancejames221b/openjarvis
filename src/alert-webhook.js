@@ -11,7 +11,7 @@
 
 import express from 'express';
 import { queueAlert, getPendingAlerts, clearAlerts } from './alert-queue.js';
-import { markCompleted, getActiveTasks, getLedgerStats } from './task-ledger.js';
+import { markCompleted, getActiveTasks, getLedgerStats } from './agent/task-ledger.js';
 import { hudTaskUpdate } from './hud.js';
 import { setActiveAlert } from './alert-context.js';
 import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './bot-state.js';

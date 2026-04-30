@@ -24,8 +24,8 @@ import { promisify } from 'util';
 import { readFile, appendFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import logger from './logger.js';
-import { mcpCall } from './mcp-access.js';
+import logger from '../logger.js';
+import { mcpCall } from '../mcp-access.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

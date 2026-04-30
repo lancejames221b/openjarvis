@@ -20,7 +20,7 @@
  */
 
 import { mcpCall } from './mcp-access.js';
-import { searchHaivemind } from './session-manager.js';
+import { searchHaivemind } from './agent/session-manager.js';
 import { setAskMode } from './channel-ask-mode.js';
 import { enableVerboseForThread } from './verbose-mode.js';
 import { setMcpMode } from './channel-mcp-mode.js';

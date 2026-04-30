@@ -24,7 +24,7 @@ const {
   getTask,
   getLedgerStats,
   TaskState,
-} = await import('../task-ledger.js');
+} = await import('../agent/task-ledger.js');
 
 describe('Task Ledger — task lifecycle', () => {
   let taskIdCounter = 1;
