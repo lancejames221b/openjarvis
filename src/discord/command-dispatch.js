@@ -4,22 +4,22 @@
  * Returns a dispatch result that index.js acts on.
  */
 
-import logger from './logger.js';
+import logger from '../logger.js';
 import { tryShortcut } from './shortcut-engine.js';
-import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from './tldr-mode.js';
-import { isMobileModeToggle, setMobileMode } from './mobile-mode.js';
-import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from './visual-mode.js';
-import { isTtsToggleCommand, setTtsProvider } from './voice/tts-toggle.js';
-import { shouldDismiss, isSideTalk } from './brain/intent-classifier.js';
-import { switchPersona, listPersonalities, getActivePersona } from './brain/brain.js';
-import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from './state/focus-state.js';
-import { detectChannelCommand } from './discord/channel-router.js';
+import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from '../tldr-mode.js';
+import { isMobileModeToggle, setMobileMode } from '../mobile-mode.js';
+import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from '../visual-mode.js';
+import { isTtsToggleCommand, setTtsProvider } from '../voice/tts-toggle.js';
+import { shouldDismiss, isSideTalk } from '../brain/intent-classifier.js';
+import { switchPersona, listPersonalities, getActivePersona } from '../brain/brain.js';
+import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from '../state/focus-state.js';
+import { detectChannelCommand } from './channel-router.js';
 import { fuzzyMatch } from './fuzzy-dispatch.js';
-import { classifyIntent as haikuClassify } from './brain/haiku-intent.js';
+import { classifyIntent as haikuClassify } from '../brain/haiku-intent.js';
 import { findProjectMapByName } from './slash/project-map.js';
 import { startSessionDirect, buildResumeCommand } from './slash/session.js';
 import { getBox, getCwd } from './slash/box-state.js';
-import { MCP_INTENT_HANDLERS, dispatchMcpIntent } from './mcp-intent-handlers.js';
+import { MCP_INTENT_HANDLERS, dispatchMcpIntent } from '../mcp-intent-handlers.js';
 
 // ── Interrupt pattern detection ───────────────────────────────────────
 

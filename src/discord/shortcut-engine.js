@@ -17,12 +17,12 @@ import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
-import logger from './logger.js';
-import { getNextMeeting, getCacheAgeMinutes } from './calendar-cache.js';
-import { openOnMac } from './mac-open.js';
-import { resolveProject, listProjects } from './cursor-projects.js';
-import { isVisualModeEnabled } from './visual-mode.js';
-import { mcpCall } from './mcp-access.js';
+import logger from '../logger.js';
+import { getNextMeeting, getCacheAgeMinutes } from '../calendar-cache.js';
+import { openOnMac } from '../mac-open.js';
+import { resolveProject, listProjects } from '../cursor-projects.js';
+import { isVisualModeEnabled } from '../visual-mode.js';
+import { mcpCall } from '../mcp-access.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

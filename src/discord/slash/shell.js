@@ -17,7 +17,7 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { getBox, getCwd, setCwd, listBoxes } from './box-state.js';
 import { isSessionChannel } from './session.js';
-import logger from '../logger.js';
+import logger from '../../logger.js';
 
 const execAsync = promisify(exec);
 

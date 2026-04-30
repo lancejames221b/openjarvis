@@ -10,8 +10,8 @@
 
 import { createLiveStream } from '../live-stream.js';
 import { setMcpMode } from '../discord/channel-mcp-mode.js';
-import { verboseSessions } from '../verbose-sessions.js';
-import { mentionSessions } from '../mention-sessions.js';
+import { verboseSessions } from '../discord/verbose-sessions.js';
+import { mentionSessions } from '../discord/mention-sessions.js';
 import { abortAllVoiceTasks } from '../voice-tasks.js';
 import logger from '../logger.js';
 

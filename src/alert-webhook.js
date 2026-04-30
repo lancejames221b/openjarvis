@@ -12,7 +12,7 @@
 import express from 'express';
 import { queueAlert, getPendingAlerts, clearAlerts } from './alert-queue.js';
 import { markCompleted, getActiveTasks, getLedgerStats } from './agent/task-ledger.js';
-import { hudTaskUpdate } from './hud.js';
+import { hudTaskUpdate } from './discord/hud.js';
 import { setActiveAlert } from './alert-context.js';
 import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './state/bot-state.js';
 import { setFocusById } from './state/focus-state.js';

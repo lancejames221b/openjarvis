@@ -25,7 +25,7 @@
 import logger from '../logger.js';
 import { listChannels } from '../state/focus-state.js';
 import { listPersonalities } from './brain.js';
-import { listProjectMaps } from '../slash/project-map.js';
+import { listProjectMaps } from '../discord/slash/project-map.js';
 
 const GATEWAY_URL = process.env.JARVIS_GATEWAY_URL || process.env.GATEWAY_URL || 'http://127.0.0.1:22100';
 const GATEWAY_TOKEN = process.env.JARVIS_GATEWAY_TOKEN;

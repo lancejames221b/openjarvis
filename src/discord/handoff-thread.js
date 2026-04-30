@@ -10,7 +10,7 @@
 import { ChannelType } from 'discord.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const THREAD_NAME = '🔗 Handoff';
 const STATE_DIR  = process.env.JARVIS_STATE_DIR || `${process.env.HOME}/.local/state/jarvis-voice`;

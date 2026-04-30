@@ -42,7 +42,7 @@ vi.mock('../voice/tts.js', () => ({
 }));
 
 // Dependencies that command-dispatch needs
-vi.mock('../shortcut-engine.js', () => ({
+vi.mock('../discord/shortcut-engine.js', () => ({
   tryShortcut: vi.fn(async () => ({ handled: false })),
 }));
 
@@ -86,7 +86,7 @@ vi.mock('../discord/channel-router.js', () => ({
   detectChannelCommand: vi.fn(() => ({ action: null, target: null, raw: '' })),
 }));
 
-vi.mock('../fuzzy-dispatch.js', () => ({
+vi.mock('../discord/fuzzy-dispatch.js', () => ({
   fuzzyMatch: vi.fn(() => ({ matched: false })),
 }));
 
@@ -96,7 +96,7 @@ vi.mock('../brain/haiku-intent.js', () => ({
 
 // ── Real imports (after mocks) ────────────────────────────────────
 import { checkWakeWord } from '../voice/wakeword.js';
-import { dispatchCommand } from '../command-dispatch.js';
+import { dispatchCommand } from '../discord/command-dispatch.js';
 import { synthesizeSpeech } from '../voice/tts.js';
 import { generateResponseStreaming } from '../brain/brain.js';
 import * as visualMode from '../visual-mode.js';

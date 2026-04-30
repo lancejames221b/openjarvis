@@ -13,8 +13,8 @@
  * 5. Also handles focus_clear, focus_query, channel_list with simple keyword checks
  */
 
-import logger from './logger.js';
-import { resolveChannel } from './state/focus-state.js';
+import logger from '../logger.js';
+import { resolveChannel } from '../state/focus-state.js';
 
 // ── Action verb patterns (ordered longest-first for greedy strip) ────
 const FOCUS_VERBS = [

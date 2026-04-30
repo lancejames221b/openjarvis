@@ -18,10 +18,10 @@
  * SECURITY: Owner-only (isOwner check). Requires SESSION_SHELL_ENABLED=true.
  */
 
-import { getBox, getBoxByName, getCwd } from './slash/box-state.js';
+import { getBox, getBoxByName, getCwd } from './discord/slash/box-state.js';
 import { isOwner } from './discord/channel-access.js';
-import { setProjectMap, deleteProjectMap, findProjectMapByName } from './slash/project-map.js';
-import { startSessionDirect, buildResumeCommand } from './slash/session.js';
+import { setProjectMap, deleteProjectMap, findProjectMapByName } from './discord/slash/project-map.js';
+import { startSessionDirect, buildResumeCommand } from './discord/slash/session.js';
 import logger from './logger.js';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || '';

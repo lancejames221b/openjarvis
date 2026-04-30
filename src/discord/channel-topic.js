@@ -14,7 +14,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'fs';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const MARKER = '[jarvis]';
 const TOPIC_MAX = 1024;

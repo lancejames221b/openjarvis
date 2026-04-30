@@ -16,9 +16,9 @@
 
 import { execSync } from 'child_process';
 import { getBox, getBoxByName, getCwd } from './box-state.js';
-import { createLiveStream } from '../live-stream.js';
-import { isOwner } from '../discord/channel-access.js';
-import logger from '../logger.js';
+import { createLiveStream } from '../../live-stream.js';
+import { isOwner } from '../channel-access.js';
+import logger from '../../logger.js';
 
 const ENABLED        = process.env.SESSION_SHELL_ENABLED === 'true';
 const MAX_SESSIONS   = parseInt(process.env.SESSION_MAX ?? '3');

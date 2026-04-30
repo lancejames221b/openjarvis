@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ── Mocks must be declared before imports ────────────────────────────
 vi.mock('../logger.js', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
-vi.mock('../shortcut-engine.js', () => ({
+vi.mock('../discord/shortcut-engine.js', () => ({
   tryShortcut: vi.fn(async () => ({ handled: false })),
 }));
 
@@ -56,7 +56,7 @@ vi.mock('../discord/channel-router.js', () => ({
   detectChannelCommand: vi.fn(() => ({ action: null, target: null, raw: '' })),
 }));
 
-vi.mock('../fuzzy-dispatch.js', () => ({
+vi.mock('../discord/fuzzy-dispatch.js', () => ({
   fuzzyMatch: vi.fn(() => ({ matched: false })),
 }));
 
@@ -65,7 +65,7 @@ vi.mock('../brain/haiku-intent.js', () => ({
 }));
 
 // Import after all mocks
-import { dispatchCommand, isInterruptCommand } from '../command-dispatch.js';
+import { dispatchCommand, isInterruptCommand } from '../discord/command-dispatch.js';
 import * as tldrMode from '../tldr-mode.js';
 import * as mobileMode from '../mobile-mode.js';
 import * as visualMode from '../visual-mode.js';
@@ -74,8 +74,8 @@ import * as intentClassifier from '../brain/intent-classifier.js';
 import * as brain from '../brain/brain.js';
 import * as focusState from '../state/focus-state.js';
 import * as channelRouter from '../discord/channel-router.js';
-import * as shortcutEngine from '../shortcut-engine.js';
-import * as fuzzyDispatch from '../fuzzy-dispatch.js';
+import * as shortcutEngine from '../discord/shortcut-engine.js';
+import * as fuzzyDispatch from '../discord/fuzzy-dispatch.js';
 import * as haikuIntent from '../brain/haiku-intent.js';
 
 // ── Test helpers ────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ import {
   addVoiceShortcut,
   updateVoiceShortcut,
   deleteVoiceShortcut,
-} from './shortcut-engine.js';
+} from './discord/shortcut-engine.js';
 import { enrollmentState } from './auth.js';
 import { getAllowedUsers, addMember, removeMember } from './allowed-users.js';
 import { emit as busEmit, getRingBuffer, subscribe } from './event-bus.js';

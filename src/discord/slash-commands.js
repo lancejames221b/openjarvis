@@ -5,10 +5,10 @@
  */
 
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
-import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
-import { isVerboseModeEnabled, setVerboseMode, enableVerboseForThread, disableVerboseForThread, clearThreadVerboseOverride } from './verbose-mode.js';
-import { getVoiceModel, setVoiceModel } from './brain/brain.js';
-import { getChannelModel, setChannelModel, clearChannelModel } from './discord/channel-models.js';
+import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from '../visual-mode.js';
+import { isVerboseModeEnabled, setVerboseMode, enableVerboseForThread, disableVerboseForThread, clearThreadVerboseOverride } from '../verbose-mode.js';
+import { getVoiceModel, setVoiceModel } from '../brain/brain.js';
+import { getChannelModel, setChannelModel, clearChannelModel } from './channel-models.js';
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -35,16 +35,16 @@ function _persistModel(alias) {
     writeFileSync(_ENV_FILE, env, 'utf-8');
   } catch { /* non-fatal */ }
 }
-import { setFocusByName } from './state/focus-state.js';
-import { handleSpawnCommand, handleStopCommand } from './agent/spawn.js';
+import { setFocusByName } from '../state/focus-state.js';
+import { handleSpawnCommand, handleStopCommand } from '../agent/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
 import { getBox, setBox, listBoxes, getCwd, persistBoxState, BOX_NAMES } from './slash/box-state.js';
-import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './discord/channel-access.js';
+import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import { handleSessionCommand, startSessionDirect, buildResumeCommand } from './slash/session.js';
 import { findProjectMapByName } from './slash/project-map.js';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
   .setName('spawn')
@@ -558,7 +558,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
-    const { setAskMode, isAskModeEnabled } = await import('./discord/channel-ask-mode.js');
+    const { setAskMode, isAskModeEnabled } = await import('./channel-ask-mode.js');
     const sub = interaction.options.getSubcommand();
     const ch = interaction.channel;
     const isThread = !!ch?.isThread?.();
@@ -598,7 +598,7 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       await interaction.reply({ content: 'Not authorized.', ephemeral: true });
       return true;
     }
-    const { setMcpMode, getMcpMode, clearMcpMode } = await import('./discord/channel-mcp-mode.js');
+    const { setMcpMode, getMcpMode, clearMcpMode } = await import('./channel-mcp-mode.js');
     const sub = interaction.options.getSubcommand();
     const ch = interaction.channel;
     const isThread = !!ch?.isThread?.();

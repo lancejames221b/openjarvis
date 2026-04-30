@@ -8,8 +8,8 @@
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
-import { createLiveStream } from '../live-stream.js';
-import logger from '../logger.js';
+import { createLiveStream } from '../../live-stream.js';
+import logger from '../../logger.js';
 
 const GATEWAY_URL     = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
 const COMPLETIONS_URL = `${GATEWAY_URL}/v1/chat/completions`;
