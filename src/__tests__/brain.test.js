@@ -432,13 +432,21 @@ describe('generateResponse()', () => {
   });
 
   it('returns fallback text when gateway fails', async () => {
-    global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+    vi.useFakeTimers();
+    try {
+      global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
 
-    const result = await generateResponse('hello', [], null, {});
-    expect(result).toBeDefined();
-    expect(typeof result.text).toBe('string');
-    // Should return a graceful fallback, not throw
-    expect(result.text.length).toBeGreaterThan(0);
+      const promise = generateResponse('hello', [], null, {});
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toBeDefined();
+      expect(typeof result.text).toBe('string');
+      // Should return a graceful fallback, not throw
+      expect(result.text.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns aborted result when signal is pre-aborted', async () => {
@@ -517,22 +525,26 @@ describe('Gateway circuit breaker', () => {
   });
 
   it('circuit opens after repeated failures', async () => {
-    // The circuit breaker trips after CIRCUIT_BREAKER_THRESHOLD (3) failures
-    // Each resilientFetch call does 1 attempt + 1 retry = 2 failure recordings per call
-    // So 2 calls = 4 failures → should trip after threshold=3
-    global.fetch = vi.fn()
-      .mockRejectedValue(new Error('Connection refused'));
+    vi.useFakeTimers();
+    try {
+      global.fetch = vi.fn()
+        .mockRejectedValue(new Error('Connection refused'));
 
-    // Make multiple failing calls — circuit should trip
-    // We use Promise.allSettled to avoid throwing
-    await Promise.allSettled([
-      generateResponse('fail1', [], null, {}),
-      generateResponse('fail2', [], null, {}),
-    ]);
+      // Make multiple failing calls — circuit should trip
+      // We use Promise.allSettled to avoid throwing
+      const promise = Promise.allSettled([
+        generateResponse('fail1', [], null, {}),
+        generateResponse('fail2', [], null, {}),
+      ]);
+      await vi.runAllTimersAsync();
+      await promise;
 
-    // After enough failures, the circuit should be open OR not — 
-    // depending on timing. Just verify the function returns a boolean.
-    expect(typeof isGatewayCircuitOpen()).toBe('boolean');
+      // After enough failures, the circuit should be open OR not —
+      // depending on timing. Just verify the function returns a boolean.
+      expect(typeof isGatewayCircuitOpen()).toBe('boolean');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('isGatewayCircuitOpen() returns a boolean', async () => {
