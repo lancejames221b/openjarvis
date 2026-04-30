@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 // isWakeUpCommand lives in fsm.js (re-exported from wakeword detection logic)
 // We import directly from fsm.js which exports isWakeUpCommand
-import { isWakeUpCommand } from '../fsm.js';
+import { isWakeUpCommand } from '../state/fsm.js';
 import { VOICE_WAKE_WORD } from '../voice/wakeword.js';
 
 // Tests use the configured wake word (VOICE_WAKE_WORD env) — not hardcoded "jarvis".

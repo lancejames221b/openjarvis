@@ -382,7 +382,7 @@ export function isChannelCircuitOpen(channelKey) {
 import { isMobileModeEnabled } from '../mobile-mode.js';
 import { isVisualModeEnabled } from '../visual-mode.js';
 import { getActiveAlert, clearActiveAlert } from '../alert-context.js';
-import { getFocusContextTag, getFullFocusContext } from '../focus-state.js';
+import { getFocusContextTag, getFullFocusContext } from '../state/focus-state.js';
 import { getSkillsBlock } from '../skills-loader.js';
 
 // Prompts vars resolved at call time so runtime env values are current

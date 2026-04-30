@@ -14,7 +14,7 @@
  */
 
 import logger from './logger.js';
-import { resolveChannel } from './focus-state.js';
+import { resolveChannel } from './state/focus-state.js';
 
 // ── Action verb patterns (ordered longest-first for greedy strip) ────
 const FOCUS_VERBS = [

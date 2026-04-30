@@ -16,12 +16,12 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { exec as _exec } from 'child_process';
 import { promisify } from 'util';
-import logger from './logger.js';
+import logger from '../logger.js';
 
 const execAsync = promisify(_exec);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const STATE_FILE = join(__dirname, '..', 'data', 'focus-state.json');
+const STATE_FILE = join(__dirname, '..', '..', 'data', 'focus-state.json');
 const REGISTRY_PATH = process.env.CHANNEL_REGISTRY_PATH || `${process.env.HOME || '/tmp'}/dev/contexts/channel-registry.json`;
 const CONTEXTS_DIR = process.env.CHANNEL_CONTEXTS_DIR || `${process.env.HOME || '/tmp'}/dev/contexts`;
 
@@ -46,7 +46,7 @@ function _saveState(state) {
   try {
     writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
     // Refresh the HUD to display the new focus
-    import('./hud.js').then(m => {
+    import('../hud.js').then(m => {
       if (typeof m.hudRefresh === 'function') m.hudRefresh();
     }).catch(() => {});
   } catch (err) {

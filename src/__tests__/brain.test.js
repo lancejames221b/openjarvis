@@ -32,7 +32,7 @@ vi.mock('../session-manager.js', () => ({
 vi.mock('../mobile-mode.js', () => ({ isMobileModeEnabled: vi.fn(() => false) }));
 vi.mock('../visual-mode.js', () => ({ isVisualModeEnabled: vi.fn(() => false), getVisualTargetChannel: vi.fn(() => null) }));
 vi.mock('../alert-context.js', () => ({ getActiveAlert: vi.fn(() => null), clearActiveAlert: vi.fn(), setActiveAlert: vi.fn() }));
-vi.mock('../focus-state.js', () => ({
+vi.mock('../state/focus-state.js', () => ({
   getFocusContextTag: vi.fn(() => null),
   getFullFocusContext: vi.fn(() => null),
 }));

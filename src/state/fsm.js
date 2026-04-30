@@ -5,10 +5,10 @@
  */
 
 import { getState, transition } from './bot-state.js';
-import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from './voice/wakeword.js';
-import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from './brain/intent-classifier.js';
-import { isVisualModeEnabled } from './visual-mode.js';
-import logger from './logger.js';
+import { getEffectiveWindowMs, markBotResponse, endConversationWindow, WAKE_WORD_ENABLED, WAKE_WORD_FUZZY, WAKE_WORD_PHRASES, VOICE_WAKE_WORD, isContinuationPhrase, hasRecentContext, isFollowUpExpected } from '../voice/wakeword.js';
+import { hasTaskContent, shouldSleep, getExtraWakeFromSleepWords } from '../brain/intent-classifier.js';
+import { isVisualModeEnabled } from '../visual-mode.js';
+import logger from '../logger.js';
 
 // ── FSM Sleep/Idle Timers ─────────────────────────────────────────────
 const ACTIVE_TO_IDLE_BASE_MS = 3 * 60 * 1000;  // 3 min baseline

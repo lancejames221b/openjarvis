@@ -14,8 +14,8 @@ import { queueAlert, getPendingAlerts, clearAlerts } from './alert-queue.js';
 import { markCompleted, getActiveTasks, getLedgerStats } from './agent/task-ledger.js';
 import { hudTaskUpdate } from './hud.js';
 import { setActiveAlert } from './alert-context.js';
-import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './bot-state.js';
-import { setFocusById } from './focus-state.js';
+import { getState, transition, canDeliverVoiceAlert, classifyAlertPriority } from './state/bot-state.js';
+import { setFocusById } from './state/focus-state.js';
 import logger from './logger.js';
 import { isVisualModeEnabled, getVisualTargetChannel } from './visual-mode.js';
 
@@ -841,7 +841,7 @@ app.post('/sleep_mode', async (req, res) => {
   transition('ACTIVE', 'api-request');
   // Restart idle/sleep timers so bot auto-sleeps again if voice goes quiet
   try {
-    const { resetIdleSleepTimer } = await import('./fsm.js').catch(() => ({}));
+    const { resetIdleSleepTimer } = await import('./state/fsm.js').catch(() => ({}));
     if (typeof resetIdleSleepTimer === 'function') resetIdleSleepTimer();
   } catch (_) { /* non-fatal */ }
   logger.info(`⏰ /sleep_mode: transitioned ${previous} → ACTIVE via API`);

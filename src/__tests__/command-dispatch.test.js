@@ -41,7 +41,7 @@ vi.mock('../brain/brain.js', () => ({
   getActivePersona: vi.fn(() => ({ name: 'jarvis' })),
 }));
 
-vi.mock('../focus-state.js', () => ({
+vi.mock('../state/focus-state.js', () => ({
   setFocusByName: vi.fn(() => null),
   setFocusWithThread: vi.fn(async () => null),
   clearFocus: vi.fn(),
@@ -72,7 +72,7 @@ import * as visualMode from '../visual-mode.js';
 import * as ttsToggle from '../voice/tts-toggle.js';
 import * as intentClassifier from '../brain/intent-classifier.js';
 import * as brain from '../brain/brain.js';
-import * as focusState from '../focus-state.js';
+import * as focusState from '../state/focus-state.js';
 import * as channelRouter from '../channel-router.js';
 import * as shortcutEngine from '../shortcut-engine.js';
 import * as fuzzyDispatch from '../fuzzy-dispatch.js';

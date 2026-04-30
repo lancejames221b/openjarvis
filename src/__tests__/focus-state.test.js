@@ -88,7 +88,7 @@ describe('focus-state.js', () => {
     }));
     vi.mock('../logger.js', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
-    focusStateModule = await import('../focus-state.js');
+    focusStateModule = await import('../state/focus-state.js');
 
     // Reapply mock implementation after module reload
     const { readFileSync: rfs, writeFileSync: wfs } = await import('fs');

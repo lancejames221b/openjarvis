@@ -23,7 +23,7 @@
  */
 
 import logger from '../logger.js';
-import { listChannels } from '../focus-state.js';
+import { listChannels } from '../state/focus-state.js';
 import { listPersonalities } from './brain.js';
 import { listProjectMaps } from '../slash/project-map.js';
 

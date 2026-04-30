@@ -1,4 +1,4 @@
-import logger from './logger.js';
+import logger from '../logger.js';
 /**
  * Bot State FSM - 4-state finite state machine replacing binary sleepMode
  *

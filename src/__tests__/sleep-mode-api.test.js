@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer } from 'node:http';
 import { app } from '../alert-webhook.js';
-import { getState, transition } from '../bot-state.js';
+import { getState, transition } from '../state/bot-state.js';
 
 // alert-webhook reads ALERT_WEBHOOK_TOKEN at module load as a const.
 // Vitest env in package.json does not set it, so it falls back to 'change-me'.

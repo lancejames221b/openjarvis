@@ -20,7 +20,7 @@
  */
 
 import logger from './logger.js';
-import { getFocus, isFocusFresh } from './focus-state.js';
+import { getFocus, isFocusFresh } from './state/focus-state.js';
 import { getTodayEvents } from './calendar-cache.js';
 
 // Master toggle

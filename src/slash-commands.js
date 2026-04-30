@@ -35,7 +35,7 @@ function _persistModel(alias) {
     writeFileSync(_ENV_FILE, env, 'utf-8');
   } catch { /* non-fatal */ }
 }
-import { setFocusByName } from './focus-state.js';
+import { setFocusByName } from './state/focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './agent/spawn.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';

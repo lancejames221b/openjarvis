@@ -12,7 +12,7 @@ import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from './vis
 import { isTtsToggleCommand, setTtsProvider } from './voice/tts-toggle.js';
 import { shouldDismiss, isSideTalk } from './brain/intent-classifier.js';
 import { switchPersona, listPersonalities, getActivePersona } from './brain/brain.js';
-import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from './focus-state.js';
+import { setFocusByName, setFocusWithThread, clearFocus, getFocus, listChannels, refocus, getPreviousFocus } from './state/focus-state.js';
 import { detectChannelCommand } from './channel-router.js';
 import { fuzzyMatch } from './fuzzy-dispatch.js';
 import { classifyIntent as haikuClassify } from './brain/haiku-intent.js';

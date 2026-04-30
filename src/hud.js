@@ -17,9 +17,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
 import { getActiveTasks, getLedgerStats, getTask } from './agent/task-ledger.js';
-import { getFocus } from './focus-state.js';
+import { getFocus } from './state/focus-state.js';
 import { isVisualModeEnabled, getVisualTargetChannel } from './visual-mode.js';
-import { getState } from './bot-state.js';
+import { getState } from './state/bot-state.js';
 
 // Trello config (same as join-briefing)
 const TRELLO_API_KEY = process.env.TRELLO_API_KEY || '';

@@ -74,7 +74,7 @@ vi.mock('../brain/intent-classifier.js', () => ({
   isSideTalk: vi.fn(() => false),
 }));
 
-vi.mock('../focus-state.js', () => ({
+vi.mock('../state/focus-state.js', () => ({
   setFocusByName: vi.fn(() => null),
   setFocusWithThread: vi.fn(async () => null),
   clearFocus: vi.fn(),
@@ -100,7 +100,7 @@ import { dispatchCommand } from '../command-dispatch.js';
 import { synthesizeSpeech } from '../voice/tts.js';
 import { generateResponseStreaming } from '../brain/brain.js';
 import * as visualMode from '../visual-mode.js';
-import * as focusState from '../focus-state.js';
+import * as focusState from '../state/focus-state.js';
 import * as intentClassifier from '../brain/intent-classifier.js';
 
 // ── Test config ──────────────────────────────────────────────────

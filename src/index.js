@@ -52,11 +52,11 @@ import { handleSessionSetup } from './session-setup.js';
 import { canAccessChannel, isOwner as isChannelOwner, OWNER_USER_ID } from './channel-access.js';
 import { setMcpAuthNotify } from './mcp-access.js';
 import { voiceTasks } from './voice-tasks.js';
-import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
+import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './state/fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
-import { touchFocus } from './focus-state.js';
+import { touchFocus } from './state/focus-state.js';
 import { TtsPipeline } from './voice/tts-pipeline.js';
-import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
+import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './state/bot-state.js';
 // Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
 import { getPlayer, setPlayer, audioQueue as speechAudioQueue, playAudio as speechPlayAudio, speakAndWait, speakPhrase, speakText, enforceOutputLength, getIsSpeaking, setIsSpeaking, setVoiceConnection, preloadAckPhrases, getRandomCachedAck } from './voice/speech-output.js';
 import { isSonosModeEnabled, setSonosMode, clearSonosMode, parseSonosModeCommand, getSonosTarget, setSonosCtx, getSonosCtx, resetSonosCtx, sonosScopeKey, VOICE_SCOPE, getLastSonosTarget } from './sonos-mode.js';
@@ -1077,7 +1077,7 @@ async function briefPendingHandoffs(userId) {
   // Auto-focus on the most recent handoff's channel (belt-and-suspenders with /handoff endpoint)
   const latestWithChannel = [...handoffs].reverse().find(h => h.channelId);
   if (latestWithChannel) {
-    const { setFocusById } = await import('./focus-state.js');
+    const { setFocusById } = await import('./state/focus-state.js');
     setFocusById(latestWithChannel.channelId, latestWithChannel.channel || null);
     logger.info(`🎯 Voice auto-focused on #${latestWithChannel.channel || latestWithChannel.channelId} from handoff briefing`);
   }
@@ -1301,7 +1301,7 @@ client.once('ready', async () => {
 
   // ── Inject Discord client + guild channel cache into focus-state ──
   try {
-    const { setDiscordClient, setDiscordGuildChannels } = await import('./focus-state.js');
+    const { setDiscordClient, setDiscordGuildChannels } = await import('./state/focus-state.js');
     setDiscordClient(client);
     const guild = client.guilds.cache.get(GUILD_ID);
     if (guild) {
@@ -2248,7 +2248,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
 
   // Inject focus context tag when the message is from the currently-focused channel (or a
   // thread inside it). This gives text @mentions the same project context as voice commands.
-  const { getFocus, getFocusContextTag } = await import('./focus-state.js');
+  const { getFocus, getFocusContextTag } = await import('./state/focus-state.js');
   const _mentionFocus = getFocus();
   const _mentionInFocus = _mentionFocus &&
     (_mentionFocus.channelId === _mentionParentId || _mentionFocus.channelId === message.channelId);
@@ -2793,7 +2793,7 @@ async function handleMentionReply(message, rawContent, isReplyToUs) {
 //               (score ≥ 40 in resolveChannel) trigger auto-focus.
 async function handleExplicitFocus(message, content) {
   // ── Explicit /handoff or /focus command ────────────────────────
-  const { setFocusById, setFocusByName, resolveChannel } = await import('./focus-state.js');
+  const { setFocusById, setFocusByName, resolveChannel } = await import('./state/focus-state.js');
 
   let targetChannelId = null;
   let targetChannelName = null;
@@ -2838,7 +2838,7 @@ async function handleExplicitFocus(message, content) {
     // If it was typed in a thread, also store the thread
     const ch = message.channel;
     if (ch?.isThread?.()) {
-      const { setFocusWithThread } = await import('./focus-state.js');
+      const { setFocusWithThread } = await import('./state/focus-state.js');
       await setFocusWithThread(targetChannelName, ch.name);
     }
     const focusName = result?.channelName || targetChannelName;
@@ -2858,7 +2858,7 @@ async function handleAutoFocusUpdate(message, content) {
   if (!userDisconnected) return; // in voice - don't auto-focus from text
   if (content.startsWith('/')) return; // other slash commands, skip
 
-  const { resolveChannel, setFocusById, isFocusFresh } = await import('./focus-state.js');
+  const { resolveChannel, setFocusById, isFocusFresh } = await import('./state/focus-state.js');
   const chName = message.channel?.name || '';
   // Try to resolve by channel ID directly first, then by name
   let registry;
@@ -2874,7 +2874,7 @@ async function handleAutoFocusUpdate(message, content) {
 
   if (channelEntry) {
     // Known channel - update focus silently (no reply, no reaction)
-    const { getFocus } = await import('./focus-state.js');
+    const { getFocus } = await import('./state/focus-state.js');
     const current = getFocus();
 
     const threadId = isThread ? ch.id : null;
@@ -2882,7 +2882,7 @@ async function handleAutoFocusUpdate(message, content) {
 
     if (needsUpdate) {
       if (isThread) {
-        const { setFocusWithThread } = await import('./focus-state.js');
+        const { setFocusWithThread } = await import('./state/focus-state.js');
         // setFocusWithThread takes (channelNameOrAlias, threadHint)
         await setFocusWithThread(channelEntry.name, ch.name);
         logger.info(`[chat-focus] Auto-focus updated: #${channelEntry.name} › ${ch.name} (${effectiveChannelId}) from text activity`);
@@ -3187,7 +3187,7 @@ async function postToTextChannel(message, options = {}) {
 
   if (!targetId) {
     try {
-      const { getFocus } = await import('./focus-state.js');
+      const { getFocus } = await import('./state/focus-state.js');
       const focus = getFocus();
       if (focus && focus.channelId) {
         targetId = focus.channelId;
@@ -3284,7 +3284,7 @@ async function resolveVisualChannel() {
   const explicit = getVisualTargetChannel();
   if (explicit) return explicit;
   try {
-    const { getFocus } = await import('./focus-state.js');
+    const { getFocus } = await import('./state/focus-state.js');
     const focus = getFocus();
     if (focus?.channelId) return focus.channelId;
   } catch { /* focus-state not available */ }
@@ -4519,7 +4519,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     if (dispatchResult.type === 'focus_clear') {
       logger.info('🎯 Focus cleared');
-      const { getPreviousFocus } = await import('./focus-state.js');
+      const { getPreviousFocus } = await import('./state/focus-state.js');
       const prev = getPreviousFocus();
       const hint = prev ? ` Say "refocus" to go back to ${prev.channelName}.` : '';
       if (isVisualModeEnabled()) {
@@ -4568,7 +4568,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
 
     // ── Voice channel move (from channel-router.js detectChannelCommand) ─
     if (dispatchResult.type === 'voice_move') {
-      const { resolveChannel, setFocusById } = await import('./focus-state.js');
+      const { resolveChannel, setFocusById } = await import('./state/focus-state.js');
       const { target } = dispatchResult;
       const registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || `${process.env.HOME}/dev/contexts/channel-registry.json`, 'utf8'));
       // Try to find a voice channel ID from registry.voiceChannels
@@ -4742,7 +4742,7 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     // from the current focus channel so cursor-agent knows where things stand.
     if (conv.history.length === 0) {
       try {
-        const { getFocus } = await import('./focus-state.js');
+        const { getFocus } = await import('./state/focus-state.js');
         const focus = getFocus();
         const seedChannelId = focus?.channelId || null;
         if (seedChannelId) {

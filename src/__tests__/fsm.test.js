@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getState, transition, onStateChange, STATES } from '../bot-state.js';
+import { getState, transition, onStateChange, STATES } from '../state/bot-state.js';
 
 // Reset FSM state before each test by forcing transition to a known state
 function resetToState(targetState) {
