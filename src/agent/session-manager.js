@@ -21,9 +21,10 @@
  */
 import { exec as _exec } from 'child_process';
 import { promisify } from 'util';
-import { readFile, appendFile, mkdir } from 'fs/promises';
+import { readFile, appendFile, mkdir, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import logger from '../logger.js';
 import { mcpCall } from '../mcp-access.js';
 
@@ -442,4 +443,107 @@ export async function searchHaivemind(query, { limit = 4 } = {}) {
     logger.warn({ err: e.message }, '[haivemind] searchHaivemind failed (non-fatal)');
     return null;
   }
+}
+
+// ── Per-channel Claude chatId state ──────────────────────────────────────────
+// Manages a persistent Map of channelKey → { chatId, turns, createdAt }.
+// Rotation fires when turn count or session age exceeds the configured thresholds.
+// Concurrent calls for the same key are serialized via a per-key Promise lock.
+
+const SESSION_CHAT_STORE = process.env.SESSION_CHAT_STORE
+  || join(process.env.HOME || '/root', '.local/state/jarvis-voice/jarvis-sessions.json');
+const CHAT_MAX_TURNS = parseInt(process.env.JARVIS_MAX_TURNS || '150');
+const CHAT_MAX_AGE_MS = parseInt(process.env.JARVIS_MAX_AGE_MS || String(3 * 24 * 3600 * 1000));
+
+let _chatSessions = null;         // Map<channelKey, {chatId,turns,createdAt}> — null = unloaded
+const _chatLocks  = new Map();    // channelKey → in-flight Promise
+
+async function _ensureChatState() {
+  if (_chatSessions !== null) return;
+  try {
+    const raw = await readFile(SESSION_CHAT_STORE, 'utf8');
+    const obj = JSON.parse(raw);
+    _chatSessions = new Map(
+      Object.entries(obj).filter(([, v]) => v && typeof v === 'object' && v.chatId),
+    );
+  } catch {
+    _chatSessions = new Map();
+  }
+}
+
+async function _persistChatState() {
+  if (!_chatSessions) return;
+  try {
+    await mkdir(dirname(SESSION_CHAT_STORE), { recursive: true });
+    await writeFile(SESSION_CHAT_STORE, JSON.stringify(Object.fromEntries(_chatSessions)));
+  } catch (e) {
+    logger.warn({ err: e.message }, 'chat session persist failed (non-fatal)');
+  }
+}
+
+async function _summarizeChatRotation(channelKey, oldChatId) {
+  if (!HAIVEMIND_ENABLED) return;
+  const ts = new Date().toISOString().substring(0, 16);
+  const content = `[SESSION ROTATION] ${ts} channelKey=${channelKey} rotatedFrom=${oldChatId}`;
+  const channelId = (channelKey.match(/channel:(\d+)/) || [])[1];
+  const category  = channelId ? `channel:${channelId}` : 'voice-session';
+  await _haivemindStore(content, category);
+}
+
+async function _doGetOrCreate(channelKey) {
+  await _ensureChatState();
+  const existing = _chatSessions.get(channelKey);
+  if (existing) {
+    const { chatId, turns, createdAt } = existing;
+    const ageMs    = Date.now() - createdAt;
+    const hitTurns = turns >= CHAT_MAX_TURNS;
+    const hitAge   = ageMs > CHAT_MAX_AGE_MS;
+    if (hitTurns || hitAge) {
+      logger.info({ channelKey, turns, ageMs, reason: hitTurns ? 'turns' : 'age' }, '🔄 chat session rotating');
+      _summarizeChatRotation(channelKey, chatId).catch(() => {});
+      _chatSessions.delete(channelKey);
+      // fall through — create new session below
+    } else {
+      return chatId;
+    }
+  }
+  const chatId = randomUUID();
+  _chatSessions.set(channelKey, { chatId, turns: 0, createdAt: Date.now() });
+  await _persistChatState();
+  return chatId;
+}
+
+/**
+ * Return the active chatId for channelKey, creating one if none exists.
+ * Rotates automatically when turn count or age limit is exceeded.
+ * Concurrent calls for the same key are serialized to prevent duplicate sessions.
+ */
+export async function getOrCreateChatId(channelKey) {
+  if (_chatLocks.has(channelKey)) return _chatLocks.get(channelKey);
+  const p = _doGetOrCreate(channelKey);
+  _chatLocks.set(channelKey, p);
+  try {
+    return await p;
+  } finally {
+    _chatLocks.delete(channelKey);
+  }
+}
+
+/**
+ * Increment the turn counter for a channel.
+ * Call after each successful Claude response so rotation triggers at the right threshold.
+ */
+export function incrementChatTurns(channelKey) {
+  if (!_chatSessions) return;
+  const s = _chatSessions.get(channelKey);
+  if (s) {
+    s.turns += 1;
+    _persistChatState().catch(() => {});
+  }
+}
+
+/** @internal Test-only — wipe in-memory state so the next call re-reads from file. */
+export function _resetChatState() {
+  _chatSessions = null;
+  _chatLocks.clear();
 }
