@@ -70,7 +70,7 @@ function _loadRegistry() {
     _registryLoadedAt = now;
   } catch (err) {
     logger.warn(`[focus] Failed to load channel registry: ${err.message}`);
-    if (!_registry) _registry = { channels: {} };
+    if (!_registry) _registry = {};
   }
   return _registry;
 }
@@ -89,10 +89,11 @@ export function resolveChannel(nameOrAlias) {
     .replace(/\s+channel$/, '')
     .trim();
   const registry = _loadRegistry();
-  const channels = registry.channels || {};
+  const channels = registry;
 
   // ── Pass 1: Exact match on name or alias ──────────────────────────
   for (const [channelId, data] of Object.entries(channels)) {
+    if (!data || typeof data !== 'object' || !data.name) continue;
     const name = (data.name || '').toLowerCase();
     if (name === normalized || name === query) {
       return { channelId, channelName: data.name, purpose: data.purpose || '' };
@@ -114,6 +115,7 @@ export function resolveChannel(nameOrAlias) {
   let bestScore = 0;
 
   for (const [channelId, data] of Object.entries(channels)) {
+    if (!data || typeof data !== 'object' || !data.name) continue; // skip non-channel keys (e.g. voiceChannels)
     const nameSlug = slug(data.name || '');
     const allTerms = [nameSlug, ...(data.aliases || []).map(a => slug(a))];
 
@@ -443,7 +445,7 @@ export function setFocusByName(nameOrAlias) {
 
   const directive = loadDirective(resolved.channelId);
   const registry = _loadRegistry();
-  const channelData = registry.channels?.[resolved.channelId] || {};
+  const channelData = registry[resolved.channelId] || {};
   const references = _buildReferences(resolved.channelId, channelData);
 
   _focus = {
@@ -455,6 +457,10 @@ export function setFocusByName(nameOrAlias) {
     discordContext: null, // populated async by _prefetchDiscordMessages
     haivemindContext: null, // populated async by _prefetchHaivemind
     setAt: new Date().toISOString(),
+    ...(channelData.projectPath != null ? { projectPath: channelData.projectPath } : {}),
+    ...(channelData.worktreeMode != null ? { worktreeMode: channelData.worktreeMode } : {}),
+    ...(channelData.baseRef != null ? { baseRef: channelData.baseRef } : {}),
+    ...(channelData.worktreeRoot != null ? { worktreeRoot: channelData.worktreeRoot } : {}),
   };
 
   _saveState(_focus);
@@ -546,7 +552,7 @@ export async function setFocusWithThread(nameOrAlias, threadHint) {
 
   const directive = loadDirective(resolved.channelId);
   const registry = _loadRegistry();
-  const channelData = registry.channels?.[resolved.channelId] || {};
+  const channelData = registry[resolved.channelId] || {};
   const references = _buildReferences(resolved.channelId, channelData);
 
   _focus = {
@@ -559,6 +565,10 @@ export async function setFocusWithThread(nameOrAlias, threadHint) {
     haivemindContext: null,
     setAt: new Date().toISOString(),
     ...(threadId ? { threadId, threadName } : {}),
+    ...(channelData.projectPath != null ? { projectPath: channelData.projectPath } : {}),
+    ...(channelData.worktreeMode != null ? { worktreeMode: channelData.worktreeMode } : {}),
+    ...(channelData.baseRef != null ? { baseRef: channelData.baseRef } : {}),
+    ...(channelData.worktreeRoot != null ? { worktreeRoot: channelData.worktreeRoot } : {}),
   };
 
   _saveState(_focus);
@@ -586,7 +596,7 @@ export function setFocusById(channelId, channelName) {
   const previousFocus = _focus;
   const directive = loadDirective(channelId);
   const registry = _loadRegistry();
-  const channelData = registry.channels?.[channelId] || {};
+  const channelData = registry[channelId] || {};
   const references = _buildReferences(channelId, channelData);
 
   _focus = {
@@ -598,6 +608,10 @@ export function setFocusById(channelId, channelName) {
     discordContext: null,
     haivemindContext: null,
     setAt: new Date().toISOString(),
+    ...(channelData.projectPath != null ? { projectPath: channelData.projectPath } : {}),
+    ...(channelData.worktreeMode != null ? { worktreeMode: channelData.worktreeMode } : {}),
+    ...(channelData.baseRef != null ? { baseRef: channelData.baseRef } : {}),
+    ...(channelData.worktreeRoot != null ? { worktreeRoot: channelData.worktreeRoot } : {}),
   };
 
   _saveState(_focus);
@@ -656,7 +670,7 @@ export function getFocusContextTag() {
   if (!_focus) return null;
 
   const registry = _loadRegistry();
-  const channelData = registry.channels?.[_focus.channelId] || {};
+  const channelData = registry[_focus.channelId] || {};
 
   let tag = `[CHANNEL FOCUS: #${_focus.channelName}`;
   if (_focus.threadName) {
@@ -760,7 +774,7 @@ export function getFullFocusContext() {
   if (!_focus) return null;
 
   const registry = _loadRegistry();
-  const channelData = registry.channels?.[_focus.channelId] || {};
+  const channelData = registry[_focus.channelId] || {};
 
   let ctx = `## Channel Context: #${_focus.channelName} (${_focus.channelId})\n`;
   if (_focus.purpose) ctx += `**Purpose:** ${_focus.purpose}\n`;
@@ -840,10 +854,11 @@ export function getFullFocusContext() {
  */
 export function listChannels() {
   const registry = _loadRegistry();
-  const channels = registry.channels || {};
-  return Object.entries(channels).map(([channelId, data]) => ({
-    channelId,
-    name: data.name || 'unknown',
-    aliases: data.aliases || [],
-  }));
+  return Object.entries(registry)
+    .filter(([, data]) => data && typeof data === 'object' && data.name)
+    .map(([channelId, data]) => ({
+      channelId,
+      name: data.name || 'unknown',
+      aliases: data.aliases || [],
+    }));
 }

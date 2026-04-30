@@ -165,5 +165,16 @@ export function resolveHandoff(message) {
   const directory = entry.directory || `${process.env.HOME}/Dev/${name}`;
   const model = entry.model || 'claude-sonnet-4-6';
 
-  return { channelId: parentId, threadId, chatId, model, directory, name };
+  return {
+    channelId: parentId,
+    threadId,
+    chatId,
+    model,
+    directory,
+    name,
+    projectPath: entry.projectPath ?? null,
+    worktreeMode: entry.worktreeMode ?? 'none',
+    baseRef: entry.baseRef ?? 'main',
+    worktreeRoot: entry.worktreeRoot ?? '~/dev/openjarvis-worktrees',
+  };
 }

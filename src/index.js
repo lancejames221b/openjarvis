@@ -2865,12 +2865,12 @@ async function handleAutoFocusUpdate(message, content) {
   try {
     const { readFileSync } = await import('fs');
     registry = JSON.parse(readFileSync(process.env.CHANNEL_REGISTRY_PATH || `${process.env.HOME}/dev/contexts/channel-registry.json`, 'utf8'));
-  } catch { registry = { channels: {} }; }
+  } catch { registry = {}; }
 
   const ch = message.channel;
   const isThread = ch?.isThread?.();
   const effectiveChannelId = isThread ? (ch.parentId || message.channelId) : message.channelId;
-  const channelEntry = registry.channels?.[effectiveChannelId];
+  const channelEntry = registry[effectiveChannelId];
 
   if (channelEntry) {
     // Known channel - update focus silently (no reply, no reaction)
