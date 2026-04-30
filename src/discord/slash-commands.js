@@ -5,9 +5,9 @@
  */
 
 import { SlashCommandBuilder, REST, Routes } from 'discord.js';
-import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from '../visual-mode.js';
-import { isVerboseModeEnabled, setVerboseMode, enableVerboseForThread, disableVerboseForThread, clearThreadVerboseOverride } from '../verbose-mode.js';
-import { getVoiceModel, setVoiceModel } from '../brain/brain.js';
+import { isVisualModeEnabled, setVisualMode, getVisualTargetChannel, setVisualTargetChannel } from './visual-mode.js';
+import { isVerboseModeEnabled, setVerboseMode, enableVerboseForThread, disableVerboseForThread, clearThreadVerboseOverride } from './verbose-mode.js';
+import { getVoiceModel, setVoiceModel } from './brain/brain.js';
 import { getChannelModel, setChannelModel, clearChannelModel } from './channel-models.js';
 import { readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -35,8 +35,9 @@ function _persistModel(alias) {
     writeFileSync(_ENV_FILE, env, 'utf-8');
   } catch { /* non-fatal */ }
 }
-import { setFocusByName } from '../state/focus-state.js';
-import { handleSpawnCommand, handleStopCommand } from '../agent/spawn.js';
+import { setFocusByName } from './focus-state.js';
+import { handleSpawnCommand, handleStopCommand } from './agent/spawn.js';
+import { handleWtStatusCommand, handleWtCleanCommand } from './agent/wt-commands.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
@@ -44,7 +45,7 @@ import { getBox, setBox, listBoxes, getCwd, persistBoxState, BOX_NAMES } from '.
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import { handleSessionCommand, startSessionDirect, buildResumeCommand } from './slash/session.js';
 import { findProjectMapByName } from './slash/project-map.js';
-import logger from '../logger.js';
+import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
   .setName('spawn')
@@ -320,6 +321,16 @@ const VISUAL_CMD = new SlashCommandBuilder()
       .addStringOption(opt =>
         opt.setName('name').setDescription('Channel name (e.g. gibson, pr-reviews)').setRequired(true)));
 
+const WT_STATUS_CMD = new SlashCommandBuilder()
+  .setName('wt-status')
+  .setDescription('Show active git worktrees for this channel');
+
+const WT_CLEAN_CMD = new SlashCommandBuilder()
+  .setName('wt-clean')
+  .setDescription('Remove the git worktree for the current spawn thread')
+  .addBooleanOption(opt =>
+    opt.setName('force').setDescription('Force removal even if there are uncommitted changes').setRequired(false));
+
 /**
  * Register slash commands with Discord API
  */
@@ -333,9 +344,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), WT_STATUS_CMD.toJSON(), WT_CLEAN_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /spawn, /stop, /wt-status, /wt-clean, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -395,6 +406,24 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       return true;
     }
     await handleStopCommand(interaction);
+    return true;
+  }
+
+  if (interaction.commandName === 'wt-status') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    await handleWtStatusCommand(interaction);
+    return true;
+  }
+
+  if (interaction.commandName === 'wt-clean') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    await handleWtCleanCommand(interaction);
     return true;
   }
 

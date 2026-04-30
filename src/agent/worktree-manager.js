@@ -165,12 +165,21 @@ export async function ensureWorktree(channelId, threadId) {
 }
 
 /**
+ * Return the tracked worktree entry for the given channel+thread, or null if none.
+ */
+export function getWorktreeEntry(channelId, threadId) {
+  const stateKey = _stateKey(channelId, threadId);
+  return _loadState()[stateKey] ?? null;
+}
+
+/**
  * Remove the tracked worktree for the given channel+thread.
  *
- * If the worktree has uncommitted changes, the directory is preserved (not deleted)
- * but the state entry is removed so ensureWorktree will re-create cleanly next time.
+ * By default, if the worktree has uncommitted changes the directory is preserved
+ * (state entry still removed so ensureWorktree re-creates cleanly next time).
+ * Pass `{ force: true }` to remove even if dirty (passes --force to git).
  */
-export async function cleanupWorktree(channelId, threadId) {
+export async function cleanupWorktree(channelId, threadId, { force = false } = {}) {
   const stateKey = _stateKey(channelId, threadId);
   const state = _loadState();
   const tracked = state[stateKey];
@@ -180,16 +189,18 @@ export async function cleanupWorktree(channelId, threadId) {
   const projectPath = entry?.projectPath ? _expandPath(entry.projectPath) : null;
 
   if (projectPath) {
-    // Preserve uncommitted work — never auto-delete a dirty worktree
     const status = _git(['status', '--porcelain'], tracked.path);
-    if (status.status === 0 && status.stdout.trim()) {
+    const isDirty = status.status === 0 && status.stdout.trim().length > 0;
+
+    if (isDirty && !force) {
       console.warn(`[worktree-manager] Preserving dirty worktree at ${tracked.path} (uncommitted changes)`);
       delete state[stateKey];
       _saveState(state);
       return;
     }
 
-    _git(['worktree', 'remove', tracked.path], projectPath);
+    const removeArgs = force ? ['worktree', 'remove', '--force', tracked.path] : ['worktree', 'remove', tracked.path];
+    _git(removeArgs, projectPath);
   }
 
   delete state[stateKey];

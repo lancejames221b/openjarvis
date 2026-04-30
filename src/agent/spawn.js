@@ -13,6 +13,7 @@ import { setMcpMode } from '../discord/channel-mcp-mode.js';
 import { verboseSessions } from '../discord/verbose-sessions.js';
 import { mentionSessions } from '../discord/mention-sessions.js';
 import { abortAllVoiceTasks } from '../voice-tasks.js';
+import { ensureWorktree } from './worktree-manager.js';
 import logger from '../logger.js';
 
 const GATEWAY_URL      = process.env.JARVIS_GATEWAY_URL || 'http://127.0.0.1:22100';
@@ -122,6 +123,10 @@ export async function handleSpawnCommand(interaction) {
   // on the fast empty-MCP path; heavy tool work routes through /spawn threads.
   if (newThread) {
     try { setMcpMode(threadId, 'full'); } catch (err) { logger.warn(`[spawn] setMcpMode failed: ${err.message}`); }
+    // Provision an isolated git worktree for channels with projectPath configured.
+    // The gateway reads worktree-paths.json at request time, so this must complete before
+    // _runStreamingAgent fires.
+    try { await ensureWorktree(parentId, threadId); } catch (err) { logger.warn(`[spawn] ensureWorktree failed: ${err.message}`); }
   }
 
   await interaction.editReply(
@@ -300,6 +305,7 @@ export async function runVoiceSpawn(task, textChannelId, botToken, model = null)
 
   // Same rule as the slash path above — agent threads get full MCP.
   try { setMcpMode(threadId, 'full'); } catch (err) { logger.warn(`[spawn] setMcpMode failed: ${err.message}`); }
+  try { await ensureWorktree(textChannelId, threadId); } catch (err) { logger.warn(`[spawn] ensureWorktree failed: ${err.message}`); }
 
   // Start live stream and fire off agent (background — does not block caller).
   // createLiveStream throws if Discord rejects the pin-message create call —

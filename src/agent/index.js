@@ -5,3 +5,4 @@ export * from './spawn.js';
 export * from './session-manager.js';
 export * from './task-ledger.js';
 export * from './worktree-manager.js';
+export * from './wt-commands.js';
