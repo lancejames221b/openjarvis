@@ -213,3 +213,35 @@ export async function cleanupWorktree(channelId, threadId, { force = false } = {
 export function listActiveWorktrees() {
   return Object.values(_loadState());
 }
+
+/**
+ * Return the worktree path tracked for the given channel+thread, or null if none.
+ */
+export function getWorktreePath(channelId, threadId) {
+  const state = _loadState();
+  const key = _stateKey(channelId, threadId);
+  return state[key]?.path ?? null;
+}
+
+/**
+ * Force-remove the tracked worktree for the given channel+thread.
+ *
+ * Unlike cleanupWorktree, this always runs 'git worktree remove --force' and
+ * does not check for uncommitted changes. Used by /wt clean to purge stale entries.
+ */
+export async function removeWorktree(channelId, threadId) {
+  const stateKey = _stateKey(channelId, threadId);
+  const state = _loadState();
+  const tracked = state[stateKey];
+  if (!tracked) return;
+
+  const entry = _lookupChannel(channelId);
+  const projectPath = entry?.projectPath ? _expandPath(entry.projectPath) : null;
+
+  if (projectPath) {
+    _git(['worktree', 'remove', '--force', tracked.path], projectPath);
+  }
+
+  delete state[stateKey];
+  _saveState(state);
+}
