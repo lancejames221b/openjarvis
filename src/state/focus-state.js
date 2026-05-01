@@ -862,3 +862,28 @@ export function listChannels() {
       aliases: data.aliases || [],
     }));
 }
+
+/**
+ * Check whether a channel is Kanban-integrated.
+ * Returns true only if the registry entry has kanbanEnabled: true.
+ * @param {string} channelId
+ * @returns {boolean}
+ */
+export function isKanbanChannel(channelId) {
+  const registry = _loadRegistry();
+  const channelData = registry.channels?.[channelId];
+  return channelData?.kanbanEnabled === true;
+}
+
+/**
+ * Get the Kanban project path for a channel.
+ * Returns kanbanPath if set, falls back to the channel's path field, or null.
+ * @param {string} channelId
+ * @returns {string | null}
+ */
+export function getKanbanPath(channelId) {
+  const registry = _loadRegistry();
+  const channelData = registry.channels?.[channelId];
+  if (!channelData) return null;
+  return channelData.kanbanPath || channelData.path || null;
+}

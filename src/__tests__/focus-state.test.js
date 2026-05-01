@@ -26,6 +26,9 @@ const SAMPLE_REGISTRY = {
     currentFocus: 'Working on beta launch',
     todos: ['Review PR', 'Update docs'],
     mcpTools: ['notion-oauth', 'linear'],
+    path: '~/Dev/gibson',
+    kanbanEnabled: true,
+    kanbanPath: '~/Dev/gibson',
   },
   'chan-ewitness': {
     name: 'ewitness-engineering',
@@ -35,6 +38,8 @@ const SAMPLE_REGISTRY = {
     currentFocus: null,
     todos: [],
     mcpTools: [],
+    path: '~/Dev/ewitness',
+    kanbanEnabled: true,
   },
   'chan-jarvis-voice': {
     name: 'jarvis-voice-dev',
@@ -377,6 +382,44 @@ describe('focus-state.js', () => {
       expect(result.worktreeMode).toBe('per-thread');
       expect(result.baseRef).toBe('main');
       expect(result.worktreeRoot).toBe('/home/user/dev/worktrees');
+    });
+  });
+
+  // ── isKanbanChannel ───────────────────────────────────────────────
+  describe('isKanbanChannel()', () => {
+    it('returns true when kanbanEnabled is true', () => {
+      expect(focusStateModule.isKanbanChannel('chan-gibson')).toBe(true);
+    });
+
+    it('defaults to false when kanbanEnabled is absent', () => {
+      expect(focusStateModule.isKanbanChannel('chan-jarvis-voice')).toBe(false);
+    });
+
+    it('returns true for a channel with kanbanEnabled true and no kanbanPath', () => {
+      expect(focusStateModule.isKanbanChannel('chan-ewitness')).toBe(true);
+    });
+
+    it('returns false for unknown channel id', () => {
+      expect(focusStateModule.isKanbanChannel('chan-does-not-exist')).toBe(false);
+    });
+  });
+
+  // ── getKanbanPath ────────────────────────────────────────────────
+  describe('getKanbanPath()', () => {
+    it('returns kanbanPath when present', () => {
+      expect(focusStateModule.getKanbanPath('chan-gibson')).toBe('~/Dev/gibson');
+    });
+
+    it('falls back to path field when kanbanPath is absent', () => {
+      expect(focusStateModule.getKanbanPath('chan-ewitness')).toBe('~/Dev/ewitness');
+    });
+
+    it('returns null when neither kanbanPath nor path is present', () => {
+      expect(focusStateModule.getKanbanPath('chan-jarvis-voice')).toBeNull();
+    });
+
+    it('returns null for unknown channel id', () => {
+      expect(focusStateModule.getKanbanPath('chan-does-not-exist')).toBeNull();
     });
   });
 });
