@@ -37,7 +37,6 @@ function _persistModel(alias) {
 }
 import { setFocusByName } from './focus-state.js';
 import { handleSpawnCommand, handleStopCommand } from './agent/spawn.js';
-import { handleWtStatusCommand, handleWtCleanCommand } from './agent/wt-commands.js';
 import { parseCredCommand, handleCredCommand } from './slash/cred.js';
 import { handleDirCommand, handleShellCommand } from './slash/shell.js';
 import { handleSkillCommand, listSkills } from './slash/skill.js';
@@ -45,6 +44,7 @@ import { getBox, setBox, listBoxes, getCwd, persistBoxState, BOX_NAMES } from '.
 import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from './channel-access.js';
 import { handleSessionCommand, startSessionDirect, buildResumeCommand } from './slash/session.js';
 import { findProjectMapByName } from './slash/project-map.js';
+import { handleNewKanbanChannelCommand } from './slash/new-kanban-channel.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -171,6 +171,16 @@ const INIT_CMD = new SlashCommandBuilder()
     sub.setName('all').setDescription('Initialize metadata for EVERY channel (uses LLM to infer summaries if empty)')
       .addBooleanOption(opt => opt.setName('force').setDescription('Rewrite even channels that already have metadata').setRequired(false))
       .addBooleanOption(opt => opt.setName('summarize').setDescription('Use LLM to summarize recent messages for channels without summary').setRequired(false)));
+
+const NEW_KANBAN_CHANNEL_CMD = new SlashCommandBuilder()
+  .setName('new-kanban-channel')
+  .setDescription('Create a new Discord channel with Kanban task management enabled')
+  .addStringOption(opt =>
+    opt.setName('name').setDescription('Channel name (no spaces, use hyphens)').setRequired(true))
+  .addStringOption(opt =>
+    opt.setName('project-path').setDescription('Absolute path to the project directory').setRequired(true))
+  .addChannelOption(opt =>
+    opt.setName('category').setDescription('Discord category to put the channel in').setRequired(false));
 
 const ACCESS_CMD = new SlashCommandBuilder()
   .setName('access')
@@ -321,16 +331,6 @@ const VISUAL_CMD = new SlashCommandBuilder()
       .addStringOption(opt =>
         opt.setName('name').setDescription('Channel name (e.g. gibson, pr-reviews)').setRequired(true)));
 
-const WT_STATUS_CMD = new SlashCommandBuilder()
-  .setName('wt-status')
-  .setDescription('Show active git worktrees for this channel');
-
-const WT_CLEAN_CMD = new SlashCommandBuilder()
-  .setName('wt-clean')
-  .setDescription('Remove the git worktree for the current spawn thread')
-  .addBooleanOption(opt =>
-    opt.setName('force').setDescription('Force removal even if there are uncommitted changes').setRequired(false));
-
 /**
  * Register slash commands with Discord API
  */
@@ -344,9 +344,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), WT_STATUS_CMD.toJSON(), WT_CLEAN_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), NEW_KANBAN_CHANNEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /spawn, /stop, /wt-status, /wt-clean, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /new-kanban-channel, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -406,24 +406,6 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       return true;
     }
     await handleStopCommand(interaction);
-    return true;
-  }
-
-  if (interaction.commandName === 'wt-status') {
-    if (!isChannelOwner(interaction.user.id)) {
-      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
-      return true;
-    }
-    await handleWtStatusCommand(interaction);
-    return true;
-  }
-
-  if (interaction.commandName === 'wt-clean') {
-    if (!isChannelOwner(interaction.user.id)) {
-      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
-      return true;
-    }
-    await handleWtCleanCommand(interaction);
     return true;
   }
 
@@ -652,6 +634,22 @@ export async function handleSlashCommand(interaction, allowedUsers) {
       if (isThread) parts.push(`thread: ${describe(scopeMode)}`);
       parts.push(`channel: ${describe(parentMode)}`);
       await interaction.reply({ content: parts.join(' | '), ephemeral: true });
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'new-kanban-channel') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    try {
+      await handleNewKanbanChannelCommand(interaction);
+    } catch (err) {
+      logger.error(`[slash:new-kanban-channel] ${err.message}`);
+      const msg = `❌ /new-kanban-channel failed: ${err.message}`;
+      if (interaction.deferred || interaction.replied) await interaction.editReply(msg).catch(() => {});
+      else await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
     }
     return true;
   }
