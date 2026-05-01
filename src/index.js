@@ -54,7 +54,7 @@ import { setMcpAuthNotify } from './mcp-access.js';
 import { voiceTasks } from './voice-tasks.js';
 import { resetIdleSleepTimer, isWakeUpCommand, WAKE_UP_PATTERNS, handleSleepCheck as fsmHandleSleepCheck, applyImplicitWakeOnUnmute, detectFollowUpLikely, wireFSMCallbacks, openAttentionWindow, closeAttentionWindow, isAttentionWindowActive, startTaskAutoSleep, cancelTaskAutoSleep, isTaskAutoSleepArmed } from './fsm.js';
 import { dispatchCommand, isInterruptCommand } from './command-dispatch.js';
-import { touchFocus } from './focus-state.js';
+import { touchFocus, getFocus } from './focus-state.js';
 import { TtsPipeline } from './voice/tts-pipeline.js';
 import { getState, transition, STATES, canDeliverVoiceAlert, classifyAlertPriority, getStateInfo } from './bot-state.js';
 // Task ledger stripped - voice bot is a thin pipe, no ack tracking needed
@@ -1443,7 +1443,8 @@ client.once('ready', async () => {
     // Run through the same pipeline as real STT
     const wakeResult = checkWakeWord(text);
     const cleaned = wakeResult.stripped || text;
-    const dispatch = await dispatchCommand(text, cleaned, effectiveUserId, ALLOWED_USERS, enrollmentState);
+    const focusChannelId = getFocus()?.channelId || null;
+    const dispatch = await dispatchCommand(text, cleaned, effectiveUserId, ALLOWED_USERS, enrollmentState, focusChannelId);
     return { type: dispatch.type, wakeWord: wakeResult.detected, transcript: text, dispatch };
   });
 
@@ -4421,7 +4422,9 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
     lastUserMessage = cleanedTranscript.substring(0, 100);
 
     // ── Command dispatch - routes mode toggles, enrollment, interrupts, shortcuts, or brain call ──
-    const dispatchResult = await dispatchCommand(rawTranscript, cleanedTranscript, userId, ALLOWED_USERS, enrollmentState);
+    // Pass the focus channel id so Kanban-enabled channels can intercept Kanban verbs.
+    const focusChannelId = getFocus()?.channelId || null;
+    const dispatchResult = await dispatchCommand(rawTranscript, cleanedTranscript, userId, ALLOWED_USERS, enrollmentState, focusChannelId);
 
     if (dispatchResult.type === 'mode_toggle') {
       if (dispatchResult.mode === 'tldr' && dispatchResult.success) {
@@ -4700,6 +4703,26 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       markBotResponse(userId);
       const chime = await synthesizeSpeech('Yes?');
       if (chime) { playAudioEnhanced(chime).then(() => { try { unlinkSync(chime); } catch {} }).catch(() => {}); }
+      return;
+    }
+
+    // ── Kanban dispatch - Kanban-enabled channel handled CLI command ─
+    if (dispatchResult.type === 'kanban') {
+      markBotResponse(userId);
+      if (!dispatchResult.silent && dispatchResult.speech) {
+        const ack = await synthesizeSpeech(dispatchResult.speech);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
+      if (dispatchResult.discordText) {
+        const _postCh = focusChannelId || TEXT_CHANNEL_ID || VOICE_REPORT_CHANNEL_ID;
+        if (_postCh) {
+          fetch(`https://discord.com/api/v10/channels/${_postCh}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN || ''}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: dispatchResult.discordText }),
+          }).catch(() => {});
+        }
+      }
       return;
     }
 

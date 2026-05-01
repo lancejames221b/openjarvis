@@ -6,6 +6,7 @@
 
 import logger from '../logger.js';
 import { tryShortcut } from './shortcut-engine.js';
+import { tryKanbanDispatch } from '../kanban-dispatch.js';
 import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from '../tldr-mode.js';
 import { isMobileModeToggle, setMobileMode } from '../mobile-mode.js';
 import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from '../visual-mode.js';
@@ -46,10 +47,11 @@ const STOP_WORDS = ['sounds good', 'thank you', 'thanks', 'obviously', 'ok', 'ok
  * @param {string} userId
  * @param {string[]} allowedUsers
  * @param {object} enrollmentState - enrollment state object from auth.js
+ * @param {string|null} [channelId] - Discord channel/thread id, used to detect Kanban-enabled channels
  * @returns {object} dispatch result:
- *   { type: 'mode_toggle' | 'enrollment' | 'interrupt' | 'stop_word' | 'side_talk' | 'bare_wake' | 'brain', ... }
+ *   { type: 'mode_toggle' | 'enrollment' | 'interrupt' | 'stop_word' | 'side_talk' | 'bare_wake' | 'kanban' | 'brain', ... }
  */
-export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowedUsers, enrollmentState) {
+export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, allowedUsers, enrollmentState, channelId = null) {
   const isAdmin = allowedUsers.includes(userId);
 
   // ── TL;DR mode toggle ──────────────────────────────────────────────
@@ -301,6 +303,28 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
   // Note: wakeWordUsed must be passed in; extracted from checkWakeWord result upstream
   // We can't call checkWakeWord here without the full pipeline context.
   // Callers must check isSideTalk separately if needed.
+
+  // ── Kanban dispatch (Kanban-enabled channels only) ─────────────────
+  // When this Discord channel is registered with `kanbanEnabled: true`,
+  // intercept natural-language Kanban verbs ("create a task: …", "show
+  // the board", "start task <id>") and shell out to the local kanban CLI
+  // before the brain ever sees them.
+  if (channelId) {
+    try {
+      const kanbanResult = await tryKanbanDispatch(cleanedTranscript, channelId);
+      if (kanbanResult.handled) {
+        return {
+          type: 'kanban',
+          speech: kanbanResult.voice ?? null,
+          discordText: kanbanResult.result ?? null,
+          silent: false,
+        };
+      }
+    } catch (err) {
+      logger.warn(`[dispatch] Kanban dispatch error: ${err.message}`);
+      // Fall through to normal dispatch on any failure
+    }
+  }
 
   // ── Shortcut fast-path (bypasses LLM for known commands) ────────────
   const shortcutResult = await tryShortcut(cleanedTranscript, null);

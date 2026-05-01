@@ -76,6 +76,40 @@ function _loadRegistry() {
 }
 
 /**
+ * Lookup the registry entry for a channelId, with `:thread:` suffix stripping.
+ * Returns the parent channel's entry if the key is a thread within a known channel.
+ * @returns {object|null}
+ */
+function _registryEntry(channelId) {
+  if (!channelId) return null;
+  const channels = _loadRegistry().channels || {};
+  if (channels[channelId]) return channels[channelId];
+  const parentId = channelId.replace(/:thread:.*$/, '');
+  if (parentId !== channelId && channels[parentId]) return channels[parentId];
+  return null;
+}
+
+/**
+ * True when the channel registry entry has `kanbanEnabled: true`.
+ * Thread-aware: a thread inherits its parent channel's flag.
+ */
+export function isKanbanChannel(channelId) {
+  const entry = _registryEntry(channelId);
+  return Boolean(entry && entry.kanbanEnabled === true);
+}
+
+/**
+ * Returns the absolute project path the Kanban CLI should target for this
+ * channel, or null if not configured. Falls back to the entry's `path` field
+ * if `kanbanPath` is not set.
+ */
+export function getKanbanPath(channelId) {
+  const entry = _registryEntry(channelId);
+  if (!entry) return null;
+  return entry.kanbanPath || entry.path || null;
+}
+
+/**
  * Resolve a channel name or alias to a channel entry.
  * @param {string} nameOrAlias — e.g. "gibson", "ewitness", "general"
  * @returns {{ channelId: string, channelName: string, purpose: string } | null}

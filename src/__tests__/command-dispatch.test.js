@@ -64,6 +64,10 @@ vi.mock('../brain/haiku-intent.js', () => ({
   classifyIntent: vi.fn(async () => null),
 }));
 
+vi.mock('../kanban-dispatch.js', () => ({
+  tryKanbanDispatch: vi.fn(async () => ({ handled: false })),
+}));
+
 // Import after all mocks
 import { dispatchCommand, isInterruptCommand } from '../discord/command-dispatch.js';
 import * as tldrMode from '../tldr-mode.js';
@@ -77,6 +81,7 @@ import * as channelRouter from '../discord/channel-router.js';
 import * as shortcutEngine from '../discord/shortcut-engine.js';
 import * as fuzzyDispatch from '../discord/fuzzy-dispatch.js';
 import * as haikuIntent from '../brain/haiku-intent.js';
+import * as kanbanDispatch from '../kanban-dispatch.js';
 
 // ── Test helpers ────────────────────────────────────────────────────
 const ADMIN_ID = 'user-admin';
@@ -107,6 +112,7 @@ describe('command-dispatch.js', () => {
     shortcutEngine.tryShortcut.mockResolvedValue({ handled: false });
     fuzzyDispatch.fuzzyMatch.mockReturnValue({ matched: false });
     haikuIntent.classifyIntent.mockResolvedValue(null);
+    kanbanDispatch.tryKanbanDispatch.mockResolvedValue({ handled: false });
   });
 
   // ── isInterruptCommand ────────────────────────────────────────────
@@ -372,6 +378,66 @@ describe('command-dispatch.js', () => {
       const result = await dispatchCommand('cancel enroll', 'cancel enroll', ADMIN_ID, ALLOWED_USERS, enrollState);
       expect(result.type).toBe('enrollment');
       expect(result.action).toBe('cancel');
+    });
+  });
+
+  // ── Kanban dispatch wiring ────────────────────────────────────────
+  describe('kanban dispatch', () => {
+    const KANBAN_CHAN = 'chan-kanban-1';
+
+    it('passes channelId to tryKanbanDispatch', async () => {
+      await dispatchCommand('whatever', 'whatever', ADMIN_ID, ALLOWED_USERS, ENROLLMENT_STATE, KANBAN_CHAN);
+      expect(kanbanDispatch.tryKanbanDispatch).toHaveBeenCalledWith('whatever', KANBAN_CHAN);
+    });
+
+    it('does not call tryKanbanDispatch when channelId is null', async () => {
+      await dispatch('whatever', 'whatever');
+      expect(kanbanDispatch.tryKanbanDispatch).not.toHaveBeenCalled();
+    });
+
+    it('handled kanban result → type: kanban with speech and discordText', async () => {
+      kanbanDispatch.tryKanbanDispatch.mockResolvedValue({
+        handled: true,
+        result: '✅ Task created: fix login [abc12]',
+        voice: 'Created task: fix login',
+      });
+      const result = await dispatchCommand(
+        'create a task: fix login',
+        'create a task: fix login',
+        ADMIN_ID,
+        ALLOWED_USERS,
+        ENROLLMENT_STATE,
+        KANBAN_CHAN,
+      );
+      expect(result.type).toBe('kanban');
+      expect(result.speech).toBe('Created task: fix login');
+      expect(result.discordText).toBe('✅ Task created: fix login [abc12]');
+    });
+
+    it('unhandled kanban result → falls through to brain', async () => {
+      kanbanDispatch.tryKanbanDispatch.mockResolvedValue({ handled: false });
+      const result = await dispatchCommand(
+        'what is the weather',
+        'what is the weather',
+        ADMIN_ID,
+        ALLOWED_USERS,
+        ENROLLMENT_STATE,
+        KANBAN_CHAN,
+      );
+      expect(result.type).toBe('brain');
+    });
+
+    it('kanban dispatch error → falls through to brain (does not throw)', async () => {
+      kanbanDispatch.tryKanbanDispatch.mockRejectedValue(new Error('boom'));
+      const result = await dispatchCommand(
+        'show the board',
+        'show the board',
+        ADMIN_ID,
+        ALLOWED_USERS,
+        ENROLLMENT_STATE,
+        KANBAN_CHAN,
+      );
+      expect(result.type).toBe('brain');
     });
   });
 
