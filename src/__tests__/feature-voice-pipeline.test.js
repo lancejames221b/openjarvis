@@ -106,7 +106,7 @@ vi.mock('../brain/haiku-intent.js', () => ({
 // ── Real imports ───────────────────────────────────────────────────────────────
 
 import { checkWakeWord } from '../voice/wakeword.js';
-import { dispatchCommand } from '../command-dispatch.js';
+import { dispatchCommand } from '../discord/command-dispatch.js';
 import { transcribeAudio, transcribeWhisperOnly, getSTTHealth } from '../voice/stt.js';
 import { generateResponseStreaming } from '../brain/brain.js';
 import { synthesizeSpeech } from '../voice/tts.js';

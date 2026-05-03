@@ -3,17 +3,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ── Mocks must be declared before imports ────────────────────────────
 vi.mock('../logger.js', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
-vi.mock('../focus-state.js', () => ({
+vi.mock('../state/focus-state.js', () => ({
   isKanbanChannel: vi.fn(() => false),
   getKanbanPath: vi.fn(() => null),
 }));
 
 import { tryKanbanDispatch } from '../kanban-dispatch.js';
-import * as focusState from '../focus-state.js';
+import * as focusState from '../state/focus-state.js';
 
 const KANBAN_CHANNEL = 'chan-kanban';
 const NON_KANBAN_CHANNEL = 'chan-other';
-const PROJECT_PATH = '/home/yari/Dev/example';
+const PROJECT_PATH = '/home/user/Dev/example';
 
 function makeExecMock(stdout, stderr = '') {
   return vi.fn(async () => ({ stdout, stderr }));

@@ -12,12 +12,12 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import logger from './logger.js';
-import { isKanbanChannel, getKanbanPath } from './focus-state.js';
+import { isKanbanChannel, getKanbanPath } from './state/focus-state.js';
 
 const execFileAsync = promisify(execFile);
 
-const KANBAN_BIN = '/home/yari/.local/bin/kanban';
-const NODE_BIN = 'node';
+const KANBAN_BIN = process.env.KANBAN_BIN || `${process.env.HOME}/.local/bin/kanban`;
+const NODE_BIN = process.env.KANBAN_NODE_BIN || 'node';
 
 const COLUMN_LABELS = {
   backlog: 'Backlog',

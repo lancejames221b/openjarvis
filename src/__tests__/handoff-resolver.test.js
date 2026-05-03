@@ -58,7 +58,7 @@ beforeEach(async () => {
     throw new Error(`Unexpected: ${p}`);
   });
 
-  ({ resolveHandoff } = await import('../handoff-resolver.js'));
+  ({ resolveHandoff } = await import('../discord/handoff-resolver.js'));
 });
 
 describe('resolveHandoff', () => {
@@ -122,7 +122,7 @@ describe('resolveHandoff', () => {
         if (p.includes('channel-registry')) return JSON.stringify({});
         throw new Error(`Unexpected: ${p}`);
       });
-      const { resolveHandoff: rh } = await import('../handoff-resolver.js');
+      const { resolveHandoff: rh } = await import('../discord/handoff-resolver.js');
       const msg = makeMessage({ channelId: 'chan-fallback' });
       const result = rh(msg);
       expect(result).not.toBeNull();
