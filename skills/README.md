@@ -45,6 +45,18 @@ Everything. Full capability.
 
 ---
 
+### DEV (project-channel skills)
+
+Bound to channels marked `kanbanEnabled` in the channel registry. Triggered only inside those channels (or threads under them).
+
+| Skill | What it does | Deps | Trigger |
+|-------|-------------|------|---------|
+| [kanban](kanban/) | Voice/Discord control of the Kanban task board — list, create, start, trash, link tasks | `kanban` CLI on `~/.local/bin/kanban` | "show the board", "create a task: …", "what's in progress", "trash task <id>" |
+
+Set up a Kanban-linked channel with the `/new-kanban-channel` slash command. See [kanban/SETUP.md](kanban/SETUP.md).
+
+---
+
 ## Installing Skills
 
 ### Find your OpenClaw skills directory

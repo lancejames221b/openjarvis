@@ -41,6 +41,16 @@ Webhook receiver for external alert sources (Grafana, scripts, etc.). Queues inc
 
 Port is Tailscale-only: `app.listen(WEBHOOK_PORT, TAILSCALE_IP, …)`.
 
+### kanban-dispatch (`src/kanban-dispatch.js`, `src/state/focus-state.js`)
+
+Channel-bound Kanban CLI router. When a Discord channel's registry entry has `kanbanEnabled: true`, natural-language Kanban verbs ("create a task: …", "show the board", "start task <id>", "trash task <id>", "what's in progress") are intercepted before the brain via `tryKanbanDispatch()` (hooked in `src/discord/command-dispatch.js`). The dispatcher shells out to `${HOME}/.local/bin/kanban task …` with `--project-path` resolved from the registry entry's `kanbanPath` (or `path`). Result type `{ type: 'kanban', speech, discordText }` is rendered in `src/index.js` — TTS speaks the brief summary, full board posts to the focus channel.
+
+Channel-registry helpers in `src/state/focus-state.js`: `isKanbanChannel(channelId)` (thread-aware) and `getKanbanPath(channelId)`. Schema fields on a registry entry: `kanbanEnabled: boolean`, `kanbanPath: string`.
+
+Slash command `/new-kanban-channel name:<…> project-path:<abs-path>` (`src/discord/slash/new-kanban-channel.js`) creates a Discord channel, atomic-writes a `kanbanEnabled: true` registry entry, and bootstraps the workspace by invoking `kanban task list` once.
+
+Skill: `skills/kanban/SKILL.md` — full operations reference. Setup: `skills/kanban/SETUP.md`.
+
 ### haivemind (`haivemind/` submodule)
 
 Python-based collective memory system. Provides ChromaDB vector storage + Redis caching + MCP server interface. Used by jarvis-gateway to store/retrieve per-channel conversation summaries and cross-agent knowledge. Has its own `haivemind/Claude.md`.
