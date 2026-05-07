@@ -26,6 +26,19 @@ const WEBHOOK_PORT = process.env.ALERT_WEBHOOK_PORT || 3335;
 const WEBHOOK_TOKEN = process.env.ALERT_WEBHOOK_TOKEN || 'change-me';
 const ALERTS_ALSO_POST_TEXT = process.env.ALERTS_ALSO_POST_TEXT !== 'false'; // Mirror all alerts and voice results to text channel
 
+// HUD companion-message preview cap.
+// Discord's hard limit is 2000; default 1900 leaves room for the prefix
+// (`📝 *(voiced)* {source}: `) without exceeding 2000. Override with
+// HUD_VOICED_PREVIEW_CHARS=N in .env to shorten.
+const HUD_VOICED_PREVIEW_CHARS = parseInt(process.env.HUD_VOICED_PREVIEW_CHARS ?? '1900', 10);
+
+function _voicedPreview(text) {
+  if (!text) return '';
+  const s = String(text);
+  if (s.length <= HUD_VOICED_PREVIEW_CHARS) return s;
+  return s.substring(0, Math.max(0, HUD_VOICED_PREVIEW_CHARS - 1)) + '…';
+}
+
 const ESCALATION_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour before escalation
 const ESCALATION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // Check every 5 minutes
 
@@ -620,7 +633,7 @@ app.post('/speak', async (req, res) => {
     // no_ack: total silence. ack_pre: already acked before, nothing after.
     logger.info(`🔇 /speak ON_SCREEN=${onScreenMode} — suppressing voice for screen action`);
     if (postToTextCallback) {
-      postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`);
+      postToTextCallback(`📝 *(voiced)* ${source}: ${_voicedPreview(message)}`);
     }
     if (isSubAgentResult && postToThreadCallback) {
       postToThreadCallback(taskId, source, message);
@@ -637,7 +650,7 @@ app.post('/speak', async (req, res) => {
   if (taskAlreadySpoke) {
     logger.info(`🔇 /speak task-progress suppressed — task #${taskId} already spoke inline`);
     if (postToTextCallback) {
-      postToTextCallback(`📝 *(text-only, task spoke inline)* ${message.substring(0, 300)}`);
+      postToTextCallback(`📝 *(text-only, task spoke inline)* ${_voicedPreview(message)}`);
     }
     return res.json({ ok: true, delivered: 'text-only-task-spoke-inline' });
   }
@@ -671,10 +684,10 @@ app.post('/speak', async (req, res) => {
     // When voice is active, text is just a quiet log (no @ping, no bold notification)
     if (ALERTS_ALSO_POST_TEXT && postToTextCallback) {
       if (source === 'incoming-call') {
-        postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: process.env.HUD_CHANNEL_ID });
-        if (process.env.HUD_CHANNEL_ID_2) postToTextCallback(`📝 *(voiced)* ${source}: ${message.substring(0, 300)}`, { forceChannelId: process.env.HUD_CHANNEL_ID_2 });
+        postToTextCallback(`📝 *(voiced)* ${source}: ${_voicedPreview(message)}`, { forceChannelId: process.env.HUD_CHANNEL_ID });
+        if (process.env.HUD_CHANNEL_ID_2) postToTextCallback(`📝 *(voiced)* ${source}: ${_voicedPreview(message)}`, { forceChannelId: process.env.HUD_CHANNEL_ID_2 });
       } else {
-        postToTextCallback(`📝 *(voiced)* ${source || 'result'}: ${message.substring(0, 300)}`);
+        postToTextCallback(`📝 *(voiced)* ${source || 'result'}: ${_voicedPreview(message)}`);
       }
     }
     res.json({ ok: true, delivered: 'voice', userInVoice: true });
