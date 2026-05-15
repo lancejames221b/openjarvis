@@ -167,7 +167,15 @@ export async function createLiveStream(channelId, botToken, opts = {}) {
     clearInterval(ticker);
     state = 'done';
 
-    const text = _dedupSentences((finalText || '').trim());
+    // Strip gateway tool-call progress markers (🔧 **Tool** › arg / ↳ result)
+    // from the final body — they're transient streaming noise, only useful
+    // in the live header. Without this, every Read/Bash/Grep call clutters
+    // the Discord thread as a separate "🔧 Bash › grep …" message below the
+    // pin. (Brain.js already does this for the voice/TTS path; centralizing
+    // here covers every live-stream caller: spawn.js, message-handlers.js,
+    // index.js verbose mode, slash/session.js, slash/skill.js.)
+    const cleaned = _stripToolCallTrace(finalText || '');
+    const text = _dedupSentences(cleaned.trim());
     if (!text || text.length < 2) {
       return finishEmpty('no_output');
     }
@@ -248,6 +256,19 @@ function _fmtElapsed(ms) {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+}
+
+// Strip gateway tool-call progress markers emitted by jarvis-gateway.js
+// (`🔧 **ToolName** › arg` plus the trailing `  ↳ result` line). These exist
+// to drive the streaming header in real time; they should never end up as
+// permanent Discord messages below the pin.
+// Mirrors the regexes in src/brain/brain.js for the voice/TTS pipeline.
+function _stripToolCallTrace(text) {
+  if (!text) return '';
+  return text
+    .replace(/\n?🔧 \*\*[^*\n]+\*\*[^\n]*\n?/g, '')
+    .replace(/  ↳ [^\n]*\n?/g, '')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
 // Remove consecutively repeated sentences (model stutter artifact).

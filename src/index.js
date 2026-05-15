@@ -4726,6 +4726,26 @@ async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
+    // ── Channel-registration dispatch - created Discord channel via REST API ─
+    if (dispatchResult.type === 'channel_register') {
+      markBotResponse(userId);
+      if (!dispatchResult.silent && dispatchResult.speech) {
+        const ack = await synthesizeSpeech(dispatchResult.speech);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
+      if (dispatchResult.discordText) {
+        const _postCh = focusChannelId || TEXT_CHANNEL_ID || VOICE_REPORT_CHANNEL_ID;
+        if (_postCh) {
+          fetch(`https://discord.com/api/v10/channels/${_postCh}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN || ''}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: dispatchResult.discordText }),
+          }).catch(() => {});
+        }
+      }
+      return;
+    }
+
     // ── Shortcut fast-path - handled without LLM ─────────────────────
     if (dispatchResult.type === 'shortcut') {
       markBotResponse(userId);

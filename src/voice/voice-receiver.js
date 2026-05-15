@@ -1582,6 +1582,26 @@ export async function handleSpeech(userId, audioBuffer, preTranscribed = null) {
       return;
     }
 
+    // ── Channel-registration dispatch — created channel via Discord REST API
+    if (dispatchResult.type === 'channel_register') {
+      markBotResponse(userId);
+      if (!dispatchResult.silent && dispatchResult.speech) {
+        const ack = await synthesizeSpeech(dispatchResult.speech);
+        if (ack) { await playAudioEnhanced(ack); try { unlinkSync(ack); } catch {} }
+      }
+      if (dispatchResult.discordText) {
+        const _postCh = process.env.DISCORD_TEXT_CHANNEL_ID || process.env.VOICE_REPORT_CHANNEL_ID;
+        if (_postCh) {
+          fetch(`https://discord.com/api/v10/channels/${_postCh}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN || ''}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: dispatchResult.discordText }),
+          }).catch(() => {});
+        }
+      }
+      return;
+    }
+
     if (dispatchResult.type === 'voice_spawn') {
       markBotResponse(userId);
       const ack = await synthesizeSpeech('Spawning agent in a thread.');

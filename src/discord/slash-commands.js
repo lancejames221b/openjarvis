@@ -45,6 +45,7 @@ import { isOwner as isChannelOwner, grantAccess, revokeAccess, listAccess } from
 import { handleSessionCommand, startSessionDirect, buildResumeCommand } from './slash/session.js';
 import { findProjectMapByName } from './slash/project-map.js';
 import { handleNewKanbanChannelCommand } from './slash/new-kanban-channel.js';
+import { handleRegisterChannelCommand } from './slash/register-channel.js';
 import logger from './logger.js';
 
 const SPAWN_CMD = new SlashCommandBuilder()
@@ -181,6 +182,16 @@ const NEW_KANBAN_CHANNEL_CMD = new SlashCommandBuilder()
     opt.setName('project-path').setDescription('Absolute path to the project directory').setRequired(true))
   .addChannelOption(opt =>
     opt.setName('category').setDescription('Discord category to put the channel in').setRequired(false));
+
+const REGISTER_CHANNEL_CMD = new SlashCommandBuilder()
+  .setName('register-channel')
+  .setDescription('Create a Discord channel under a category and add it to channel-registry.json')
+  .addStringOption(opt =>
+    opt.setName('name').setDescription('Channel name (slugified automatically)').setRequired(true))
+  .addChannelOption(opt =>
+    opt.setName('category').setDescription('Discord category to put the channel in (picker)').setRequired(false))
+  .addStringOption(opt =>
+    opt.setName('category-name').setDescription('Category name (string, e.g. "engineering")').setRequired(false));
 
 const ACCESS_CMD = new SlashCommandBuilder()
   .setName('access')
@@ -344,9 +355,9 @@ export async function registerSlashCommands(client) {
     }
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), NEW_KANBAN_CHANNEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
+      { body: [VISUAL_CMD.toJSON(), VERBOSE_CMD.toJSON(), MODEL_CMD.toJSON(), ASK_CMD.toJSON(), MCP_CMD.toJSON(), SYNC_SKILLS_CMD.toJSON(), INIT_CMD.toJSON(), NEW_KANBAN_CHANNEL_CMD.toJSON(), REGISTER_CHANNEL_CMD.toJSON(), SPAWN_CMD.toJSON(), STOP_CMD.toJSON(), CRED_CMD.toJSON(), BOX_CMD.toJSON(), DIR_CMD.toJSON(), SHELL_CMD.toJSON(), ACCESS_CMD.toJSON(), SKILL_CMD.toJSON(), TMUX_CMD.toJSON(), SESSION_CMD.toJSON(), RESUME_CMD.toJSON(), PLAN_CMD.toJSON(), EFFORT_CMD.toJSON(), SPEAKER_CMD.toJSON(), SONOS_CMD.toJSON()] }
     );
-    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /new-kanban-channel, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
+    logger.info('[slash] Registered /visual, /verbose, /model, /ask, /mcp, /sync-skills, /init, /new-kanban-channel, /register-channel, /spawn, /stop, /cred, /box, /dir, /shell, /access, /skill, /tmux, /session, /resume, /plan, /effort, /speaker, /sonos commands');
   } catch (err) {
     logger.error(`[slash] Failed to register commands: ${err.message}`);
   }
@@ -648,6 +659,22 @@ export async function handleSlashCommand(interaction, allowedUsers) {
     } catch (err) {
       logger.error(`[slash:new-kanban-channel] ${err.message}`);
       const msg = `❌ /new-kanban-channel failed: ${err.message}`;
+      if (interaction.deferred || interaction.replied) await interaction.editReply(msg).catch(() => {});
+      else await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+    }
+    return true;
+  }
+
+  if (interaction.commandName === 'register-channel') {
+    if (!isChannelOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Not authorized.', ephemeral: true });
+      return true;
+    }
+    try {
+      await handleRegisterChannelCommand(interaction);
+    } catch (err) {
+      logger.error(`[slash:register-channel] ${err.message}`);
+      const msg = `❌ /register-channel failed: ${err.message}`;
       if (interaction.deferred || interaction.replied) await interaction.editReply(msg).catch(() => {});
       else await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
     }

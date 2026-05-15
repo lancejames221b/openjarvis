@@ -7,6 +7,7 @@
 import logger from '../logger.js';
 import { tryShortcut } from './shortcut-engine.js';
 import { tryKanbanDispatch } from '../kanban-dispatch.js';
+import { tryChannelDispatch } from './channel-dispatch.js';
 import { isTldrToggleCommand, setTldrMode, isTranscriptToggleCommand, setTranscriptMode } from '../tldr-mode.js';
 import { isMobileModeToggle, setMobileMode } from '../mobile-mode.js';
 import { isVisualModeToggle, setVisualMode, setVisualTargetChannel } from '../visual-mode.js';
@@ -322,6 +323,28 @@ export async function dispatchCommand(rawTranscript, cleanedTranscript, userId, 
       }
     } catch (err) {
       logger.warn(`[dispatch] Kanban dispatch error: ${err.message}`);
+      // Fall through to normal dispatch on any failure
+    }
+  }
+
+  // ── Channel-registration dispatch (admin only) ────────────────────
+  // Intercepts utterances like "register a channel called demos under
+  // engineering" and calls the Discord REST API directly + writes to
+  // channel-registry.json. Bypasses the brain so Jarvis stops trying to
+  // grep credentials / write helper scripts to figure it out.
+  if (isAdmin) {
+    try {
+      const channelResult = await tryChannelDispatch(cleanedTranscript);
+      if (channelResult.handled) {
+        return {
+          type: 'channel_register',
+          speech: channelResult.voice ?? null,
+          discordText: channelResult.result ?? null,
+          silent: false,
+        };
+      }
+    } catch (err) {
+      logger.warn(`[dispatch] Channel dispatch error: ${err.message}`);
       // Fall through to normal dispatch on any failure
     }
   }
